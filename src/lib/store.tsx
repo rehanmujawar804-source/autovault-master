@@ -46,6 +46,9 @@ import type {
   Supplier,
   Purchase,
   StockMovement,
+  SupplierPayment,
+  FinanceAccount,
+  FinanceTransaction,
 } from "@/types";
 import { todayLocalStr } from "@/lib/dateUtils";
 
@@ -64,6 +67,16 @@ const SEED_PRODUCTS: Product[] = [];
 const SEED_CUSTOMERS: Customer[] = [];
 const SEED_INVOICES: Invoice[] = [];
 
+// ─────────────────────────────────────────────
+//  DEFAULT FINANCE ACCOUNTS
+// ─────────────────────────────────────────────
+
+const DEFAULT_FINANCE_ACCOUNTS: FinanceAccount[] = [
+  { id: "acc-cash", name: "Cash", type: "Cash", openingBalance: 0, createdAt: "2026-01-01T00:00:00.000Z" },
+  { id: "acc-upi",  name: "UPI",  type: "UPI",  openingBalance: 0, createdAt: "2026-01-01T00:00:00.000Z" },
+  { id: "acc-bank", name: "Bank", type: "Bank", openingBalance: 0, createdAt: "2026-01-01T00:00:00.000Z" },
+];
+
 const INITIAL_STATE: AppState = {
   products: SEED_PRODUCTS,
   customers: SEED_CUSTOMERS,
@@ -72,6 +85,9 @@ const INITIAL_STATE: AppState = {
   suppliers: [],
   purchases: [],
   stockMovements: [],
+  supplierPayments: [],
+  financeAccounts: DEFAULT_FINANCE_ACCOUNTS,
+  financeTransactions: [],
 };
 
 const STORAGE_KEY = "autovault_store";
@@ -98,10 +114,12 @@ type Action =
   // Debt Repayment — core new action
   | { type: "RECORD_DEBT_PAYMENT"; payment: DebtPayment }
 
-  // Suppliers Sprint 1
+  // Suppliers Sprint 1 & 2
   | { type: "ADD_SUPPLIER"; supplier: Supplier }
   | { type: "UPDATE_SUPPLIER"; supplier: Supplier }
-  | { type: "ADD_PURCHASE"; purchase: Purchase }
+  | { type: "ADD_PURCHASE"; purchase: Purchase; paymentMethod?: PaymentMethod }
+  | { type: "UPDATE_PURCHASE"; purchaseId: string; invoiceNumber: string; date: string; notes: string }
+  | { type: "RECORD_SUPPLIER_PAYMENT"; payment: SupplierPayment }
 
   // Reset / Hydrate
   | { type: "RESET_STORE" }
@@ -145,6 +163,19 @@ export function normalizeProduct(product: Partial<Product> & { id: string; name:
     createdAt: product.createdAt || fallbackTimestamp,
     updatedAt: product.updatedAt || fallbackTimestamp,
   };
+}
+
+/**
+ * Maps a PaymentMethod to its corresponding FinanceAccount ID.
+ * Credit payments create no finance entry (no real money movement).
+ */
+function methodToAccountId(method: PaymentMethod): string {
+  switch (method) {
+    case "Cash": return "acc-cash";
+    case "UPI":  return "acc-upi";
+    case "Card": return "acc-bank";
+    default:     return "acc-cash"; // Should not be reached for Credit
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -419,11 +450,29 @@ function reducer(state: AppState, action: Action): AppState {
         newCustomers = state.customers;
       }
 
+      // Finance entry: Income for paid portion (skip Credit — no real cash movement)
+      const newInvoiceFinanceTxs = [...(state.financeTransactions || [])];
+      if (inv.amountPaid > 0 && inv.paymentMethod !== "Credit") {
+        newInvoiceFinanceTxs.push({
+          id: `ft-${crypto.randomUUID()}`,
+          accountId: methodToAccountId(inv.paymentMethod),
+          type: "Income",
+          category: "Sale" as const,
+          referenceId: inv.id,
+          customerId: inv.customerId ?? undefined,
+          amount: inv.amountPaid,
+          date: inv.createdAt || inv.date + "T12:00:00.000Z",
+          method: inv.paymentMethod,
+          notes: `Invoice ${inv.invoiceNumber}`,
+        });
+      }
+
       return {
         ...state,
         invoices: newInvoices,
         products: newProducts,
         customers: newCustomers,
+        financeTransactions: newInvoiceFinanceTxs,
       };
     }
 
@@ -470,11 +519,27 @@ function reducer(state: AppState, action: Action): AppState {
         return { ...c, debt: totalDue };
       });
 
+      // Finance entry: Income for customer debt repayment
+      const debtFinanceTxs = [...(state.financeTransactions || [])];
+      debtFinanceTxs.push({
+        id: `ft-${crypto.randomUUID()}`,
+        accountId: methodToAccountId(payment.method),
+        type: "Income",
+        category: "Customer Payment" as const,
+        referenceId: payment.invoiceId,
+        customerId: payment.customerId,
+        amount: payment.amount,
+        date: new Date().toISOString(),
+        method: payment.method,
+        notes: payment.note || "Customer debt repayment",
+      });
+
       return {
         ...state,
         debtPayments: newPayments,
         invoices: newInvoices,
         customers: newCustomers,
+        financeTransactions: debtFinanceTxs,
       };
     }
 
@@ -490,13 +555,31 @@ function reducer(state: AppState, action: Action): AppState {
           currentCost: p.currentCost ?? legacyP.buyPrice ?? 0,
         };
       });
+      const purchases = (action.state.purchases || []).map((pur) => {
+        const totalAmount = pur.totalAmount ?? (pur.quantity * pur.buyPrice);
+        const amountPaid = pur.amountPaid ?? (pur.paymentStatus === "Paid" ? totalAmount : 0);
+        const dueAmount = pur.dueAmount ?? (totalAmount - amountPaid);
+        const paymentStatus = pur.paymentStatus ?? (dueAmount === 0 ? "Paid" : (amountPaid > 0 ? "Partial" : "Credit"));
+        return {
+          ...pur,
+          totalAmount,
+          amountPaid,
+          dueAmount,
+          paymentStatus,
+        };
+      });
       return {
         ...action.state,
         products,
+        purchases,
         debtPayments: action.state.debtPayments ?? [],
         suppliers: action.state.suppliers ?? [],
-        purchases: action.state.purchases ?? [],
         stockMovements: action.state.stockMovements ?? [],
+        supplierPayments: action.state.supplierPayments ?? [],
+        financeAccounts: action.state.financeAccounts?.length
+          ? action.state.financeAccounts
+          : DEFAULT_FINANCE_ACCOUNTS,
+        financeTransactions: action.state.financeTransactions ?? [],
       };
     }
 
@@ -515,7 +598,7 @@ function reducer(state: AppState, action: Action): AppState {
       };
 
     case "ADD_PURCHASE": {
-      const { purchase } = action;
+      const { purchase, paymentMethod } = action;
       const newPurchases = [...(state.purchases || []), purchase];
 
       // Update product: increase stock and update currentCost
@@ -542,11 +625,121 @@ function reducer(state: AppState, action: Action): AppState {
 
       const newStockMovements = [...(state.stockMovements || []), movement];
 
+      // Upfront payment and finance entry
+      const newPayments = [...(state.supplierPayments || [])];
+      const newFinanceTransactions = [...(state.financeTransactions || [])];
+
+      if (purchase.amountPaid > 0 && (paymentMethod || "Cash") !== "Credit") {
+        const method = paymentMethod || "Cash";
+        // Log upfront supplier payment
+        newPayments.push({
+          id: `sp-${crypto.randomUUID()}`,
+          supplierId: purchase.supplierId,
+          purchaseId: purchase.id,
+          amount: purchase.amountPaid,
+          date: purchase.date + "T12:00:00.000Z",
+          method,
+          note: "Upfront payment",
+          paidBy: "Owner",
+          isUpfront: true,
+        });
+
+        // Log upfront finance entry
+        newFinanceTransactions.push({
+          id: `ft-${crypto.randomUUID()}`,
+          accountId: methodToAccountId(method),
+          type: "Expense",
+          category: "Inventory Purchase" as const,
+          referenceId: purchase.id,
+          supplierId: purchase.supplierId,
+          amount: purchase.amountPaid,
+          date: purchase.date + "T12:00:00.000Z",
+          method,
+          notes: purchase.notes || "Initial purchase payment",
+        });
+      }
+
       return {
         ...state,
         purchases: newPurchases,
         products: newProducts,
         stockMovements: newStockMovements,
+        supplierPayments: newPayments,
+        financeTransactions: newFinanceTransactions,
+      };
+    }
+
+    case "UPDATE_PURCHASE": {
+      const { purchaseId, invoiceNumber, date, notes } = action;
+      
+      // Update purchase fields
+      const newPurchases = (state.purchases || []).map((p) =>
+        p.id === purchaseId
+          ? { ...p, invoiceNumber, date, notes }
+          : p
+      );
+
+      // Sync upfront payment date if any
+      const newPayments = (state.supplierPayments || []).map((sp) =>
+        sp.purchaseId === purchaseId && sp.isUpfront
+          ? { ...sp, date: date + "T12:00:00.000Z" }
+          : sp
+      );
+
+      // Sync upfront finance transaction date if any
+      const newFinanceTransactions = (state.financeTransactions || []).map((ft) =>
+        ft.referenceId === purchaseId && ft.category === "Inventory Purchase"
+          ? { ...ft, date: date + "T12:00:00.000Z" }
+          : ft
+      );
+
+      return {
+        ...state,
+        purchases: newPurchases,
+        supplierPayments: newPayments,
+        financeTransactions: newFinanceTransactions,
+      };
+    }
+
+    case "RECORD_SUPPLIER_PAYMENT": {
+      const payment = action.payment;
+      const newPayments = [...(state.supplierPayments || []), payment];
+
+      // Finance entry — skip if Credit (no real cash movement)
+      const newFinanceTransactions = [...(state.financeTransactions || [])];
+      if (payment.method !== "Credit") {
+        newFinanceTransactions.push({
+          id: `ft-${crypto.randomUUID()}`,
+          accountId: methodToAccountId(payment.method),
+          type: "Expense",
+          category: "Supplier Payment" as const,
+          referenceId: payment.purchaseId,
+          supplierId: payment.supplierId,
+          amount: payment.amount,
+          date: payment.date,
+          method: payment.method,
+          notes: payment.note || "Supplier repayment",
+        });
+      }
+
+      const newPurchases = (state.purchases || []).map((pur) => {
+        if (pur.id !== payment.purchaseId) return pur;
+        const actualAmount = Math.min(payment.amount, pur.dueAmount);
+        const newAmountPaid = roundMoney(pur.amountPaid + actualAmount);
+        const newDueAmount = Math.max(0, roundMoney(pur.dueAmount - actualAmount));
+        const newStatus = (newDueAmount <= 0 ? "Paid" : (newAmountPaid > 0 ? "Partial" : "Credit")) as "Paid" | "Partial" | "Credit";
+        return {
+          ...pur,
+          amountPaid: newAmountPaid,
+          dueAmount: newDueAmount,
+          paymentStatus: newStatus,
+        };
+      });
+      return {
+        ...state,
+        supplierPayments: newPayments,
+        purchases: newPurchases,
+        financeTransactions: newFinanceTransactions,
       };
     }
 
@@ -597,10 +790,23 @@ interface StoreContextValue {
   reconcileDebtCache: () => void;
   exportStoreAsJSON: () => void;
 
-  // Suppliers Sprint 1 Convenience helpers
+  // Suppliers Sprint 1 & 2 Convenience helpers
   addSupplier: (supplier: Omit<Supplier, "id" | "createdAt" | "updatedAt">) => void;
   updateSupplier: (supplier: Supplier) => void;
-  addPurchase: (purchase: Omit<Purchase, "id" | "createdAt">) => void;
+  addPurchase: (purchase: Omit<Purchase, "id" | "createdAt" | "totalAmount" | "amountPaid" | "dueAmount"> & { amountPaid?: number; paymentMethod?: PaymentMethod }) => void;
+  updatePurchase: (purchaseId: string, invoiceNumber: string, date: string, notes: string) => void;
+  recordSupplierPayment: (payment: Omit<SupplierPayment, "id">) => void;
+  getSupplierPaymentsBySupplier: (supplierId: string) => SupplierPayment[];
+  getSupplierPaymentsByPurchase: (purchaseId: string) => SupplierPayment[];
+  getSupplierOutstandingBalance: (supplierId: string) => number;
+  getTotalSupplierOutstanding: () => number;
+
+  // Future Ready Hooks / Selectors
+  getSupplierBalance: (supplierId: string) => number;
+  getSupplierLifetimePurchase: (supplierId: string) => number;
+  getSupplierAveragePurchase: (supplierId: string) => number;
+  getSupplierLastPurchase: (supplierId: string) => Purchase | undefined;
+  getSupplierMonthlyPurchase: (supplierId: string, monthStr: string) => number;
 
   // Derived selectors
   getLowStockProducts: () => Product[];
@@ -616,6 +822,21 @@ interface StoreContextValue {
   getTotalOutstandingDebt: () => number;
   getInventoryValue: () => number;
   getNextInvoiceNumber: () => string;
+
+  // Finance selectors (Sprint 3 — no UI, engine only)
+  financeAccounts: FinanceAccount[];
+  getAccountBalance: (accountId: string) => number;
+  getCashBalance: () => number;
+  getBankBalance: () => number;
+  getUPIBalance: () => number;
+  getTotalCashAvailable: () => number;
+  getTodayIncome: () => number;
+  getTodayExpense: () => number;
+  getMonthlyIncome: (monthStr: string) => number;
+  getMonthlyExpense: (monthStr: string) => number;
+  getCashFlow: (fromDate: string, toDate: string) => number;
+  getExpenseByCategory: (category: string) => number;
+  getIncomeByCategory: (category: string) => number;
 }
 
 const StoreContext = createContext<StoreContextValue | null>(null);
@@ -777,6 +998,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         customers: state.customers,
         invoices: state.invoices,
         debtPayments: state.debtPayments ?? [],
+        suppliers: state.suppliers ?? [],
+        purchases: state.purchases ?? [],
+        stockMovements: state.stockMovements ?? [],
+        supplierPayments: state.supplierPayments ?? [],
+        financeAccounts: state.financeAccounts ?? DEFAULT_FINANCE_ACCOUNTS,
+        financeTransactions: state.financeTransactions ?? [],
         settings,
         __v: STORE_VERSION,
       };
@@ -898,16 +1125,169 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }
 
-  function addPurchase(purchase: Omit<Purchase, "id" | "createdAt">) {
+  function addPurchase(purchase: Omit<Purchase, "id" | "createdAt" | "totalAmount" | "amountPaid" | "dueAmount"> & { amountPaid?: number; paymentMethod?: PaymentMethod }) {
     const timestamp = new Date().toISOString();
+    const total = roundMoney(purchase.quantity * purchase.buyPrice);
+    const paid = purchase.paymentStatus === "Paid" ? total : (purchase.paymentStatus === "Credit" ? 0 : roundMoney(purchase.amountPaid ?? 0));
+    const due = Math.max(0, roundMoney(total - paid));
+    const status = due === 0 ? "Paid" : (paid > 0 ? "Partial" : "Credit");
+
     dispatch({
       type: "ADD_PURCHASE",
       purchase: {
         ...purchase,
         id: generateUniqueId("pur"),
         createdAt: timestamp,
+        totalAmount: total,
+        amountPaid: paid,
+        dueAmount: due,
+        paymentStatus: status,
       },
+      paymentMethod: purchase.paymentMethod,
     });
+  }
+
+  function updatePurchase(purchaseId: string, invoiceNumber: string, date: string, notes: string) {
+    dispatch({ type: "UPDATE_PURCHASE", purchaseId, invoiceNumber, date, notes });
+  }
+
+  function recordSupplierPayment(payment: Omit<SupplierPayment, "id">) {
+    dispatch({
+      type: "RECORD_SUPPLIER_PAYMENT",
+      payment: { ...payment, id: `sp-${crypto.randomUUID()}` },
+    });
+  }
+
+  function getSupplierPaymentsBySupplier(supplierId: string) {
+    return (state.supplierPayments ?? []).filter((p) => p.supplierId === supplierId);
+  }
+
+  function getSupplierPaymentsByPurchase(purchaseId: string) {
+    return (state.supplierPayments ?? []).filter((p) => p.purchaseId === purchaseId);
+  }
+
+  function getSupplierOutstandingBalance(supplierId: string) {
+    return (state.purchases || [])
+      .filter((p) => p.supplierId === supplierId)
+      .reduce((sum, p) => {
+        const total = p.totalAmount ?? (p.buyPrice * p.quantity);
+        const payments = (state.supplierPayments || []).filter(sp => sp.purchaseId === p.id);
+        const paid = payments.reduce((s, pay) => s + pay.amount, 0);
+        return sum + Math.max(0, total - paid);
+      }, 0);
+  }
+
+  function getTotalSupplierOutstanding() {
+    return (state.purchases || [])
+      .reduce((sum, p) => {
+        const total = p.totalAmount ?? (p.buyPrice * p.quantity);
+        const payments = (state.supplierPayments || []).filter(sp => sp.purchaseId === p.id);
+        const paid = payments.reduce((s, pay) => s + pay.amount, 0);
+        return sum + Math.max(0, total - paid);
+      }, 0);
+  }
+
+  // Future Ready Selectors
+  function getSupplierBalance(supplierId: string) {
+    return getSupplierOutstandingBalance(supplierId);
+  }
+
+  function getSupplierLifetimePurchase(supplierId: string) {
+    return (state.purchases || [])
+      .filter((p) => p.supplierId === supplierId)
+      .reduce((sum, p) => sum + (p.totalAmount ?? (p.buyPrice * p.quantity)), 0);
+  }
+
+  function getSupplierAveragePurchase(supplierId: string) {
+    const list = (state.purchases || []).filter((p) => p.supplierId === supplierId);
+    if (list.length === 0) return 0;
+    const total = list.reduce((sum, p) => sum + (p.totalAmount ?? (p.buyPrice * p.quantity)), 0);
+    return total / list.length;
+  }
+
+  function getSupplierLastPurchase(supplierId: string) {
+    const list = (state.purchases || [])
+      .filter((p) => p.supplierId === supplierId)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return list[0];
+  }
+
+  function getSupplierMonthlyPurchase(supplierId: string, monthStr: string) {
+    return (state.purchases || [])
+      .filter((p) => p.supplierId === supplierId && p.date.startsWith(monthStr))
+      .reduce((sum, p) => sum + (p.totalAmount ?? (p.buyPrice * p.quantity)), 0);
+  }
+
+  // ── Finance Selectors (Sprint 3 — no UI, engine only) ───────────────────────
+
+  /**
+   * Derives the balance of a finance account from its opening balance
+   * plus all Income transactions minus all Expense transactions.
+   * Balance is never stored — always computed.
+   */
+  function getAccountBalance(accountId: string): number {
+    const account = (state.financeAccounts ?? DEFAULT_FINANCE_ACCOUNTS).find((a) => a.id === accountId);
+    const opening = account?.openingBalance ?? 0;
+    const txs = (state.financeTransactions ?? []).filter((t) => t.accountId === accountId);
+    const income  = txs.filter((t) => t.type === "Income" ).reduce((s, t) => s + t.amount, 0);
+    const expense = txs.filter((t) => t.type === "Expense").reduce((s, t) => s + t.amount, 0);
+    return roundMoney(opening + income - expense);
+  }
+
+  function getCashBalance()  { return getAccountBalance("acc-cash"); }
+  function getBankBalance()  { return getAccountBalance("acc-bank"); }
+  function getUPIBalance()   { return getAccountBalance("acc-upi");  }
+
+  function getTotalCashAvailable(): number {
+    return roundMoney(getCashBalance() + getBankBalance() + getUPIBalance());
+  }
+
+  function getTodayIncome(): number {
+    const today = todayLocalStr();
+    return (state.financeTransactions ?? [])
+      .filter((t) => t.type === "Income" && t.date.startsWith(today))
+      .reduce((s, t) => s + t.amount, 0);
+  }
+
+  function getTodayExpense(): number {
+    const today = todayLocalStr();
+    return (state.financeTransactions ?? [])
+      .filter((t) => t.type === "Expense" && t.date.startsWith(today))
+      .reduce((s, t) => s + t.amount, 0);
+  }
+
+  function getMonthlyIncome(monthStr: string): number {
+    return (state.financeTransactions ?? [])
+      .filter((t) => t.type === "Income" && t.date.startsWith(monthStr))
+      .reduce((s, t) => s + t.amount, 0);
+  }
+
+  function getMonthlyExpense(monthStr: string): number {
+    return (state.financeTransactions ?? [])
+      .filter((t) => t.type === "Expense" && t.date.startsWith(monthStr))
+      .reduce((s, t) => s + t.amount, 0);
+  }
+
+  /** Net cash flow between two ISO date strings (inclusive) */
+  function getCashFlow(fromDate: string, toDate: string): number {
+    const txs = (state.financeTransactions ?? []).filter(
+      (t) => t.date >= fromDate && t.date <= toDate + "T23:59:59.999Z"
+    );
+    const income  = txs.filter((t) => t.type === "Income" ).reduce((s, t) => s + t.amount, 0);
+    const expense = txs.filter((t) => t.type === "Expense").reduce((s, t) => s + t.amount, 0);
+    return roundMoney(income - expense);
+  }
+
+  function getExpenseByCategory(category: string): number {
+    return (state.financeTransactions ?? [])
+      .filter((t) => t.type === "Expense" && t.category === category)
+      .reduce((s, t) => s + t.amount, 0);
+  }
+
+  function getIncomeByCategory(category: string): number {
+    return (state.financeTransactions ?? [])
+      .filter((t) => t.type === "Income" && t.category === category)
+      .reduce((s, t) => s + t.amount, 0);
   }
 
   return (
@@ -929,6 +1309,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         addSupplier,
         updateSupplier,
         addPurchase,
+        updatePurchase,
+        recordSupplierPayment,
+        getSupplierPaymentsBySupplier,
+        getSupplierPaymentsByPurchase,
+        getSupplierOutstandingBalance,
+        getTotalSupplierOutstanding,
+        getSupplierBalance,
+        getSupplierLifetimePurchase,
+        getSupplierAveragePurchase,
+        getSupplierLastPurchase,
+        getSupplierMonthlyPurchase,
         getLowStockProducts,
         getOutOfStockProducts,
         getCustomerById,
@@ -942,6 +1333,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         getTotalOutstandingDebt,
         getInventoryValue,
         getNextInvoiceNumber,
+        // Finance (Sprint 3)
+        financeAccounts: state.financeAccounts ?? DEFAULT_FINANCE_ACCOUNTS,
+        getAccountBalance,
+        getCashBalance,
+        getBankBalance,
+        getUPIBalance,
+        getTotalCashAvailable,
+        getTodayIncome,
+        getTodayExpense,
+        getMonthlyIncome,
+        getMonthlyExpense,
+        getCashFlow,
+        getExpenseByCategory,
+        getIncomeByCategory,
       }}
     >
       {hydrated ? (

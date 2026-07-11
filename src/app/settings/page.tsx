@@ -150,6 +150,9 @@ export default function SettingsPage() {
           suppliers: Array.isArray(parsed.suppliers) ? parsed.suppliers : [],
           purchases: Array.isArray(parsed.purchases) ? parsed.purchases : [],
           stockMovements: Array.isArray(parsed.stockMovements) ? parsed.stockMovements : [],
+          supplierPayments: Array.isArray(parsed.supplierPayments) ? parsed.supplierPayments : [],
+          financeAccounts: Array.isArray(parsed.financeAccounts) ? parsed.financeAccounts : [],
+          financeTransactions: Array.isArray(parsed.financeTransactions) ? parsed.financeTransactions : [],
         };
         // Extract settings if present in backup (newer backup format)
         const settingsPayload: Record<string, unknown> | undefined =

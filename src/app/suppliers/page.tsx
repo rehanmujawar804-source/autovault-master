@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useStore } from "@/lib/store";
+import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
 import {
   Truck,
@@ -15,6 +16,7 @@ import {
   AlertCircle,
   ChevronRight,
   Pencil,
+  Coins,
 } from "lucide-react";
 import type { Supplier } from "@/types";
 
@@ -239,7 +241,8 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
 // ─────────────────────────────────────────────
 
 export default function SuppliersPage() {
-  const { state } = useStore();
+  const { state, getTotalSupplierOutstanding } = useStore();
+  const { isOwner } = useRole();
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"All" | "Active" | "Inactive">("All");
@@ -261,12 +264,17 @@ export default function SuppliersPage() {
   }, [suppliers, purchases]);
 
   const supplierStats = useMemo(() => {
-    const map: Record<string, { productCount: number; lastPurchaseDate: string | null }> = {};
+    const map: Record<string, { productCount: number; lastPurchaseDate: string | null; outstandingBalance: number }> = {};
     for (const s of suppliers) {
       const sp = purchases.filter((p) => p.supplierId === s.id);
       const productIds = new Set(sp.map((p) => p.productId));
       const sorted = [...sp].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      map[s.id] = { productCount: productIds.size, lastPurchaseDate: sorted[0]?.date ?? null };
+      const outstanding = sp.reduce((sum, p) => sum + (p.dueAmount ?? 0), 0);
+      map[s.id] = {
+        productCount: productIds.size,
+        lastPurchaseDate: sorted[0]?.date ?? null,
+        outstandingBalance: outstanding,
+      };
     }
     return map;
   }, [suppliers, purchases]);
@@ -295,11 +303,14 @@ export default function SuppliersPage() {
     setEditingSupplier(supplier); setShowModal(true);
   }
 
+  const totalOutstanding = isOwner ? getTotalSupplierOutstanding() : 0;
+
   const kpiConfig = [
     { label: "Total Suppliers", value: kpis.totalSuppliers, Icon: Truck, accent: "border-l-[3px] border-l-navy-700 rounded-l-none", iconBg: "bg-navy-50 text-navy-700" },
     { label: "Active Suppliers", value: kpis.activeSuppliers, Icon: CheckCircle, accent: "border-l-[3px] border-l-green-600 rounded-l-none", iconBg: "bg-green-50 text-green-700" },
     { label: "Products Linked", value: kpis.productsLinked, Icon: Package, accent: "border-l-[3px] border-l-blue-500 rounded-l-none", iconBg: "bg-blue-50 text-blue-600" },
     { label: "Purchases This Month", value: kpis.purchasesThisMonth, Icon: ShoppingBag, accent: "border-l-[3px] border-l-amber-500 rounded-l-none", iconBg: "bg-amber-50 text-amber-700" },
+    ...(isOwner ? [{ label: "Outstanding Dues", value: `₹${totalOutstanding.toLocaleString()}`, Icon: Coins, accent: "border-l-[3px] border-l-red-500 rounded-l-none", iconBg: "bg-red-50 text-red-700" }] : []),
   ];
 
   return (
@@ -327,7 +338,7 @@ export default function SuppliersPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className={`grid grid-cols-2 ${isOwner ? "lg:grid-cols-5" : "lg:grid-cols-4"} gap-4`}>
         {kpiConfig.map((card) => (
           <div key={card.label} className={`bg-white rounded-2xl border border-slate-200 p-5 hover:shadow-md transition-shadow ${card.accent}`}>
             <div className="flex items-start justify-between">
@@ -398,13 +409,14 @@ export default function SuppliersPage() {
                   <th className="px-5 py-3 text-left"><span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Supplier</span></th>
                   <th className="px-5 py-3 text-center hidden md:table-cell"><span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Products</span></th>
                   <th className="px-5 py-3 text-left hidden lg:table-cell"><span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Last Purchase</span></th>
+                  {isOwner && <th className="px-5 py-3 text-right"><span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Outstanding</span></th>}
                   <th className="px-5 py-3 text-center"><span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Status</span></th>
                   <th className="px-5 py-3 text-center"><span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Actions</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((supplier) => {
-                  const stats = supplierStats[supplier.id] ?? { productCount: 0, lastPurchaseDate: null };
+                  const stats = supplierStats[supplier.id] ?? { productCount: 0, lastPurchaseDate: null, outstandingBalance: 0 };
                   return (
                     <tr key={supplier.id} className="hover:bg-slate-50/60 transition-colors group">
                       <td className="px-5 py-4">
@@ -432,6 +444,13 @@ export default function SuppliersPage() {
                           {stats.lastPurchaseDate ? formatDate(stats.lastPurchaseDate) : <span className="text-slate-300 italic">No purchases yet</span>}
                         </span>
                       </td>
+                      {isOwner && (
+                        <td className="px-5 py-4 text-right">
+                          <span className={`text-xs font-bold ${stats.outstandingBalance > 0 ? "text-red-600" : "text-slate-500"}`}>
+                            ₹{stats.outstandingBalance.toLocaleString()}
+                          </span>
+                        </td>
+                      )}
                       <td className="px-5 py-4 text-center">
                         <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full border ${supplier.status === "Active" ? "bg-green-50 text-green-700 border-green-200" : "bg-slate-100 text-slate-500 border-slate-200"}`}>
                           {supplier.status === "Active" ? <CheckCircle size={9} /> : <XCircle size={9} />}

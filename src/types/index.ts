@@ -62,10 +62,14 @@ export interface Purchase {
   buyPrice: number; // cost price at time of purchase
   invoiceNumber: string;
   date: string; // ISO date string (YYYY-MM-DD)
-  paymentStatus: "Paid" | "Credit";
+  paymentStatus: "Paid" | "Partial" | "Credit";
   notes: string;
   createdAt: string; // ISO timestamp
+  totalAmount: number;
+  amountPaid: number;
+  dueAmount: number;
 }
+
 
 // ── Stock Movement ────────────────────────────
 
@@ -150,6 +154,53 @@ export interface DebtPayment {
   collectedBy: "Owner" | "Staff";
 }
 
+// ── Supplier Payment (Purchase Payment Ledger) ──
+
+export interface SupplierPayment {
+  id: string;
+  supplierId: string;
+  purchaseId: string; // Linked purchase
+  amount: number;
+  date: string;       // ISO timestamp
+  method: PaymentMethod;
+  note?: string;
+  paidBy: "Owner" | "Staff";
+  isUpfront?: boolean;
+}
+
+// ── Finance Account (Cash / Bank / UPI ledger) ───
+
+export interface FinanceAccount {
+  id: string;
+  name: string;
+  type: "Cash" | "Bank" | "UPI";
+  openingBalance: number;
+  createdAt: string; // ISO timestamp
+}
+
+// ── Finance Transaction (Ledger Entry) ──────────
+
+export type FinanceCategory =
+  | "Inventory Purchase"
+  | "Supplier Payment"
+  | "Sale"
+  | "Customer Payment"
+  | "Adjustment";
+
+export interface FinanceTransaction {
+  id: string;
+  accountId: string;          // Links to a FinanceAccount
+  type: "Income" | "Expense";
+  category: FinanceCategory;
+  referenceId: string;        // Purchase ID, Invoice ID, or Payment ID
+  supplierId?: string;
+  customerId?: string;
+  amount: number;
+  date: string;               // ISO timestamp
+  method: PaymentMethod;
+  notes?: string;
+}
+
 // ── Cart (used in Billing page) ───────────────
 
 export interface CartItem {
@@ -167,4 +218,9 @@ export interface AppState {
   suppliers: Supplier[];
   purchases: Purchase[];
   stockMovements: StockMovement[];
+  supplierPayments: SupplierPayment[];
+  financeAccounts: FinanceAccount[];
+  financeTransactions: FinanceTransaction[];
 }
+
+

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useStore } from "@/lib/store";
-import type { Invoice, CartItem, PaymentMethod, PaymentStatus } from "@/types";
+import type { Invoice, CartItem, PaymentMethod, PaymentStatus, HoldBill } from "@/types";
 import PrintableInvoice from "@/components/PrintableInvoice";
 import { toLocalDateStr, formatInvoiceDate } from "@/lib/dateUtils";
 import {
@@ -34,7 +34,7 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function BillingPage() {
-  const { state, addInvoice, getNextInvoiceNumber, showToast } = useStore();
+  const { state, addInvoice, getNextInvoiceNumber, showToast, dispatch, createHoldBill, updateHoldBill, deleteHoldBill } = useStore();
 
   // ── Search & Filter State ─────────────────────────────────────────────────
   const [search, setSearch] = useState("");
@@ -67,6 +67,136 @@ export default function BillingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
+  // ── Hold / Recall States ─────────────────────────────────────────────────
+  const [heldBillsDrawerOpen, setHeldBillsDrawerOpen] = useState(false);
+  const [activeHoldBillId, setActiveHoldBillId] = useState<string | null>(null);
+  const [heldBillsSearch, setHeldBillsSearch] = useState("");
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<string | null>(null);
+
+  // ── Cart Totals ───────────────────────────────────────────────────────────
+  const subtotal = cart.reduce((sum, item) => sum + item.product.sellPrice * item.quantity, 0);
+  const discountAmount = Math.round((subtotal * discount) / 100);
+  const total = subtotal - discountAmount;
+
+  const amountPaid = useMemo(() => {
+    if (paymentStatus === "Paid") return total;
+    if (paymentStatus === "Debt") return 0;
+    const val = Number(amountPaidInput) || 0;
+    return Math.min(val, total);
+  }, [paymentStatus, total, amountPaidInput]);
+
+  const dueAmount = total - amountPaid;
+  const totalItems = cart.reduce((s, i) => s + i.quantity, 0);
+
+  // ── Hold / Recall Handlers ───────────────────────────────────────────────
+  function handleHoldCurrentBill() {
+    if (cart.length === 0) {
+      showToast("Cannot hold an empty bill.", "error");
+      return;
+    }
+    const billData = {
+      items: cart,
+      customerMode,
+      selectedCustomerId,
+      customerName: customerName || "Walk-in Customer",
+      customerPhone,
+      customerSearchQuery,
+      vehicleNumber,
+      vehicleModel,
+      paymentMethod,
+      paymentStatus,
+      amountPaidInput,
+      discount,
+      discountInput,
+      notes: orderNote,
+      billedBy,
+      subtotal,
+      total,
+    };
+
+    try {
+      if (activeHoldBillId) {
+        updateHoldBill(activeHoldBillId, billData);
+        showToast("Held bill updated successfully.", "success");
+      } else {
+        createHoldBill(billData);
+        showToast("Bill placed on hold.", "success");
+      }
+      handleNewBill();
+    } catch (err) {
+      showToast("Failed to place bill on hold.", "error");
+    }
+  }
+
+  function handleRecallHoldBill(bill: HoldBill) {
+    setCart(bill.items);
+    setCustomerMode(bill.customerMode);
+    setSelectedCustomerId(bill.selectedCustomerId);
+    setCustomerName(bill.customerName === "Walk-in Customer" ? "" : bill.customerName);
+    setCustomerPhone(bill.customerPhone);
+    setCustomerSearchQuery(bill.customerSearchQuery);
+    setVehicleNumber(bill.vehicleNumber);
+    setVehicleModel(bill.vehicleModel);
+    setPaymentMethod(bill.paymentMethod);
+    setPaymentStatus(bill.paymentStatus);
+    setAmountPaidInput(bill.amountPaidInput);
+    setDiscount(bill.discount);
+    setDiscountInput(bill.discountInput);
+    setOrderNote(bill.notes);
+    setBilledBy(bill.billedBy);
+    setActiveHoldBillId(bill.id);
+    setHeldBillsDrawerOpen(false);
+    showToast(`Recalled ${bill.holdNumber} successfully.`, "success");
+  }
+
+  function handleDeleteHoldBill(id: string) {
+    try {
+      deleteHoldBill(id);
+      if (id === activeHoldBillId) {
+        setActiveHoldBillId(null);
+      }
+      setDeleteConfirmTarget(null);
+      showToast("Held bill discarded.", "success");
+    } catch (err) {
+      showToast("Failed to delete held bill.", "error");
+    }
+  }
+
+  // Keyboard Shortcut Ctrl+H / Cmd+H to Hold Bill
+  useEffect(() => {
+    const handleShortcut = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "h") {
+        e.preventDefault();
+        if (cart.length > 0) {
+          handleHoldCurrentBill();
+        } else {
+          showToast("Cart is empty. Add items before holding.", "info");
+        }
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [
+    cart,
+    activeHoldBillId,
+    customerMode,
+    selectedCustomerId,
+    customerName,
+    customerPhone,
+    customerSearchQuery,
+    vehicleNumber,
+    vehicleModel,
+    paymentMethod,
+    paymentStatus,
+    amountPaidInput,
+    discount,
+    discountInput,
+    orderNote,
+    billedBy,
+    subtotal,
+    total
+  ]);
+
   // ── Discount helpers ─────────────────────────────────────────────────────
   function handlePresetDiscount(pct: number) {
     setDiscount(pct);
@@ -91,20 +221,7 @@ export default function BillingPage() {
     return ["All", ...cats];
   }, [state.products]);
 
-  // ── Cart Totals ───────────────────────────────────────────────────────────
-  const subtotal = cart.reduce((sum, item) => sum + item.product.sellPrice * item.quantity, 0);
-  const discountAmount = Math.round((subtotal * discount) / 100);
-  const total = subtotal - discountAmount;
-
-  const amountPaid = useMemo(() => {
-    if (paymentStatus === "Paid") return total;
-    if (paymentStatus === "Debt") return 0;
-    const val = Number(amountPaidInput) || 0;
-    return Math.min(val, total);
-  }, [paymentStatus, total, amountPaidInput]);
-
-  const dueAmount = total - amountPaid;
-  const totalItems = cart.reduce((s, i) => s + i.quantity, 0);
+  // Cart Totals are declared at the top of the component to prevent hoisting errors
 
   // ── Filtered products ─────────────────────────────────────────────────────
   const filteredProducts = useMemo(() => {
@@ -263,6 +380,10 @@ export default function BillingPage() {
       addInvoice(invoice);
       showToast("Invoice generated successfully!", "success");
       setGeneratedInvoice(invoice);
+      if (activeHoldBillId) {
+        deleteHoldBill(activeHoldBillId);
+        setActiveHoldBillId(null);
+      }
     } catch (err) {
       showToast("Failed to create invoice.", "error");
     } finally {
@@ -291,6 +412,7 @@ export default function BillingPage() {
     setBilledBy("");
     setValidationError("");
     setShowClearConfirm(false);
+    setActiveHoldBillId(null); // Clear hold bill workspace tracking
   }
 
   if (generatedInvoice) {
@@ -326,14 +448,40 @@ export default function BillingPage() {
             <p className="text-xs text-slate-400 leading-tight">Workstation · {new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          {/* Held Bills Manager Button with count badge */}
+          <button
+            type="button"
+            onClick={() => setHeldBillsDrawerOpen(true)}
+            className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs font-bold px-3.5 py-2 rounded-xl transition cursor-pointer relative"
+          >
+            <ReceiptText size={14} className="text-slate-500" />
+            Held Bills
+            {state.holdBills && state.holdBills.length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-black text-white shadow-sm ring-2 ring-white">
+                {state.holdBills.length}
+              </span>
+            )}
+          </button>
+
+          {/* Hold Current Bill Button — disabled if empty */}
+          <button
+            type="button"
+            onClick={handleHoldCurrentBill}
+            disabled={cart.length === 0}
+            className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-650 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed border border-amber-600 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition cursor-pointer"
+          >
+            <Coins size={14} />
+            {activeHoldBillId ? "Update Hold" : "Hold Bill"}
+          </button>
+
           {cart.length > 0 && (
-            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold px-3 py-1.5 rounded-full">
+            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold px-3 py-1.5 rounded-full shrink-0">
               <ShoppingCart size={13} />
               {totalItems} item{totalItems !== 1 ? "s" : ""} · ₹{total.toLocaleString()}
             </div>
           )}
-          <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full font-mono">
+          <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full font-mono shrink-0">
             #{getNextInvoiceNumber()}
           </div>
         </div>
@@ -1002,6 +1150,210 @@ export default function BillingPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Held Bills Side-Drawer / Modal ─────────────────────────────────── */}
+      {heldBillsDrawerOpen && (
+        <div 
+          onClick={() => setHeldBillsDrawerOpen(false)}
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-end z-50 animate-in fade-in duration-200"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white w-full max-w-md h-full flex flex-col shadow-2xl border-l border-slate-200 animate-in slide-in-from-right duration-200"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50 shrink-0">
+              <div>
+                <h2 className="font-bold text-slate-800 flex items-center gap-2">
+                  <ReceiptText size={18} className="text-amber-500" />
+                  Held Bills
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">Select a parked cart to resume checkout</p>
+              </div>
+              <button 
+                onClick={() => setHeldBillsDrawerOpen(false)}
+                className="p-1 rounded-lg hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Search Box */}
+            <div className="p-4 border-b border-slate-100 shrink-0 bg-white">
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search Hold #, customer, phone, vehicle..."
+                  value={heldBillsSearch}
+                  onChange={(e) => setHeldBillsSearch(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg pl-9 pr-4 py-2 text-xs bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 transition"
+                  autoFocus
+                />
+                {heldBillsSearch && (
+                  <button
+                    onClick={() => setHeldBillsSearch("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* List area */}
+            <div className="flex-1 overflow-y-auto p-4 bg-slate-50 space-y-3 scrollbar-thin">
+              {(() => {
+                const query = heldBillsSearch.trim().toLowerCase();
+                const filtered = (state.holdBills || []).filter((b) => {
+                  if (!query) return true;
+                  return (
+                    b.holdNumber.toLowerCase().includes(query) ||
+                    b.customerName.toLowerCase().includes(query) ||
+                    b.customerPhone.includes(query) ||
+                    b.vehicleNumber.toLowerCase().includes(query) ||
+                    b.vehicleModel.toLowerCase().includes(query)
+                  );
+                });
+
+                if (filtered.length === 0) {
+                  return (
+                    <div className="h-full flex flex-col items-center justify-center text-center py-16">
+                      <div className="w-12 h-12 rounded-xl bg-slate-200 flex items-center justify-center mb-3">
+                        <ReceiptText size={20} className="text-slate-400" />
+                      </div>
+                      <p className="font-bold text-slate-500 text-xs">No held bills found</p>
+                      <p className="text-[11px] text-slate-400 mt-1">Try a different search term</p>
+                    </div>
+                  );
+                }
+
+                return filtered.map((b) => {
+                  const itemCount = b.items.reduce((s, item) => s + item.quantity, 0);
+                  const isCurrentActive = b.id === activeHoldBillId;
+
+                  return (
+                    <div 
+                      key={b.id} 
+                      className={`bg-white rounded-xl border p-4 shadow-sm space-y-3 relative transition hover:border-slate-300 ${
+                        isCurrentActive ? "ring-2 ring-amber-400 border-amber-400" : "border-slate-200"
+                      }`}
+                    >
+                      {/* Top Header Card */}
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono font-bold text-slate-900 text-xs uppercase tracking-wider bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                              {b.holdNumber}
+                            </span>
+                            {isCurrentActive && (
+                              <span className="text-[9px] font-extrabold uppercase bg-amber-500 text-white px-1.5 py-0.5 rounded tracking-wide animate-pulse">
+                                Active Now
+                              </span>
+                            )}
+                          </div>
+                          <h3 className="font-bold text-slate-800 text-sm mt-1.5">
+                            {b.customerName || "Walk-in Customer"}
+                          </h3>
+                          {b.customerPhone && (
+                            <p className="text-[10px] text-slate-500">{b.customerPhone}</p>
+                          )}
+                          {(b.vehicleNumber || b.vehicleModel) && (
+                            <p className="text-[10px] text-slate-500 font-medium mt-0.5">
+                              🚗 {b.vehicleModel || "Vehicle"} ({b.vehicleNumber || "No Plate"})
+                            </p>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs font-black text-slate-900 font-mono">₹{b.total.toLocaleString()}</p>
+                          <p className="text-[10px] text-slate-400 font-semibold mt-0.5">{itemCount} Item{itemCount !== 1 ? "s" : ""}</p>
+                        </div>
+                      </div>
+
+                      {/* Items details block */}
+                      <div className="bg-slate-50 border border-slate-100 rounded-lg p-2.5 text-[11px] space-y-1">
+                        {b.items.slice(0, 3).map((item, idx) => (
+                          <div key={idx} className="flex justify-between text-slate-600">
+                            <span className="truncate max-w-[70%] text-[10px]">• {item.product.name}</span>
+                            <span className="font-semibold text-slate-800 font-mono text-[10px]">×{item.quantity}</span>
+                          </div>
+                        ))}
+                        {b.items.length > 3 && (
+                          <div className="text-slate-400 italic text-[10px] text-right font-medium pt-0.5 border-t border-slate-100/50">
+                            + {b.items.length - 3} more product{b.items.length - 3 !== 1 ? "s" : ""}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Timestamp labels */}
+                      <div className="flex justify-between items-center text-[9px] text-slate-400 font-medium font-mono">
+                        <div>
+                          <span>Created: {new Date(b.createdAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</span>
+                        </div>
+                        <div>
+                          <span>Edited: {new Date(b.updatedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</span>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex gap-2.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleRecallHoldBill(b)}
+                          className="flex-1 bg-navy-950 hover:bg-slate-800 text-white py-2 rounded-lg text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1 active:scale-95 border-none"
+                        >
+                          Continue Billing
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteConfirmTarget(b.id)}
+                          className="px-3 border border-red-200 hover:bg-red-50 text-red-600 py-2 rounded-lg text-xs font-bold transition cursor-pointer flex items-center justify-center active:scale-95 bg-white"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete Confirmation Dialog ─────────────────────────────────────── */}
+      {deleteConfirmTarget && (() => {
+        const targetBill = (state.holdBills || []).find((b) => b.id === deleteConfirmTarget);
+        return (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-[60] p-4 animate-in fade-in duration-150">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs border border-slate-200 p-5 space-y-4">
+              <div className="text-center">
+                <AlertCircle size={32} className="text-red-500 mx-auto mb-2" />
+                <h3 className="font-bold text-slate-800 text-sm">Discard Held Bill?</h3>
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                  This will discard <strong>{targetBill?.holdNumber || "this bill"}</strong> permanently. This action cannot be undone.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmTarget(null)}
+                  className="flex-1 border border-slate-200 text-slate-700 py-2 rounded-xl text-xs font-bold hover:bg-slate-50 transition cursor-pointer bg-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteHoldBill(deleteConfirmTarget)}
+                  className="flex-1 bg-red-600 hover:bg-red-750 text-white py-2 rounded-xl text-xs font-bold transition cursor-pointer border-none"
+                >
+                  Yes, Discard
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

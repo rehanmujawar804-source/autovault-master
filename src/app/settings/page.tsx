@@ -159,6 +159,8 @@ export default function SettingsPage() {
           supplierPayments: Array.isArray(parsed.supplierPayments) ? parsed.supplierPayments : [],
           financeAccounts: Array.isArray(parsed.financeAccounts) ? parsed.financeAccounts : [],
           financeTransactions: Array.isArray(parsed.financeTransactions) ? parsed.financeTransactions : [],
+          holdBills: Array.isArray(parsed.holdBills) ? parsed.holdBills : [],
+          holdBillsCounter: typeof parsed.holdBillsCounter === "number" ? parsed.holdBillsCounter : (Array.isArray(parsed.holdBills) ? parsed.holdBills.length : 0),
         };
         // Extract settings if present in backup (newer backup format)
         const settingsPayload: Record<string, unknown> | undefined =

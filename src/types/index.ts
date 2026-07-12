@@ -223,6 +223,46 @@ export interface CartItem {
   quantity: number;
 }
 
+// ── Hold Bill (Temporary POS Cart) ────────────
+
+export interface HoldBill {
+  id: string;
+  holdNumber: string; // Sequential identifier like HB-0001
+  createdAt: string;  // ISO timestamp
+  updatedAt: string;  // ISO timestamp
+
+  // Cart elements
+  items: CartItem[];
+
+  // Customer Mode & Search
+  customerMode: "existing" | "new";
+  selectedCustomerId: string;
+  customerName: string;
+  customerPhone: string;
+  customerSearchQuery: string;
+
+  // Vehicle Details
+  vehicleNumber: string;
+  vehicleModel: string;
+
+  // Payment details
+  paymentMethod: PaymentMethod;
+  paymentStatus: PaymentStatus;
+  amountPaidInput: string;
+
+  // Discount
+  discount: number;
+  discountInput: string;
+
+  // Notes & metadata
+  notes: string;
+  billedBy: "Owner" | "Staff" | "";
+
+  // Visual/Helper amounts
+  subtotal: number;
+  total: number;
+}
+
 // ── App Store State ───────────────────────────
 
 export interface AppState {
@@ -236,6 +276,9 @@ export interface AppState {
   supplierPayments: SupplierPayment[];
   financeAccounts: FinanceAccount[];
   financeTransactions: FinanceTransaction[];
+  // Temporary Hold Bills
+  holdBills: HoldBill[];
+  holdBillsCounter: number;
 }
 
 

@@ -49,6 +49,7 @@ import type {
   SupplierPayment,
   FinanceAccount,
   FinanceTransaction,
+  HoldBill,
 } from "@/types";
 import { todayLocalStr } from "@/lib/dateUtils";
 
@@ -88,6 +89,8 @@ const INITIAL_STATE: AppState = {
   supplierPayments: [],
   financeAccounts: DEFAULT_FINANCE_ACCOUNTS,
   financeTransactions: [],
+  holdBills: [],
+  holdBillsCounter: 0,
 };
 
 const STORAGE_KEY = "autovault_store";
@@ -126,7 +129,13 @@ type Action =
   // Reset / Hydrate
   | { type: "RESET_STORE" }
   | { type: "HYDRATE_STORE"; state: AppState }
-  | { type: "RECONCILE_DEBT_CACHE" };
+  | { type: "RECONCILE_DEBT_CACHE" }
+
+  // Hold Bills (Sprint 4.3 POS Park/Recall)
+  | { type: "CREATE_HOLD_BILL"; bill: Omit<HoldBill, "id" | "createdAt" | "updatedAt" | "holdNumber"> }
+  | { type: "UPDATE_HOLD_BILL"; billId: string; bill: Omit<HoldBill, "id" | "createdAt" | "updatedAt" | "holdNumber"> }
+  | { type: "DELETE_HOLD_BILL"; id: string }
+  | { type: "LOAD_HOLD_BILL"; id: string };
 
 // ─────────────────────────────────────────────
 //  HELPERS (pure, used inside reducer)
@@ -815,6 +824,8 @@ function reducer(state: AppState, action: Action): AppState {
           ? action.state.financeAccounts
           : DEFAULT_FINANCE_ACCOUNTS,
         financeTransactions: action.state.financeTransactions ?? [],
+        holdBills: action.state.holdBills ?? [],
+        holdBillsCounter: action.state.holdBillsCounter ?? 0,
       };
     }
 
@@ -997,6 +1008,63 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    // ── Hold Bills Reducers ──────────────────────────────────────────────────
+    //
+    // Complete isolation constraint: None of these actions interact with stock,
+    // finance transactions, customer activities, customer debts, or invoices.
+    // They are temporary POS cart snapshots only.
+    case "CREATE_HOLD_BILL": {
+      const nextCounter = (state.holdBillsCounter || 0) + 1;
+      const holdNumber = `HB-${String(nextCounter).padStart(4, "0")}`;
+      const now = new Date().toISOString();
+      const newBill: HoldBill = {
+        ...action.bill,
+        id: `hb-${crypto.randomUUID()}`,
+        holdNumber,
+        createdAt: now,
+        updatedAt: now,
+      };
+      // Keep newest first
+      const newHoldBills = [newBill, ...(state.holdBills || [])];
+      return {
+        ...state,
+        holdBills: newHoldBills,
+        holdBillsCounter: nextCounter,
+      };
+    }
+
+    case "UPDATE_HOLD_BILL": {
+      const now = new Date().toISOString();
+      const existing = (state.holdBills || []).find((b) => b.id === action.billId);
+      if (!existing) return state;
+
+      const updatedBill: HoldBill = {
+        ...existing,
+        ...action.bill,
+        updatedAt: now, // update the last-edited timestamp
+      };
+
+      // Filter out the old one, and place the updated one first (newest/most recently edited first)
+      const otherBills = (state.holdBills || []).filter((b) => b.id !== action.billId);
+      const newHoldBills = [updatedBill, ...otherBills];
+
+      return {
+        ...state,
+        holdBills: newHoldBills,
+      };
+    }
+
+    case "DELETE_HOLD_BILL": {
+      const newHoldBills = (state.holdBills || []).filter((b) => b.id !== action.id);
+      return {
+        ...state,
+        holdBills: newHoldBills,
+      };
+    }
+
+    case "LOAD_HOLD_BILL":
+      return state; // No-op in reducer; load details in component state directly
+
     default:
       return state;
   }
@@ -1026,6 +1094,11 @@ interface StoreContextValue {
   voidDebtPayment: (paymentId: string, reason: string, voidedBy: string) => void;
   reconcileDebtCache: () => void;
   exportStoreAsJSON: () => void;
+
+  // Hold Bills Helpers
+  createHoldBill: (bill: Omit<HoldBill, "id" | "createdAt" | "updatedAt" | "holdNumber">) => void;
+  updateHoldBill: (billId: string, bill: Omit<HoldBill, "id" | "createdAt" | "updatedAt" | "holdNumber">) => void;
+  deleteHoldBill: (id: string) => void;
 
   // Suppliers Sprint 1 & 2 Convenience helpers
   addSupplier: (supplier: Omit<Supplier, "id" | "createdAt" | "updatedAt">) => void;
@@ -1230,6 +1303,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "VOID_DEBT_PAYMENT", paymentId, reason, voidedBy });
   }
 
+  function createHoldBill(bill: Omit<HoldBill, "id" | "createdAt" | "updatedAt" | "holdNumber">) {
+    dispatch({ type: "CREATE_HOLD_BILL", bill });
+  }
+
+  function updateHoldBill(billId: string, bill: Omit<HoldBill, "id" | "createdAt" | "updatedAt" | "holdNumber">) {
+    dispatch({ type: "UPDATE_HOLD_BILL", billId, bill });
+  }
+
+  function deleteHoldBill(id: string) {
+    dispatch({ type: "DELETE_HOLD_BILL", id });
+  }
+
   function reconcileDebtCache() {
     dispatch({ type: "RECONCILE_DEBT_CACHE" });
   }
@@ -1249,6 +1334,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         supplierPayments: state.supplierPayments ?? [],
         financeAccounts: state.financeAccounts ?? DEFAULT_FINANCE_ACCOUNTS,
         financeTransactions: state.financeTransactions ?? [],
+        holdBills: state.holdBills ?? [],
+        holdBillsCounter: state.holdBillsCounter ?? 0,
         settings,
         __v: STORE_VERSION,
       };
@@ -1551,6 +1638,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         updateCustomer,
         recordDebtPayment,
         voidDebtPayment,
+        createHoldBill,
+        updateHoldBill,
+        deleteHoldBill,
         reconcileDebtCache,
         exportStoreAsJSON,
         addSupplier,

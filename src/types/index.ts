@@ -148,7 +148,8 @@ export type StockMovementType =
   | "Sale"
   | "Adjustment"
   | "Return"
-  | "Import";
+  | "Import"
+  | "Sales Return";
 
 export interface StockMovement {
   id: string;
@@ -166,10 +167,12 @@ export type PaymentMethod = "Cash" | "UPI" | "Card" | "Credit";
 export type PaymentStatus = "Paid" | "Partial" | "Debt";
 
 export interface InvoiceItem {
+  id?: string;          // optional unique ID per line item
   productId: string;
   name: string;
   quantity: number;
   price: number; // sell price at time of sale
+  returnedQuantity?: number;
 }
 
 export interface Invoice {
@@ -200,7 +203,7 @@ export interface Invoice {
 
 export interface CustomerActivity {
   id: string;
-  type: "Invoice" | "Repayment" | "Void";
+  type: "Invoice" | "Repayment" | "Void" | "Return";
   description: string;
   reference: string;
   date: string;
@@ -270,7 +273,8 @@ export type FinanceCategory =
   | "Invoice Void"
   | "Payment Void"
   | "Purchase Return"
-  | "Adjustment";
+  | "Adjustment"
+  | "Sales Return";
 
 export interface FinanceTransaction {
   id: string;
@@ -367,6 +371,39 @@ export interface AppState {
   holdBillsCounter: number;
   purchaseOrders?: PurchaseOrder[];
   purchaseOrderCounter?: number;
+  salesReturns?: SalesReturn[];
+  salesReturnCounter?: number;
+}
+
+export type SalesReturnStatus = "Pending" | "Refunded" | "Adjusted" | "Cancelled";
+
+export interface SalesReturnItem {
+  invoiceItemId: string;    // links back to the specific InvoiceItem
+  productId: string;
+  productName: string;
+  quantity: number;
+  sellingPrice: number;
+  refundAmount: number;     // actual money returned for this line
+  totalAmount: number;      // convenience: quantity × sellingPrice
+}
+
+export interface SalesReturn {
+  id: string;
+  returnNumber: string;           // e.g. SR-2026-00001
+  invoiceId: string;
+  customerId: string;
+  createdAt: string;
+  createdBy?: string;
+  reason: string;
+  refundMethod: "Cash" | "UPI" | "Bank" | "Adjustment" | "Exchange";
+  notes?: string;
+  items: SalesReturnItem[];
+  totalRefund: number;
+  status: SalesReturnStatus;
+  // Cancellation audit trail
+  cancellationReason?: string;
+  cancelledBy?: string;
+  cancelledAt?: string;
 }
 
 

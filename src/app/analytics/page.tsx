@@ -49,7 +49,7 @@ type TrendPoint = {
 export default function AnalyticsPage() {
   const router = useRouter();
   const { isOwner, loading } = useRole();
-  const { state, getInventoryValue } = useStore();
+  const { state, getInventoryValue, getInvoiceOutstanding } = useStore();
 
   // ── States ────────────────────────────────────────────────────────────────
   const [timeRange, setTimeRange] = useState<TimeRange>("All");
@@ -124,7 +124,7 @@ export default function AnalyticsPage() {
     // Financial KPIs
     const totalBilled = filteredInvoices.reduce((s, i) => s + i.total, 0);
     const totalRevenue = filteredInvoices.reduce((s, i) => s + i.amountPaid, 0);
-    const totalDebt = filteredInvoices.reduce((s, i) => s + i.dueAmount, 0);
+    const totalDebt = filteredInvoices.reduce((s, i) => s + getInvoiceOutstanding(i), 0);
 
     const totalProfit = filteredInvoices.reduce((sum, inv) => {
       return (
@@ -226,14 +226,14 @@ export default function AnalyticsPage() {
       .sort((a, b) => b.revenue - a.revenue);
 
     // Outstanding debt customers (filtered in range if invoice had due)
-    const debtInvs = filteredInvoices.filter((i) => i.dueAmount > 0);
+    const debtInvs = filteredInvoices.filter((i) => getInvoiceOutstanding(i) > 0);
     const debtorMap: Record<string, { name: string; phone: string; debt: number }> = {};
     debtInvs.forEach((inv) => {
       if (inv.customerId) {
         if (!debtorMap[inv.customerId]) {
           debtorMap[inv.customerId] = { name: inv.customer, phone: inv.customerPhone ?? "", debt: 0 };
         }
-        debtorMap[inv.customerId].debt += inv.dueAmount;
+        debtorMap[inv.customerId].debt += getInvoiceOutstanding(inv);
       }
     });
     const debtCustomers = Object.entries(debtorMap).map(([id, v]) => ({ id, ...v })).sort((a, b) => b.debt - a.debt);
@@ -266,6 +266,66 @@ export default function AnalyticsPage() {
       .sort((a, b) => b.margin - a.margin)
       .slice(0, 5);
 
+    // Returns Analysis
+    const activeReturns = (state.salesReturns || []).filter((r) => r.status !== "Cancelled");
+    const totalItemsSold = filteredInvoices.reduce((sum, inv) => {
+      return sum + inv.items.reduce((s, it) => s + it.quantity, 0);
+    }, 0);
+    const totalItemsReturned = activeReturns.reduce((sum, r) => {
+      return sum + r.items.reduce((s, it) => s + it.quantity, 0);
+    }, 0);
+    const totalRefundAmount = activeReturns.reduce((sum, r) => sum + r.totalRefund, 0);
+    const overallReturnRate = totalItemsSold > 0 ? Math.round((totalItemsReturned / totalItemsSold) * 1000) / 10 : 0;
+
+    const productReturnRates = products
+      .map((p) => {
+        const soldQty = filteredInvoices.reduce((sum, inv) => {
+          const item = inv.items.find((it) => it.productId === p.id);
+          return sum + (item?.quantity ?? 0);
+        }, 0);
+        const returnedQty = activeReturns.reduce((sum, r) => {
+          const item = r.items.find((ri) => ri.productId === p.id);
+          return sum + (item?.quantity ?? 0);
+        }, 0);
+        const rate = soldQty > 0 ? Math.round((returnedQty / soldQty) * 1000) / 10 : 0;
+        return {
+          id: p.id,
+          name: p.name,
+          sku: p.sku,
+          soldQty,
+          returnedQty,
+          rate,
+        };
+      })
+      .filter((p) => p.returnedQty > 0)
+      .sort((a, b) => b.rate - a.rate || b.returnedQty - a.returnedQty)
+      .slice(0, 5);
+
+    const customerReturnRates = customers
+      .map((c) => {
+        const customerInvoices = filteredInvoices.filter((inv) => inv.customerId === c.id);
+        const soldQty = customerInvoices.reduce((sum, inv) => {
+          return sum + inv.items.reduce((s, it) => s + it.quantity, 0);
+        }, 0);
+        const returnedQty = activeReturns
+          .filter((r) => r.customerId === c.id)
+          .reduce((sum, r) => {
+            return sum + r.items.reduce((s, it) => s + it.quantity, 0);
+          }, 0);
+        const rate = soldQty > 0 ? Math.round((returnedQty / soldQty) * 1000) / 10 : 0;
+        return {
+          id: c.id,
+          name: c.name,
+          phone: c.phone,
+          soldQty,
+          returnedQty,
+          rate,
+        };
+      })
+      .filter((c) => c.returnedQty > 0)
+      .sort((a, b) => b.rate - a.rate || b.returnedQty - a.returnedQty)
+      .slice(0, 5);
+
     return {
       totalBilled,
       totalRevenue,
@@ -281,6 +341,12 @@ export default function AnalyticsPage() {
       lowStock,
       outOfStock,
       productMargins,
+      totalItemsSold,
+      totalItemsReturned,
+      totalRefundAmount,
+      overallReturnRate,
+      productReturnRates,
+      customerReturnRates,
     };
   }, [filteredInvoices, state]);
 
@@ -1154,6 +1220,104 @@ export default function AnalyticsPage() {
                 ))}
               </div>
             )}
+          </div>
+        </SectionCard>
+      </div>
+
+      {/* ── Section: Sales Returns & Refunds Analysis ──────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+        <SectionCard
+          title="Sales Returns & Refunds Analysis"
+          subtitle="Returns rates, units returned, and refund valuations in selected period"
+          className="lg:col-span-12"
+        >
+          {/* Summary Strip */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-4 bg-orange-50/50 border border-orange-100/80 rounded-2xl mb-6">
+            <div className="text-center md:text-left">
+              <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider block">Overall Return Rate</span>
+              <span className="text-2xl font-black text-orange-800 block mt-1">{data.overallReturnRate}%</span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">By unit volume sold ({data.totalItemsReturned} / {data.totalItemsSold})</span>
+            </div>
+            <div className="text-center md:text-left border-t md:border-t-0 md:border-l border-orange-100 pt-3 md:pt-0 md:pl-6">
+              <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider block">Total Refunds Issued</span>
+              <span className="text-2xl font-black text-orange-800 block mt-1">₹{data.totalRefundAmount.toLocaleString()}</span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">Cash, UPI, Bank, and adjustments</span>
+            </div>
+            <div className="text-center md:text-left border-t md:border-t-0 md:border-l border-orange-100 pt-3 md:pt-0 md:pl-6">
+              <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider block">Items Returned</span>
+              <span className="text-2xl font-black text-orange-800 block mt-1">{data.totalItemsReturned} units</span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">Restored to warehouse stock</span>
+            </div>
+            <div className="text-center md:text-left border-t md:border-t-0 md:border-l border-orange-100 pt-3 md:pt-0 md:pl-6">
+              <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider block">Active Return Records</span>
+              <span className="text-2xl font-black text-orange-800 block mt-1">
+                {(state.salesReturns || []).filter((r) => r.status !== "Cancelled").length} records
+              </span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">Excludes voided transactions</span>
+            </div>
+          </div>
+
+          {/* Sub Grid for Product and Customer lists */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Return Rate by Product */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                <Package size={15} className="text-orange-500" />
+                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Return Rate by Product</h3>
+              </div>
+              {data.productReturnRates.length === 0 ? (
+                <p className="text-xs text-slate-400 py-6 text-center">No product returns recorded in selected timeframe.</p>
+              ) : (
+                <div className="space-y-3">
+                  {data.productReturnRates.map((p) => (
+                    <div key={p.id} className="space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className="font-bold text-slate-800 truncate max-w-[60%]">{p.name}</span>
+                        <span className="font-bold text-slate-900 font-mono">
+                          {p.rate}% <span className="text-slate-400 font-normal ml-1">({p.returnedQty} / {p.soldQty} units)</span>
+                        </span>
+                      </div>
+                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-orange-500 rounded-full transition-all duration-300"
+                          style={{ width: `${Math.min(p.rate, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Return Rate by Customer */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                <Users size={15} className="text-orange-500" />
+                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Return Rate by Customer</h3>
+              </div>
+              {data.customerReturnRates.length === 0 ? (
+                <p className="text-xs text-slate-400 py-6 text-center">No customer returns recorded in selected timeframe.</p>
+              ) : (
+                <div className="space-y-3">
+                  {data.customerReturnRates.map((c) => (
+                    <div key={c.id} className="space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className="font-bold text-slate-800 truncate max-w-[60%]">{c.name}</span>
+                        <span className="font-bold text-slate-900 font-mono">
+                          {c.rate}% <span className="text-slate-400 font-normal ml-1">({c.returnedQty} / {c.soldQty} units)</span>
+                        </span>
+                      </div>
+                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-orange-400 rounded-full transition-all duration-300"
+                          style={{ width: `${Math.min(c.rate, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </SectionCard>
       </div>

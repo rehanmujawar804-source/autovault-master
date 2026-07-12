@@ -17,6 +17,7 @@ import {
   X,
   History,
   FileText,
+  RotateCcw,
 } from "lucide-react";
 import type { Invoice, PaymentMethod, PaymentStatus } from "@/types";
 
@@ -54,6 +55,8 @@ export default function CustomerProfilePage({
     getDebtPaymentsByInvoice,
     recordDebtPayment,
     showToast,
+    getSalesReturnsByCustomer,
+    getInvoiceOutstanding,
   } = useStore();
 
   // ── Collect Payment Modal State ────────────────────────────────────────────
@@ -66,17 +69,19 @@ export default function CustomerProfilePage({
 
   const customer = getCustomerById(id);
 
-  // Derive real debt from invoice dues (not cached customer.debt)
-  // Keep invoices array stable inside useMemo to avoid unstable dependency warning
+  // Derive real debt from invoice effective outstanding (after returns)
   const [invoices, derivedDebt] = useMemo(() => {
     const invList = customer
       ? getInvoicesByCustomer(customer.id).sort(
           (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
         )
       : [];
-    const debt = invList.filter((inv) => !inv.voided).reduce((s, inv) => s + inv.dueAmount, 0);
+    // Sum effective outstanding per invoice (subtracts active returns) — never use raw dueAmount
+    const debt = invList
+      .filter((inv) => !inv.voided)
+      .reduce((s, inv) => s + getInvoiceOutstanding(inv), 0);
     return [invList, debt] as const;
-  }, [customer, getInvoicesByCustomer]);
+  }, [customer, getInvoicesByCustomer, getInvoiceOutstanding]);
 
   const outstandingInvoices = customer
     ? getCustomerOutstandingInvoices(customer.id)
@@ -90,8 +95,9 @@ export default function CustomerProfilePage({
 
   // Collect Payment Handlers
   function openCollect(inv: Invoice) {
+    const effectiveDue = getInvoiceOutstanding(inv);
     setCollectInvoice(inv);
-    setCollectAmount(String(inv.dueAmount));
+    setCollectAmount(String(effectiveDue));
     setCollectMethod("Cash");
     setCollectNote("");
     setCollectCollectedBy("");
@@ -117,8 +123,9 @@ export default function CustomerProfilePage({
       showToast("Enter a valid amount greater than ₹0.", "error");
       return;
     }
-    if (amount > collectInvoice.dueAmount) {
-      showToast(`Amount cannot exceed the due amount of ₹${collectInvoice.dueAmount.toLocaleString()}.`, "error");
+    const effectiveDue = getInvoiceOutstanding(collectInvoice);
+    if (amount > effectiveDue) {
+      showToast(`Amount cannot exceed the effective due of ₹${effectiveDue.toLocaleString()}.`, "error");
       return;
     }
     recordDebtPayment({
@@ -155,6 +162,13 @@ export default function CustomerProfilePage({
     (sum, inv) => sum + inv.items.reduce((s, i) => s + i.quantity, 0),
     0
   );
+
+  // Returns KPIs
+  const customerReturns = getSalesReturnsByCustomer(customer.id);
+  const activeCustomerReturns = customerReturns.filter((r) => r.status !== "Cancelled");
+  const returnCount = activeCustomerReturns.length;
+  const returnItemQty = activeCustomerReturns.reduce((s, r) => s + r.items.reduce((ss, i) => ss + i.quantity, 0), 0);
+  const refundedTotal = activeCustomerReturns.reduce((s, r) => s + r.totalRefund, 0);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -257,6 +271,25 @@ export default function CustomerProfilePage({
               label="Items Bought"
               value={String(totalItems)}
             />
+            {returnCount > 0 && (
+              <>
+                <div className="border-t border-slate-100 my-1" />
+                <StatRow
+                  icon={<RotateCcw size={14} />}
+                  iconBg="bg-orange-50 text-orange-500"
+                  label="Returns"
+                  value={`${returnCount} (${returnItemQty} items)`}
+                  valueClass="text-orange-600"
+                />
+                <StatRow
+                  icon={<RotateCcw size={14} />}
+                  iconBg="bg-orange-50 text-orange-500"
+                  label="Refunded"
+                  value={`₹${refundedTotal.toLocaleString()}`}
+                  valueClass="text-orange-600 font-bold"
+                />
+              </>
+            )}
           </div>
 
           {/* Activity Log */}
@@ -267,7 +300,10 @@ export default function CustomerProfilePage({
                 {customer.activities.map((act) => (
                   <div key={act.id} className="relative pl-6 text-xs font-medium">
                     <span className={`absolute left-0.5 top-1.5 w-3 h-3 rounded-full border-2 border-white ${
-                      act.type === "Void" ? "bg-red-500" : act.type === "Repayment" ? "bg-green-500" : "bg-blue-500"
+                      act.type === "Void" ? "bg-red-500" :
+                      act.type === "Repayment" ? "bg-green-500" :
+                      act.type === "Return" ? "bg-orange-400" :
+                      "bg-blue-500"
                     }`} />
                     <p className="font-bold text-slate-850">{act.description}</p>
                     <p className="text-[10px] text-slate-400 font-mono mt-0.5">{act.reference} · {new Date(act.date).toLocaleDateString("en-IN")}</p>
@@ -305,7 +341,7 @@ export default function CustomerProfilePage({
                           </p>
                           <p className="text-[10px] text-slate-400">{formatInvoiceDate(inv)}</p>
                           <p className="text-xs font-bold text-red-600 mt-0.5">
-                            Due: ₹{inv.dueAmount.toLocaleString()}
+                            Due: ₹{getInvoiceOutstanding(inv).toLocaleString()}
                           </p>
                           {repaidTotal > 0 && (
                             <p className="text-[10px] text-green-700 mt-0.5 flex items-center gap-1">
@@ -458,13 +494,13 @@ export default function CustomerProfilePage({
                                 Paid: ₹{inv.amountPaid.toLocaleString()}
                               </p>
                             )}
-                          {inv.dueAmount > 0 && (
+                          {getInvoiceOutstanding(inv) > 0 && (
                             <p className="text-xs text-red-600 font-medium">
-                              Due: ₹{inv.dueAmount.toLocaleString()}
+                              Due: ₹{getInvoiceOutstanding(inv).toLocaleString()}
                             </p>
                           )}
                           <div className="mt-2 flex flex-col gap-1 items-end">
-                            {inv.dueAmount > 0 && !inv.voided && (
+                            {getInvoiceOutstanding(inv) > 0 && !inv.voided && (
                               <button
                                 onClick={() => openCollect(inv)}
                                 className="text-[10px] bg-green-600 hover:bg-green-700 text-white px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer"
@@ -526,7 +562,9 @@ export default function CustomerProfilePage({
                     </div>
                     <div>
                       <p className="text-slate-400">Due</p>
-                      <p className="font-bold text-red-600 text-sm mt-1">₹{collectInvoice.dueAmount.toLocaleString()}</p>
+                      <p className="font-bold text-red-600 text-sm mt-1">
+                        ₹{collectInvoice ? getInvoiceOutstanding(collectInvoice).toLocaleString() : "0"}
+                      </p>
                     </div>
                   </div>
 
@@ -535,17 +573,17 @@ export default function CustomerProfilePage({
                     <input
                       type="number"
                       min="1"
-                      max={collectInvoice.dueAmount}
+                      max={collectInvoice ? getInvoiceOutstanding(collectInvoice) : 0}
                       value={collectAmount}
                       onChange={(e) => setCollectAmount(e.target.value)}
                       className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-green-400 transition"
                       autoFocus
                     />
-                    {Number(collectAmount) > 0 && (
-                      <p className={`text-xs mt-1.5 font-semibold ${Number(collectAmount) >= collectInvoice.dueAmount ? "text-green-600" : "text-orange-600"}`}>
-                        {Number(collectAmount) >= collectInvoice.dueAmount
+                    {Number(collectAmount) > 0 && collectInvoice && (
+                      <p className={`text-xs mt-1.5 font-semibold ${Number(collectAmount) >= getInvoiceOutstanding(collectInvoice) ? "text-green-600" : "text-orange-600"}`}>
+                        {Number(collectAmount) >= getInvoiceOutstanding(collectInvoice)
                           ? "✓ Clears invoice fully → Paid"
-                          : `₹${(collectInvoice.dueAmount - Number(collectAmount)).toLocaleString()} still remaining`}
+                          : `₹${(getInvoiceOutstanding(collectInvoice) - Number(collectAmount)).toLocaleString()} still remaining`}
                       </p>
                     )}
                   </div>

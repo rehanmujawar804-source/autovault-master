@@ -25,6 +25,7 @@ import {
   X,
   Activity,
   FileText,
+  RotateCcw,
 } from "lucide-react";
 import type { PaymentStatus } from "@/types";
 import { todayLocalStr, formatInvoiceDate } from "@/lib/dateUtils";
@@ -46,6 +47,7 @@ export default function DashboardPage() {
     getTotalProfit,
     getTotalOutstandingDebt,
     getInventoryValue,
+    getInvoiceOutstanding,
   } = useStore();
 
   const { isOwner, loading } = useRole();
@@ -94,11 +96,12 @@ export default function DashboardPage() {
       .sort((a, b) => b.qty - a.qty)
       .slice(0, 5);
 
-    // High debt customers — derived from invoice dues (not cached customer.debt)
+    // High debt customers — derived from invoice effective dues (not cached customer.debt)
     const debtByCustomerId: Record<string, number> = {};
     invoices.forEach((inv) => {
-      if (inv.customerId && inv.dueAmount > 0) {
-        debtByCustomerId[inv.customerId] = (debtByCustomerId[inv.customerId] ?? 0) + inv.dueAmount;
+      const effOutstanding = getInvoiceOutstanding(inv);
+      if (inv.customerId && effOutstanding > 0) {
+        debtByCustomerId[inv.customerId] = (debtByCustomerId[inv.customerId] ?? 0) + effOutstanding;
       }
     });
     const highDebtCustomers = [...state.customers]
@@ -446,6 +449,58 @@ export default function DashboardPage() {
         );
       })()}
 
+      {/* ── Sales Returns KPI Strip (Owner only) ── */}
+      {isOwner && (() => {
+        const allReturns = (state.salesReturns || []).filter((r) => r.status !== "Cancelled");
+        if (allReturns.length === 0) return null;
+
+        const totalReturns = allReturns.length;
+        const totalRefundValue = allReturns.reduce((s, r) => s + r.totalRefund, 0);
+        const thisMonth = today.substring(0, 7); // YYYY-MM
+        const monthReturns = allReturns.filter((r) => r.createdAt.startsWith(thisMonth));
+        const monthRefund = monthReturns.reduce((s, r) => s + r.totalRefund, 0);
+        const totalReturnedQty = allReturns.reduce((s, r) => s + r.items.reduce((ss, i) => ss + i.quantity, 0), 0);
+
+        return (
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2">
+                <RotateCcw size={15} className="text-orange-500" />
+                <h2 className="font-extrabold text-slate-900 text-sm uppercase tracking-wider">Sales Returns</h2>
+              </div>
+              <Link
+                href="/invoices"
+                className="text-xs font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1 cursor-pointer"
+              >
+                View Invoices <ChevronRight size={12} />
+              </Link>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-orange-50/60 border border-orange-100 rounded-xl p-4">
+                <p className="text-[10px] font-bold text-orange-500 uppercase tracking-wider">Total Returns</p>
+                <p className="text-2xl font-extrabold text-orange-800 mt-1">{totalReturns}</p>
+                <p className="text-[10px] text-orange-400 mt-1">{totalReturnedQty} items returned</p>
+              </div>
+              <div className="bg-red-50/60 border border-red-100 rounded-xl p-4">
+                <p className="text-[10px] font-bold text-red-500 uppercase tracking-wider">Total Refunded</p>
+                <p className="text-2xl font-extrabold text-red-800 mt-1">₹{totalRefundValue.toLocaleString()}</p>
+                <p className="text-[10px] text-red-400 mt-1">All time refunds</p>
+              </div>
+              <div className="bg-amber-50/60 border border-amber-100 rounded-xl p-4">
+                <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">This Month</p>
+                <p className="text-2xl font-extrabold text-amber-800 mt-1">{monthReturns.length}</p>
+                <p className="text-[10px] text-amber-400 mt-1">Returns this month</p>
+              </div>
+              <div className="bg-rose-50/60 border border-rose-100 rounded-xl p-4">
+                <p className="text-[10px] font-bold text-rose-500 uppercase tracking-wider">Month Refunds</p>
+                <p className="text-2xl font-extrabold text-rose-800 mt-1">₹{monthRefund.toLocaleString()}</p>
+                <p className="text-[10px] text-rose-400 mt-1">Refunded this month</p>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── ZONE 3: 12-Column Layout Grid (Invoices & Trends vs Sidebar Controls) ── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
 
@@ -626,9 +681,9 @@ export default function DashboardPage() {
                         <p className="font-black text-slate-850 text-sm">
                           ₹{inv.total.toLocaleString()}
                         </p>
-                        {inv.dueAmount > 0 && (
+                        {getInvoiceOutstanding(inv) > 0 && (
                           <p className="text-[10px] text-red-500 font-bold">
-                            Due: ₹{inv.dueAmount.toLocaleString()}
+                            Due: ₹{getInvoiceOutstanding(inv).toLocaleString()}
                           </p>
                         )}
                       </div>

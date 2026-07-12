@@ -62,7 +62,7 @@ function loadSettings(): ShopSettings {
 export default function SettingsPage() {
   const router = useRouter();
   const { isOwner, loading, role, logout } = useRole();
-  const { state, reconcileDebtCache, showToast, dispatch, exportStoreAsJSON } = useStore();
+  const { state, reconcileDebtCache, showToast, dispatch, exportStoreAsJSON, getInvoiceOutstanding } = useStore();
 
   const [settings, setSettings] = useState<ShopSettings>(() => loadSettings());
   const [saved, setSaved] = useState(false);
@@ -75,8 +75,8 @@ export default function SettingsPage() {
   const invoiceDebt = useMemo(() => {
     return (state.invoices ?? [])
       .filter((inv) => !inv.voided)
-      .reduce((sum, inv) => sum + inv.dueAmount, 0);
-  }, [state.invoices]);
+      .reduce((sum, inv) => sum + getInvoiceOutstanding(inv), 0);
+  }, [state.invoices, getInvoiceOutstanding]);
 
   const cachedDebt = useMemo(() => {
     return (state.customers ?? []).reduce((sum, c) => sum + c.debt, 0);

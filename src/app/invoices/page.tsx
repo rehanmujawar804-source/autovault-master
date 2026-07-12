@@ -66,7 +66,7 @@ type PageTab = "invoices" | "repayments";
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function InvoicesPage() {
-  const { state, recordDebtPayment, getDebtPaymentsByInvoice, getInvoiceById, getCustomerById, showToast } = useStore();
+  const { state, recordDebtPayment, getDebtPaymentsByInvoice, getInvoiceById, getCustomerById, showToast, getInvoiceOutstanding, getTotalOutstandingDebt } = useStore();
 
   const [activeTab, setActiveTab] = useState<PageTab>("invoices");
   const [search, setSearch] = useState("");
@@ -161,12 +161,12 @@ export default function InvoicesPage() {
   }, [allRepayments]);
 
   // ── Total outstanding debt ─────────────────────────────────────────────────
-  const totalDue = state.invoices.reduce((sum, i) => sum + i.dueAmount, 0);
+  const totalDue = getTotalOutstandingDebt();
 
   // ── Collect Payment Handlers ──────────────────────────────────────────────
   function openCollect(inv: Invoice) {
     setCollectInvoice(inv);
-    setCollectAmount(String(inv.dueAmount));
+    setCollectAmount(String(getInvoiceOutstanding(inv)));
     setCollectMethod("Cash");
     setCollectNote("");
     setCollectCollectedBy("");
@@ -192,7 +192,7 @@ export default function InvoicesPage() {
       showToast("Please enter a valid repayment amount.", "error");
       return;
     }
-    if (amount > collectInvoice.dueAmount) {
+    if (amount > getInvoiceOutstanding(collectInvoice)) {
       showToast("Repayment amount cannot exceed current outstanding due.", "error");
       return;
     }
@@ -424,9 +424,9 @@ export default function InvoicesPage() {
                               ₹{inv.total.toLocaleString()}
                             </td>
                             <td className="px-5 py-3.5 text-right hidden md:table-cell">
-                              {inv.dueAmount > 0 ? (
+                              {getInvoiceOutstanding(inv) > 0 ? (
                                 <span className="text-red-600 font-bold bg-red-50 border border-red-200 px-2 py-0.5 rounded text-xs">
-                                  ₹{inv.dueAmount.toLocaleString()}
+                                  ₹{getInvoiceOutstanding(inv).toLocaleString()}
                                 </span>
                               ) : (
                                 <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded font-bold text-xs">Paid</span>
@@ -435,7 +435,7 @@ export default function InvoicesPage() {
                             <td className="px-5 py-3.5 text-slate-500 hidden lg:table-cell">{formatInvoiceDate(inv)}</td>
                             <td className="px-5 py-3.5">
                               <div className="flex items-center justify-center gap-1.5">
-                                {inv.dueAmount > 0 && inv.customerId && (
+                                {getInvoiceOutstanding(inv) > 0 && inv.customerId && (
                                   <button onClick={() => openCollect(inv)} className="text-xs bg-green-600 hover:bg-green-700 text-white px-2.5 py-1.5 rounded-lg font-bold cursor-pointer">
                                     Collect
                                   </button>
@@ -495,7 +495,7 @@ export default function InvoicesPage() {
                                         <div className="flex justify-between py-0.5"><span className="text-slate-500">Billed by:</span><span className="font-semibold text-slate-800">{inv.billedBy}</span></div>
                                       )}
                                       <div className="flex justify-between py-0.5"><span className="text-slate-500">Paid at billing:</span><span className="font-bold text-green-700">₹{inv.amountPaid.toLocaleString()}</span></div>
-                                      <div className="flex justify-between py-0.5"><span className="text-slate-500">Still due:</span><span className={`font-bold ${inv.dueAmount > 0 ? "text-red-600" : "text-emerald-700"}`}>₹{inv.dueAmount.toLocaleString()}</span></div>
+                                      <div className="flex justify-between py-0.5"><span className="text-slate-500">Still due:</span><span className={`font-bold ${getInvoiceOutstanding(inv) > 0 ? "text-red-600" : "text-emerald-700"}`}>₹{getInvoiceOutstanding(inv).toLocaleString()}</span></div>
                                       <div className="flex justify-between py-0.5"><span className="text-slate-500">Date:</span><span className="font-medium text-slate-600">{formatInvoiceDate(inv)}</span></div>
                                     </div>
                                     {payments.length > 0 && (
@@ -553,13 +553,13 @@ export default function InvoicesPage() {
                                         <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Collections Actions</h4>
                                       </div>
                                       <div className="space-y-2">
-                                        {inv.dueAmount > 0 && inv.customerId && (
+                                        {getInvoiceOutstanding(inv) > 0 && inv.customerId && (
                                           <button onClick={() => openCollect(inv)} className="w-full flex items-center gap-2 justify-center bg-green-600 hover:bg-green-700 text-white text-xs py-2.5 px-3 rounded-lg font-bold transition-colors shadow-sm cursor-pointer">
                                             <Wallet size={13} />
-                                            Collect ₹{inv.dueAmount.toLocaleString()} Due
+                                            Collect ₹{getInvoiceOutstanding(inv).toLocaleString()} Due
                                           </button>
                                         )}
-                                        {inv.dueAmount === 0 && (
+                                        {getInvoiceOutstanding(inv) === 0 && (
                                           <div className="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 text-xs py-2.5 px-3 rounded-lg font-semibold">
                                             <CheckCircle size={13} />Invoice fully settled
                                           </div>
@@ -568,7 +568,7 @@ export default function InvoicesPage() {
                                           <Printer size={13} />Print Invoice Receipt
                                         </button>
                                         {inv.customerPhone && (
-                                          <a href={`https://wa.me/91${inv.customerPhone}?text=Hi%20${encodeURIComponent(inv.customer)},%20your%20invoice%20${inv.invoiceNumber}%20total%20is%20%E2%82%B9${inv.total}.${inv.dueAmount > 0 ? `%20Due:%20%E2%82%B9${inv.dueAmount}.` : "%20Fully%20Paid."}`}
+                                          <a href={`https://wa.me/91${inv.customerPhone}?text=Hi%20${encodeURIComponent(inv.customer)},%20your%20invoice%20${inv.invoiceNumber}%20total%20is%20%E2%82%B9${inv.total}.${getInvoiceOutstanding(inv) > 0 ? `%20Due:%20%E2%82%B9${getInvoiceOutstanding(inv)}.` : "%20Fully%20Paid."}`}
                                             target="_blank" rel="noopener noreferrer"
                                             className="w-full flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs py-2 px-3 rounded-lg font-semibold transition-colors">
                                             <MessageCircle size={13} className="text-green-600" />Share via WhatsApp
@@ -580,7 +580,7 @@ export default function InvoicesPage() {
                                       </div>
                                     </div>
                                     <div className="text-[10px] text-slate-400 pt-3 border-t border-slate-50 italic mt-4">
-                                      {inv.dueAmount > 0 ? `⚠ ₹${inv.dueAmount.toLocaleString()} due — click Collect above.` : "✅ All collections complete for this invoice."}
+                                      {getInvoiceOutstanding(inv) > 0 ? `⚠ ₹${getInvoiceOutstanding(inv).toLocaleString()} due — click Collect above.` : "✅ All collections complete for this invoice."}
                                     </div>
                                   </div>
                                 </div>
@@ -781,16 +781,16 @@ export default function InvoicesPage() {
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 grid grid-cols-3 gap-3 text-center text-xs">
                     <div><p className="text-slate-400">Total</p><p className="font-bold text-slate-800 text-sm mt-1">₹{collectInvoice.total.toLocaleString()}</p></div>
                     <div><p className="text-slate-400">Paid</p><p className="font-bold text-green-700 text-sm mt-1">₹{collectInvoice.amountPaid.toLocaleString()}</p></div>
-                    <div><p className="text-slate-400">Due</p><p className="font-bold text-red-600 text-sm mt-1">₹{collectInvoice.dueAmount.toLocaleString()}</p></div>
+                    <div><p className="text-slate-400">Due</p><p className="font-bold text-red-600 text-sm mt-1">₹{getInvoiceOutstanding(collectInvoice).toLocaleString()}</p></div>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Repayment Amount (₹)</label>
-                    <input type="number" min="1" max={collectInvoice.dueAmount} value={collectAmount} onChange={(e) => setCollectAmount(e.target.value)}
+                    <input type="number" min="1" max={getInvoiceOutstanding(collectInvoice)} value={collectAmount} onChange={(e) => setCollectAmount(e.target.value)}
                       className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-green-400 transition" autoFocus />
-                    {Number(collectAmount) > collectInvoice.dueAmount && (
+                    {Number(collectAmount) > getInvoiceOutstanding(collectInvoice) && (
                       <p className="text-xs text-red-500 font-bold mt-1.5 flex items-center gap-1.5 bg-red-50 border border-red-100 px-2.5 py-1.5 rounded-lg animate-in slide-in-from-top-1">
                         <AlertCircle size={13} />
-                        Amount cannot exceed outstanding due of ₹{collectInvoice.dueAmount.toLocaleString()}.
+                        Amount cannot exceed outstanding due of ₹{getInvoiceOutstanding(collectInvoice).toLocaleString()}.
                       </p>
                     )}
                     {Number(collectAmount) <= 0 && collectAmount !== "" && (
@@ -799,9 +799,9 @@ export default function InvoicesPage() {
                         Amount must be greater than 0.
                       </p>
                     )}
-                    {Number(collectAmount) > 0 && Number(collectAmount) <= collectInvoice.dueAmount && (
-                      <p className={`text-xs mt-1.5 font-semibold ${Number(collectAmount) >= collectInvoice.dueAmount ? "text-green-600" : "text-orange-600"}`}>
-                        {Number(collectAmount) >= collectInvoice.dueAmount ? "✓ Clears invoice fully → Paid" : `₹${(collectInvoice.dueAmount - Number(collectAmount)).toLocaleString()} still remaining`}
+                    {Number(collectAmount) > 0 && Number(collectAmount) <= getInvoiceOutstanding(collectInvoice) && (
+                      <p className={`text-xs mt-1.5 font-semibold ${Number(collectAmount) >= getInvoiceOutstanding(collectInvoice) ? "text-green-600" : "text-orange-600"}`}>
+                        {Number(collectAmount) >= getInvoiceOutstanding(collectInvoice) ? "✓ Clears invoice fully → Paid" : `₹${(getInvoiceOutstanding(collectInvoice) - Number(collectAmount)).toLocaleString()} still remaining`}
                       </p>
                     )}
                   </div>
@@ -849,7 +849,7 @@ export default function InvoicesPage() {
                 </div>
                 <div className="flex gap-3 px-5 pb-5">
                   <button onClick={closeCollect} className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 cursor-pointer">Cancel</button>
-                  <button onClick={handleCollectSubmit} disabled={!collectAmount || Number(collectAmount) <= 0 || Number(collectAmount) > collectInvoice.dueAmount || !collectCollectedBy}
+                  <button onClick={handleCollectSubmit} disabled={!collectAmount || Number(collectAmount) <= 0 || Number(collectAmount) > getInvoiceOutstanding(collectInvoice) || !collectCollectedBy}
                     className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 cursor-pointer">
                     <Wallet size={15} />Record Payment
                   </button>

@@ -47,6 +47,7 @@ export default function CustomersPage() {
     recordDebtPayment,
     getCustomerOutstandingInvoices,
     getDebtPaymentsByCustomer,
+    getInvoiceOutstanding,
   } = useStore();
 
   const [search, setSearch] = useState("");
@@ -68,8 +69,9 @@ export default function CustomersPage() {
     // Derive each customer's real debt from invoices
     const debtByCustomer: Record<string, number> = {};
     for (const inv of state.invoices) {
-      if (inv.customerId && inv.dueAmount > 0 && !inv.voided) {
-        debtByCustomer[inv.customerId] = (debtByCustomer[inv.customerId] ?? 0) + inv.dueAmount;
+      const effOutstanding = getInvoiceOutstanding(inv);
+      if (inv.customerId && effOutstanding > 0 && !inv.voided) {
+        debtByCustomer[inv.customerId] = (debtByCustomer[inv.customerId] ?? 0) + effOutstanding;
       }
     }
     const totalDebt = Object.values(debtByCustomer).reduce((s, d) => s + d, 0);
@@ -118,7 +120,7 @@ export default function CustomersPage() {
   function openCollectModal(invoice: Invoice, customerId: string) {
     setCollectInvoice(invoice);
     setCollectCustomerId(customerId);
-    setCollectAmount(String(invoice.dueAmount));
+    setCollectAmount(String(getInvoiceOutstanding(invoice)));
     setCollectMethod("Cash");
     setCollectNote("");
     setCollectCollectedBy("");
@@ -142,7 +144,7 @@ export default function CustomersPage() {
     }
     const amount = Math.min(
       Math.max(0, Number(collectAmount) || 0),
-      collectInvoice.dueAmount
+      getInvoiceOutstanding(collectInvoice)
     );
     if (amount <= 0) return;
 
@@ -528,7 +530,7 @@ export default function CustomersPage() {
                                           <p className="text-[10px] font-bold text-slate-700 font-mono">{inv.invoiceNumber}</p>
                                           <p className="text-[10px] text-slate-400 mt-0.5">{formatInvoiceDate(inv)}</p>
                                           <p className="text-[10px] text-red-600 font-bold mt-0.5">
-                                            Due: ₹{inv.dueAmount.toLocaleString()}
+                                            Due: ₹{getInvoiceOutstanding(inv).toLocaleString()}
                                           </p>
                                         </div>
                                         <button
@@ -649,7 +651,7 @@ export default function CustomersPage() {
                     </div>
                     <div>
                       <p className="text-slate-400 font-medium">Due Now</p>
-                      <p className="font-bold text-red-600 text-sm mt-1">₹{collectInvoice.dueAmount.toLocaleString()}</p>
+                      <p className="font-bold text-red-600 text-sm mt-1">₹{getInvoiceOutstanding(collectInvoice).toLocaleString()}</p>
                     </div>
                   </div>
 
@@ -661,7 +663,7 @@ export default function CustomersPage() {
                     <input
                       type="number"
                       min="1"
-                      max={collectInvoice.dueAmount}
+                      max={getInvoiceOutstanding(collectInvoice)}
                       value={collectAmount}
                       onChange={(e) => setCollectAmount(e.target.value)}
                       className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-green-400 transition"
@@ -669,13 +671,13 @@ export default function CustomersPage() {
                     />
                     {Number(collectAmount) > 0 && (
                       <p className={`text-xs mt-1.5 font-semibold ${
-                        Number(collectAmount) >= collectInvoice.dueAmount
+                        Number(collectAmount) >= getInvoiceOutstanding(collectInvoice)
                           ? "text-green-600"
                           : "text-orange-600"
                       }`}>
-                        {Number(collectAmount) >= collectInvoice.dueAmount
+                        {Number(collectAmount) >= getInvoiceOutstanding(collectInvoice)
                           ? "✓ Clears invoice fully (Paid)"
-                          : `₹${(collectInvoice.dueAmount - Number(collectAmount)).toLocaleString()} still remaining`}
+                          : `₹${(getInvoiceOutstanding(collectInvoice) - Number(collectAmount)).toLocaleString()} still remaining`}
                       </p>
                     )}
                   </div>

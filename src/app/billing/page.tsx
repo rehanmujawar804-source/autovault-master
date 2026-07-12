@@ -349,8 +349,9 @@ export default function BillingPage() {
 
     setIsSubmitting(true);
 
+    const invId = `inv-${crypto.randomUUID()}`;
     const invoice: Invoice = {
-      id: `inv-${crypto.randomUUID()}`,
+      id: invId,
       invoiceNumber: getNextInvoiceNumber(),
       customerId,
       customer: finalName,
@@ -367,7 +368,8 @@ export default function BillingPage() {
       notes: orderNote.trim(),
       date: toLocalDateStr(new Date()),
       createdAt: new Date().toISOString(),
-      items: cart.map((i) => ({
+      items: cart.map((i, idx) => ({
+        id: `inv-item-${invId}-${idx}`,
         productId: i.product.id,
         name: i.product.name,
         quantity: i.quantity,

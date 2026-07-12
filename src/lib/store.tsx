@@ -55,6 +55,9 @@ import type {
   PurchaseOrderItem,
   PurchaseOrderStatus,
   POActivityLog,
+  SalesReturn,
+  SalesReturnItem,
+  SalesReturnStatus,
 } from "@/types";
 import { todayLocalStr } from "@/lib/dateUtils";
 
@@ -98,6 +101,8 @@ const INITIAL_STATE: AppState = {
   holdBillsCounter: 0,
   purchaseOrders: [],
   purchaseOrderCounter: 0,
+  salesReturns: [],
+  salesReturnCounter: 0,
 };
 
 const STORAGE_KEY = "autovault_store";
@@ -153,7 +158,12 @@ type Action =
   | { type: "MARK_PURCHASE_ORDER_CANCELLED"; poId: string }
   | { type: "COMPLETE_PURCHASE_ORDER"; poId: string }
   | { type: "CONFIRM_PURCHASE_ORDER"; poId: string }
-  | { type: "RECORD_PO_ACTIVITY"; poId: string; entry: POActivityLog };
+  | { type: "RECORD_PO_ACTIVITY"; poId: string; entry: POActivityLog }
+  
+  // Sales Returns (Sprint 5.0)
+  | { type: "ADD_SALES_RETURN"; salesReturn: SalesReturn }
+  | { type: "CANCEL_SALES_RETURN"; returnId: string; reason: string; voidedBy: string }
+  | { type: "MODIFY_SALES_RETURN"; returnId: string; refundAmount: number; notes: string };
 
 // ─────────────────────────────────────────────
 //  HELPERS (pure, used inside reducer)
@@ -204,6 +214,16 @@ function methodToAccountId(method: PaymentMethod): string {
     case "UPI":  return "acc-upi";
     case "Card": return "acc-bank";
     default:     return "acc-cash"; // Should not be reached for Credit
+  }
+}
+
+function refundMethodToAccountId(method: string): string {
+  switch (method) {
+    case "Cash": return "acc-cash";
+    case "UPI":  return "acc-upi";
+    case "Bank": return "acc-bank";
+    case "Exchange": return "acc-cash";
+    default:     return "acc-cash";
   }
 }
 
@@ -371,11 +391,11 @@ function runMigrations(rawState: AppState): AppState {
 }
 
 /** Calculate remaining due for an invoice after applying all repayments */
-function calcInvoiceDue(invoice: Invoice, payments: DebtPayment[]): number {
-  const repaid = payments
-    .filter((p) => p.invoiceId === invoice.id)
-    .reduce((s, p) => s + p.amount, 0);
-  return Math.max(0, invoice.dueAmount - repaid);
+function calcInvoiceDue(invoice: Invoice, payments: DebtPayment[], salesReturns: SalesReturn[]): number {
+  const returnsTotal = (salesReturns || [])
+    .filter((r) => r.invoiceId === invoice.id && r.status !== "Cancelled")
+    .reduce((s, r) => s + r.totalRefund, 0);
+  return Math.max(0, roundMoney(invoice.dueAmount - returnsTotal));
 }
 
 /** Calculate payment status given remaining due and total */
@@ -466,7 +486,14 @@ function reducer(state: AppState, action: Action): AppState {
     // 2. Stock reduced for each sold item
     // 3. Customer debt/totalSpent/visits updated (or new customer created)
     case "ADD_INVOICE": {
-      const inv = action.invoice;
+      const originalInv = action.invoice;
+      const inv: Invoice = {
+        ...originalInv,
+        items: (originalInv.items || []).map((item, idx) => ({
+          ...item,
+          id: item.id || `inv-item-${originalInv.id}-${idx}`,
+        })),
+      };
 
       const newInvoices = [...state.invoices, inv];
 
@@ -573,7 +600,7 @@ function reducer(state: AppState, action: Action): AppState {
         if (inv.id !== payment.invoiceId) return inv;
 
         // Cap payment at current due
-        const currentDue = calcInvoiceDue(inv, state.debtPayments ?? []);
+        const currentDue = calcInvoiceDue(inv, state.debtPayments ?? [], state.salesReturns ?? []);
         const actualAmount = Math.min(payment.amount, currentDue);
         const newAmountPaid = inv.amountPaid + actualAmount;
         const newDueAmount = Math.max(0, inv.dueAmount - actualAmount);
@@ -593,14 +620,16 @@ function reducer(state: AppState, action: Action): AppState {
         const customerInvoices = newInvoices.filter(
           (inv) => inv.customerId === c.id && !inv.voided
         );
-        const totalDue = customerInvoices.reduce(
-          (s, inv) => s + inv.dueAmount,
-          0
-        );
+        const totalDue = customerInvoices.reduce((s, inv) => {
+          const returnsTotal = (state.salesReturns || [])
+            .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
+            .reduce((sum, r) => sum + r.totalRefund, 0);
+          return s + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
+        }, 0);
         const invoice = state.invoices.find((i) => i.id === payment.invoiceId);
         return {
           ...c,
-          debt: totalDue,
+          debt: roundMoney(totalDue),
           activities: [
             ...(c.activities || []),
             {
@@ -698,7 +727,12 @@ function reducer(state: AppState, action: Action): AppState {
         const customerInvoices = newInvoices.filter(
           (inv) => inv.customerId === c.id && !inv.voided
         );
-        const totalDue = customerInvoices.reduce((s, inv) => s + inv.dueAmount, 0);
+        const totalDue = customerInvoices.reduce((s, inv) => {
+          const returnsTotal = (state.salesReturns || [])
+            .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
+            .reduce((sum, r) => sum + r.totalRefund, 0);
+          return s + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
+        }, 0);
         return {
           ...c,
           debt: roundMoney(totalDue),
@@ -784,12 +818,20 @@ function reducer(state: AppState, action: Action): AppState {
         });
       });
 
-      // 4. Reverse customer dues and total spent, plus append customer activity log
       const newCustomers = state.customers.map((c) => {
         if (c.id !== invoice.customerId) return c;
+        const customerInvoices = newInvoices.filter(
+          (inv) => inv.customerId === c.id && !inv.voided
+        );
+        const totalDue = customerInvoices.reduce((s, inv) => {
+          const returnsTotal = (state.salesReturns || [])
+            .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
+            .reduce((sum, r) => sum + r.totalRefund, 0);
+          return s + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
+        }, 0);
         return {
           ...c,
-          debt: Math.max(0, roundMoney(c.debt - invoice.dueAmount)),
+          debt: roundMoney(totalDue),
           totalSpent: Math.max(0, roundMoney(c.totalSpent - invoice.amountPaid)),
           activities: [
             ...(c.activities || []),
@@ -857,10 +899,14 @@ function reducer(state: AppState, action: Action): AppState {
           returnedQuantity: pur.returnedQuantity ?? 0,
         };
       });
-      const invoices = (action.state.invoices || []).map((inv) => {
+      const invoices = (action.state.invoices || []).map((inv: Invoice) => {
         return {
           ...inv,
           voided: inv.voided ?? false,
+          items: (inv.items || []).map((item, idx) => ({
+            ...item,
+            id: item.id || `inv-item-${inv.id}-${idx}`,
+          })),
         };
       });
       return {
@@ -897,6 +943,8 @@ function reducer(state: AppState, action: Action): AppState {
           };
         }),
         purchaseOrderCounter: action.state.purchaseOrderCounter ?? 0,
+        salesReturns: action.state.salesReturns ?? [],
+        salesReturnCounter: action.state.salesReturnCounter ?? 0,
       };
     }
 
@@ -1185,7 +1233,12 @@ function reducer(state: AppState, action: Action): AppState {
         const customerInvoices = state.invoices.filter(
           (inv) => inv.customerId === c.id && !inv.voided
         );
-        const totalDue = customerInvoices.reduce((s, inv) => s + inv.dueAmount, 0);
+        const totalDue = customerInvoices.reduce((s, inv) => {
+          const returnsTotal = (state.salesReturns || [])
+            .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
+            .reduce((sum, r) => sum + r.totalRefund, 0);
+          return s + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
+        }, 0);
         const totalSpent = customerInvoices.reduce((s, inv) => s + inv.amountPaid, 0);
         return {
           ...c,
@@ -1439,6 +1492,219 @@ function reducer(state: AppState, action: Action): AppState {
     case "LOAD_HOLD_BILL":
       return state; // No-op in reducer; load details in component state directly
 
+    // ── Sales Return Reducers (Sprint 5.0) ───────────────────────────────────
+    case "ADD_SALES_RETURN": {
+      const { salesReturn } = action;
+      const now = salesReturn.createdAt;
+
+      // 1. Append the new sales return record
+      const newSalesReturns = [...(state.salesReturns || []), salesReturn];
+
+      // 2. Update returnedQuantity cache on each invoice item (convenience cache only)
+      const newInvoices = state.invoices.map((inv) => {
+        if (inv.id !== salesReturn.invoiceId) return inv;
+        const newItems = inv.items.map((item) => {
+          const returnItem = salesReturn.items.find((ri) => ri.invoiceItemId === item.id);
+          if (!returnItem) return item;
+          return {
+            ...item,
+            returnedQuantity: (item.returnedQuantity || 0) + returnItem.quantity,
+          };
+        });
+        return { ...inv, items: newItems };
+      });
+
+      // 3. Restore stock for returned items
+      const newProducts = state.products.map((p) => {
+        const matchingReturnItems = salesReturn.items.filter((ri) => ri.productId === p.id);
+        if (matchingReturnItems.length === 0) return p;
+        const totalReturnedForProduct = matchingReturnItems.reduce((s, ri) => s + ri.quantity, 0);
+        return { ...p, stock: p.stock + totalReturnedForProduct };
+      });
+
+      // 4. Append stock movements
+      const newStockMovements = [...(state.stockMovements || [])];
+      salesReturn.items.forEach((ri) => {
+        newStockMovements.push({
+          id: generateUniqueId("sm"),
+          productId: ri.productId,
+          type: "Sales Return" as const,
+          delta: ri.quantity,
+          date: now,
+          desc: `Sales Return — ${salesReturn.returnNumber}`,
+          reference: salesReturn.returnNumber,
+        });
+      });
+
+      // 5. Append Finance transaction (Expense) — only for Cash/UPI/Bank refunds
+      const newFinanceTxs = [...(state.financeTransactions || [])];
+      if (salesReturn.refundMethod !== "Adjustment" && salesReturn.totalRefund > 0) {
+        const accountId = refundMethodToAccountId(salesReturn.refundMethod);
+        // Map refund method to a valid PaymentMethod (FinanceTransaction.method is typed as PaymentMethod)
+        const financeMethod: PaymentMethod =
+          salesReturn.refundMethod === "Bank" || salesReturn.refundMethod === "Exchange"
+            ? "Cash"
+            : (salesReturn.refundMethod as PaymentMethod);
+        newFinanceTxs.push({
+          id: generateUniqueId("ft"),
+          type: "Expense" as const,
+          category: "Sales Return" as const,
+          amount: salesReturn.totalRefund,
+          accountId,
+          date: now,
+          method: financeMethod,
+          referenceId: salesReturn.returnNumber,
+          customerId: salesReturn.customerId || undefined,
+          notes: `Refund — ${salesReturn.returnNumber} (${salesReturn.refundMethod})`,
+        });
+      }
+
+      // 6. Append customer activity (only for named customers, not walk-ins)
+      const origInvoice = state.invoices.find((i) => i.id === salesReturn.invoiceId);
+      const newCustomers = state.customers.map((c) => {
+        if (!salesReturn.customerId || c.id !== salesReturn.customerId) return c;
+        const itemsStr = salesReturn.items.map((it) => `${it.productName} ×${it.quantity}`).join(", ");
+        return {
+          ...c,
+          activities: [
+            ...(c.activities || []),
+            {
+              id: `ca-${crypto.randomUUID()}`,
+              type: "Return" as const,
+              description: `Sales Return: ${itemsStr} — Refund ₹${salesReturn.totalRefund.toLocaleString()}`,
+              reference: origInvoice?.invoiceNumber || salesReturn.invoiceId,
+              date: now,
+            },
+          ],
+        };
+      });
+
+      return {
+        ...state,
+        salesReturns: newSalesReturns,
+        salesReturnCounter: (state.salesReturnCounter || 0) + 1,
+        invoices: newInvoices,
+        products: newProducts,
+        stockMovements: newStockMovements,
+        financeTransactions: newFinanceTxs,
+        customers: newCustomers,
+      };
+    }
+
+    case "CANCEL_SALES_RETURN": {
+      const { returnId, reason, voidedBy } = action;
+      const cancelledAt = new Date().toISOString();
+
+      const target = (state.salesReturns || []).find((r) => r.id === returnId);
+      if (!target || target.status === "Cancelled") return state;
+
+      // 1. Mark return as Cancelled (append-only, never delete)
+      const newSalesReturns = (state.salesReturns || []).map((r) =>
+        r.id !== returnId
+          ? r
+          : { ...r, status: "Cancelled" as const, cancellationReason: reason, cancelledBy: voidedBy, cancelledAt }
+      );
+
+      // 2. Reverse returnedQuantity cache on invoice items
+      const newInvoices = state.invoices.map((inv) => {
+        if (inv.id !== target.invoiceId) return inv;
+        const newItems = inv.items.map((item) => {
+          const returnItem = target.items.find((ri) => ri.invoiceItemId === item.id);
+          if (!returnItem) return item;
+          return {
+            ...item,
+            returnedQuantity: Math.max(0, (item.returnedQuantity || 0) - returnItem.quantity),
+          };
+        });
+        return { ...inv, items: newItems };
+      });
+
+      // 3. Reverse stock (re-sell returned items)
+      const newProducts = state.products.map((p) => {
+        const matchingReturnItems = target.items.filter((ri) => ri.productId === p.id);
+        if (matchingReturnItems.length === 0) return p;
+        const totalReturnedForProduct = matchingReturnItems.reduce((s, ri) => s + ri.quantity, 0);
+        return { ...p, stock: Math.max(0, p.stock - totalReturnedForProduct) };
+      });
+
+      // 4. Append reversing stock movements
+      const newStockMovements = [...(state.stockMovements || [])];
+      target.items.forEach((ri) => {
+        newStockMovements.push({
+          id: generateUniqueId("sm"),
+          productId: ri.productId,
+          type: "Adjustment" as const,
+          delta: -ri.quantity,
+          date: cancelledAt,
+          desc: `Sales Return Cancelled — ${target.returnNumber}`,
+          reference: target.returnNumber,
+        });
+      });
+
+      // 5. Append reversing Finance transaction if original refund was paid out
+      const newFinanceTxs = [...(state.financeTransactions || [])];
+      if (target.refundMethod !== "Adjustment" && target.totalRefund > 0) {
+        const accountId = refundMethodToAccountId(target.refundMethod);
+        const financeMethod: PaymentMethod =
+          target.refundMethod === "Bank" || target.refundMethod === "Exchange"
+            ? "Cash"
+            : (target.refundMethod as PaymentMethod);
+        newFinanceTxs.push({
+          id: generateUniqueId("ft"),
+          type: "Income" as const,
+          category: "Sales Return" as const,
+          amount: target.totalRefund,
+          accountId,
+          date: cancelledAt,
+          method: financeMethod,
+          referenceId: target.returnNumber,
+          customerId: target.customerId || undefined,
+          notes: `Sales Return Cancelled — ${target.returnNumber} (${reason})`,
+        });
+      }
+
+      // 6. Append customer activity (only for named customers, not walk-ins)
+      const origInvoice = state.invoices.find((i) => i.id === target.invoiceId);
+      const newCustomers = state.customers.map((c) => {
+        if (!target.customerId || c.id !== target.customerId) return c;
+        const itemsStr = target.items.map((it) => `${it.productName} ×${it.quantity}`).join(", ");
+        return {
+          ...c,
+          activities: [
+            ...(c.activities || []),
+            {
+              id: `ca-${crypto.randomUUID()}`,
+              type: "Void" as const,
+              description: `Sales Return Cancelled: ${target.returnNumber} (${itemsStr}) — ${reason}`,
+              reference: origInvoice?.invoiceNumber || target.invoiceId,
+              date: cancelledAt,
+            },
+          ],
+        };
+      });
+
+      return {
+        ...state,
+        salesReturns: newSalesReturns,
+        invoices: newInvoices,
+        products: newProducts,
+        stockMovements: newStockMovements,
+        financeTransactions: newFinanceTxs,
+        customers: newCustomers,
+      };
+    }
+
+    case "MODIFY_SALES_RETURN": {
+      // Lightweight: update refundAmount and notes only (e.g. Adjustment value correction)
+      const { returnId, refundAmount, notes } = action;
+      return {
+        ...state,
+        salesReturns: (state.salesReturns || []).map((r) =>
+          r.id !== returnId ? r : { ...r, totalRefund: refundAmount, notes }
+        ),
+      };
+    }
+
     default:
       return state;
   }
@@ -1545,6 +1811,23 @@ interface StoreContextValue {
   getCashFlow: (fromDate: string, toDate: string) => number;
   getExpenseByCategory: (category: string) => number;
   getIncomeByCategory: (category: string) => number;
+
+  // Sales Returns (Sprint 5.0)
+  addSalesReturn: (params: {
+    invoiceId: string;
+    customerId: string;
+    items: SalesReturnItem[];
+    refundMethod: SalesReturn["refundMethod"];
+    reason: string;
+    notes?: string;
+    createdBy?: string;
+  }) => void;
+  cancelSalesReturn: (returnId: string, reason: string, cancelledBy: string) => void;
+  updateSalesReturn: (returnId: string, refundAmount: number, notes: string) => void;
+  getSalesReturnsByInvoice: (invoiceId: string) => SalesReturn[];
+  getSalesReturnsByCustomer: (customerId: string) => SalesReturn[];
+  getInvoiceOutstanding: (invoice: Invoice) => number;
+  getReturnableQuantity: (invoiceItemId: string, invoiceId: string) => number;
 }
 
 const StoreContext = createContext<StoreContextValue | null>(null);
@@ -1777,11 +2060,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return state.invoices.filter((inv) => inv.customerId === customerId);
   }
 
-  /** All invoices for a customer that still have dueAmount > 0 */
+  /** All invoices for a customer that still have EFFECTIVE outstanding > 0 (after returns) */
   function getCustomerOutstandingInvoices(customerId: string) {
-    return state.invoices.filter(
-      (inv) => inv.customerId === customerId && inv.dueAmount > 0 && !inv.voided
-    );
+    return state.invoices.filter((inv) => {
+      if (inv.customerId !== customerId || inv.voided || inv.dueAmount <= 0) return false;
+      // Subtract any active returns from the raw dueAmount
+      const returnsTotal = (state.salesReturns || [])
+        .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
+        .reduce((s, r) => s + r.totalRefund, 0);
+      return Math.max(0, inv.dueAmount - returnsTotal) > 0;
+    });
   }
 
   /** All repayment records for a specific invoice */
@@ -1813,9 +2101,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }, 0);
   }
 
-  /** Derives total outstanding debt directly from invoice dueAmounts — source of truth */
+  /** Derives total outstanding debt from all invoice effective dues (subtracting active returns) — source of truth */
   function getTotalOutstandingDebt() {
-    return state.invoices.filter((inv) => !inv.voided).reduce((sum, inv) => sum + inv.dueAmount, 0);
+    return state.invoices
+      .filter((inv) => !inv.voided && inv.dueAmount > 0)
+      .reduce((sum, inv) => {
+        const returnsTotal = (state.salesReturns || [])
+          .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
+          .reduce((s, r) => s + r.totalRefund, 0);
+        return sum + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
+      }, 0);
   }
 
   function getInventoryValue() {
@@ -2181,6 +2476,74 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       .reduce((s, t) => s + t.amount, 0);
   }
 
+  // ── Sales Return Helpers (Sprint 5.0) ─────────────────────────────────────
+
+  function getSalesReturnsByInvoice(invoiceId: string): SalesReturn[] {
+    return (state.salesReturns || []).filter((r) => r.invoiceId === invoiceId);
+  }
+
+  function getSalesReturnsByCustomer(customerId: string): SalesReturn[] {
+    return (state.salesReturns || []).filter((r) => r.customerId === customerId);
+  }
+
+  function getInvoiceOutstanding(invoice: Invoice): number {
+    const returnsTotal = (state.salesReturns || [])
+      .filter((r) => r.invoiceId === invoice.id && r.status !== "Cancelled")
+      .reduce((s, r) => s + r.totalRefund, 0);
+    return Math.max(0, roundMoney(invoice.dueAmount - returnsTotal));
+  }
+
+  function getReturnableQuantity(invoiceItemId: string, invoiceId: string): number {
+    const invoice = state.invoices.find((i) => i.id === invoiceId);
+    if (!invoice) return 0;
+    const item = invoice.items.find((it) => it.id === invoiceItemId);
+    if (!item) return 0;
+    const alreadyReturned = (state.salesReturns || [])
+      .filter((r) => r.invoiceId === invoiceId && r.status !== "Cancelled")
+      .flatMap((r) => r.items)
+      .filter((ri) => ri.invoiceItemId === invoiceItemId)
+      .reduce((s, ri) => s + ri.quantity, 0);
+    return Math.max(0, item.quantity - alreadyReturned);
+  }
+
+  function addSalesReturn(params: {
+    invoiceId: string;
+    customerId: string;
+    items: SalesReturnItem[];
+    refundMethod: SalesReturn["refundMethod"];
+    reason: string;
+    notes?: string;
+    createdBy?: string;
+  }): void {
+    const counter = (state.salesReturnCounter || 0) + 1;
+    const returnNumber = `SR-${new Date().getFullYear()}-${String(counter).padStart(5, "0")}`;
+    const now = new Date().toISOString();
+    const totalRefund = params.items.reduce((s, i) => s + i.refundAmount, 0);
+    const salesReturn: SalesReturn = {
+      id: generateUniqueId("sr"),
+      returnNumber,
+      invoiceId: params.invoiceId,
+      customerId: params.customerId,
+      items: params.items,
+      refundMethod: params.refundMethod,
+      totalRefund: roundMoney(totalRefund),
+      reason: params.reason,
+      notes: params.notes || "",
+      status: params.refundMethod === "Adjustment" ? "Adjusted" : "Refunded",
+      createdAt: now,
+      createdBy: params.createdBy,
+    };
+    dispatch({ type: "ADD_SALES_RETURN", salesReturn });
+  }
+
+  function cancelSalesReturn(returnId: string, reason: string, cancelledBy: string): void {
+    dispatch({ type: "CANCEL_SALES_RETURN", returnId, reason, voidedBy: cancelledBy });
+  }
+
+  function updateSalesReturn(returnId: string, refundAmount: number, notes: string): void {
+    dispatch({ type: "MODIFY_SALES_RETURN", returnId, refundAmount, notes });
+  }
+
   return (
     <StoreContext.Provider
       value={{
@@ -2256,6 +2619,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         getCashFlow,
         getExpenseByCategory,
         getIncomeByCategory,
+
+        // Sales Returns (Sprint 5.0)
+        addSalesReturn,
+        cancelSalesReturn,
+        updateSalesReturn,
+        getSalesReturnsByInvoice,
+        getSalesReturnsByCustomer,
+        getInvoiceOutstanding,
+        getReturnableQuantity,
       }}
     >
       {hydrated ? (

@@ -3,8 +3,8 @@
 import { use, useState, useEffect, useCallback } from "react";
 import { useStore } from "@/lib/store";
 import Link from "next/link";
-import { ArrowLeft, Printer, MessageCircle, AlertCircle, Wallet, CheckCircle, X, Trash2 } from "lucide-react";
-import type { PaymentMethod, PaymentStatus } from "@/types";
+import { ArrowLeft, Printer, MessageCircle, AlertCircle, Wallet, CheckCircle, X, Trash2, RotateCcw, PackageX, Package } from "lucide-react";
+import type { PaymentMethod, PaymentStatus, SalesReturnItem } from "@/types";
 import PrintableInvoice from "@/components/PrintableInvoice";
 import { formatInvoiceDate, formatRepaymentDate } from "@/lib/dateUtils";
 import { useRole } from "@/hooks/useRole";
@@ -43,7 +43,8 @@ export default function InvoiceDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const { getInvoiceById, getCustomerById, recordDebtPayment, getDebtPaymentsByInvoice, voidInvoice, voidDebtPayment, showToast } = useStore();
+  const { getInvoiceById, getCustomerById, recordDebtPayment, getDebtPaymentsByInvoice, voidInvoice, voidDebtPayment, showToast,
+          addSalesReturn, cancelSalesReturn, getSalesReturnsByInvoice, getReturnableQuantity, getInvoiceOutstanding } = useStore();
   const { isOwner } = useRole();
 
   // ── Void Invoice Modal State ────────────────────────────────────────────
@@ -53,6 +54,15 @@ export default function InvoiceDetailPage({
   // ── Void Payment Modal State ─────────────────────────────────────────
   const [voidPaymentTarget, setVoidPaymentTarget] = useState<string | null>(null);
   const [voidPaymentReason, setVoidPaymentReason] = useState("");
+
+  // ── Sales Return Modal State ────────────────────────────────────────────
+  const [returnModalOpen, setReturnModalOpen] = useState(false);
+  const [returnQtys, setReturnQtys] = useState<Record<string, number>>({});
+  const [returnReason, setReturnReason] = useState("");
+  const [returnMethod, setReturnMethod] = useState<"Cash" | "UPI" | "Bank" | "Adjustment" | "Exchange">("Cash");
+  const [returnNotes, setReturnNotes] = useState("");
+  const [cancelReturnTarget, setCancelReturnTarget] = useState<string | null>(null);
+  const [cancelReturnReason, setCancelReturnReason] = useState("");
 
   // ── Modal Isolation & Safety (Sprint 4.2 Runtime Bug Fixes) ──────────────
   const closeVoidInvoiceModal = useCallback(() => {
@@ -64,6 +74,24 @@ export default function InvoiceDetailPage({
     setVoidPaymentTarget(null);
     setVoidPaymentReason("");
   }, []);
+
+  const closeReturnModal = useCallback(() => {
+    setReturnModalOpen(false);
+    setReturnQtys({});
+    setReturnReason("");
+    setReturnMethod("Cash");
+    setReturnNotes("");
+  }, []);
+
+  const openReturnModal = useCallback(() => {
+    closeVoidInvoiceModal();
+    closeVoidPaymentModal();
+    setReturnQtys({});
+    setReturnReason("");
+    setReturnMethod("Cash");
+    setReturnNotes("");
+    setReturnModalOpen(true);
+  }, [closeVoidInvoiceModal, closeVoidPaymentModal]);
 
   const openVoidInvoiceModal = useCallback(() => {
     // Enforce SINGLE DESTRUCTIVE MODAL RULE at runtime
@@ -85,11 +113,14 @@ export default function InvoiceDetailPage({
       if (e.key === "Escape") {
         closeVoidInvoiceModal();
         closeVoidPaymentModal();
+        closeReturnModal();
+        setCancelReturnTarget(null);
+        setCancelReturnReason("");
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [closeVoidInvoiceModal, closeVoidPaymentModal]);
+  }, [closeVoidInvoiceModal, closeVoidPaymentModal, closeReturnModal]);
 
   // ── Collect Payment Modal State ────────────────────────────────────────────
   const [collectAmount, setCollectAmount] = useState("");
@@ -109,6 +140,9 @@ export default function InvoiceDetailPage({
     : 0;
   const repayments = invoice ? getDebtPaymentsByInvoice(invoice.id) : [];
   const totalRepaid = repayments.filter((p) => !p.voided).reduce((s, p) => s + p.amount, 0);
+  const salesReturns = invoice ? getSalesReturnsByInvoice(invoice.id) : [];
+  const activeReturns = salesReturns.filter((r) => r.status !== "Cancelled");
+  const totalRefunded = activeReturns.reduce((s, r) => s + r.totalRefund, 0);
 
   // ── Handlers — defined BEFORE any early return ────────────────────────────
   function handlePrint() {
@@ -142,8 +176,8 @@ export default function InvoiceDetailPage({
         ? `Discount (${invoice.discount}%): −₹${discountAmount.toLocaleString()}\n`
         : "") +
       `*Total: ₹${invoice.total.toLocaleString()}*\n` +
-      (invoice.dueAmount > 0
-        ? `Due: ₹${invoice.dueAmount.toLocaleString()}\n`
+      (getInvoiceOutstanding(invoice) > 0
+        ? `Due: ₹${getInvoiceOutstanding(invoice).toLocaleString()}\n`
         : "") +
       `Payment: ${invoice.paymentMethod} · ${invoice.paymentStatus}\n` +
       (invoice.notes ? `\nNote: ${invoice.notes}` : "") +
@@ -157,7 +191,7 @@ export default function InvoiceDetailPage({
 
   function openCollect() {
     if (!invoice) return;
-    setCollectAmount(String(invoice.dueAmount));
+    setCollectAmount(String(getInvoiceOutstanding(invoice)));
     setCollectMethod("Cash");
     setCollectNote("");
     setCollectCollectedBy("");
@@ -181,7 +215,7 @@ export default function InvoiceDetailPage({
       showToast("Please enter a valid repayment amount.", "error");
       return;
     }
-    if (amount > invoice.dueAmount) {
+    if (amount > getInvoiceOutstanding(invoice)) {
       showToast("Repayment amount cannot exceed current outstanding due.", "error");
       return;
     }
@@ -226,6 +260,68 @@ export default function InvoiceDetailPage({
     }
   }
 
+  function handleReturnSubmit() {
+    if (!invoice) return;
+    if (!returnReason.trim()) {
+      showToast("Please enter a return reason.", "error");
+      return;
+    }
+    const returnItems: SalesReturnItem[] = invoice.items
+      .map((item, idx) => {
+        const itemId = item.id || `item-${idx}`;
+        const qty = returnQtys[itemId] || 0;
+        if (qty <= 0) return null;
+        const refundAmount = Math.round(item.price * qty * 100) / 100;
+        return {
+          invoiceItemId: itemId,
+          productId: item.productId,
+          productName: item.name,
+          quantity: qty,
+          sellingPrice: item.price,
+          refundAmount,
+          totalAmount: refundAmount,
+        } satisfies SalesReturnItem;
+      })
+      .filter(Boolean) as SalesReturnItem[];
+
+    if (returnItems.length === 0) {
+      showToast("Please select at least one item to return.", "error");
+      return;
+    }
+
+    // Walk-in invoices have customerId === null — still allow returns, use empty string as sentinel
+    const customerId = invoice.customerId ?? "";
+
+    try {
+      addSalesReturn({
+        invoiceId: invoice.id,
+        customerId,
+        items: returnItems,
+        refundMethod: returnMethod,
+        reason: returnReason.trim(),
+        notes: returnNotes.trim() || undefined,
+        createdBy: "Owner",
+      });
+      showToast("Sales return recorded successfully!", "success");
+      closeReturnModal();
+    } catch (err) {
+      console.error("[handleReturnSubmit] addSalesReturn threw:", err);
+      showToast("Failed to record return.", "error");
+    }
+  }
+
+  function handleCancelReturn() {
+    if (!cancelReturnTarget || !cancelReturnReason.trim()) return;
+    try {
+      cancelSalesReturn(cancelReturnTarget, cancelReturnReason.trim(), "Owner");
+      showToast("Sales return cancelled.", "success");
+      setCancelReturnTarget(null);
+      setCancelReturnReason("");
+    } catch {
+      showToast("Failed to cancel return.", "error");
+    }
+  }
+
   // ── Not found — early return AFTER all hooks ──────────────────────────────
   if (!invoice) {
     return (
@@ -265,13 +361,13 @@ export default function InvoiceDetailPage({
               Void Invoice
             </button>
           )}
-          {invoice.dueAmount > 0 && invoice.customerId && !invoice.voided && (
+          {getInvoiceOutstanding(invoice) > 0 && invoice.customerId && !invoice.voided && (
             <button
               onClick={openCollect}
               className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-sm px-4 py-2 rounded-lg transition-colors font-semibold cursor-pointer"
             >
               <Wallet size={14} />
-              Collect ₹{invoice.dueAmount.toLocaleString()}
+              Collect ₹{getInvoiceOutstanding(invoice).toLocaleString()}
             </button>
           )}
           {invoice.customerPhone && (
@@ -325,11 +421,11 @@ export default function InvoiceDetailPage({
           )}
 
           {/* Collect Payment card — shows only when there's due */}
-          {invoice.dueAmount > 0 && invoice.customerId && !invoice.voided && (
+          {getInvoiceOutstanding(invoice) > 0 && invoice.customerId && !invoice.voided && (
             <div className="bg-red-50 border border-red-200 rounded-xl p-5">
               <h2 className="font-bold text-red-800 text-sm mb-1">Outstanding Due</h2>
               <p className="text-2xl font-extrabold text-red-600 mb-3">
-                ₹{invoice.dueAmount.toLocaleString()}
+                ₹{getInvoiceOutstanding(invoice).toLocaleString()}
               </p>
               <button
                 onClick={openCollect}
@@ -407,6 +503,228 @@ export default function InvoiceDetailPage({
             </div>
           )}
 
+          {/* ── Items Breakdown card ─────────────────────────────────────────── */}
+          {!invoice.voided && isOwner && (
+            <div className="bg-white rounded-xl border border-slate-200 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-semibold text-slate-800 text-sm flex items-center gap-2">
+                  <Package size={15} className="text-slate-500" />
+                  Items
+                </h2>
+                <button
+                  onClick={openReturnModal}
+                  className="flex items-center gap-1.5 text-xs font-bold text-orange-600 border border-orange-200 bg-orange-50 hover:bg-orange-100 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+                >
+                  <RotateCcw size={12} />
+                  Return Items
+                </button>
+              </div>
+              <div className="space-y-2">
+                {invoice.items.map((item, idx) => {
+                  const itemId = item.id || `item-${idx}`;
+                  const returnable = getReturnableQuantity(itemId, invoice.id);
+                  const returned = item.quantity - returnable;
+                  return (
+                    <div key={itemId} className="bg-slate-50 rounded-lg p-3 text-xs">
+                      <p className="font-semibold text-slate-800 truncate mb-2">{item.name}</p>
+                      <div className="grid grid-cols-3 gap-1 text-center">
+                        <div>
+                          <p className="text-slate-400 uppercase tracking-wider text-[10px]">Sold</p>
+                          <p className="font-bold text-slate-700 text-sm">{item.quantity}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400 uppercase tracking-wider text-[10px]">Returned</p>
+                          <p className={`font-bold text-sm ${returned > 0 ? "text-orange-600" : "text-slate-400"}`}>{returned}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400 uppercase tracking-wider text-[10px]">Available</p>
+                          <p className={`font-bold text-sm ${returnable > 0 ? "text-green-600" : "text-slate-400"}`}>{returnable}</p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {totalRefunded > 0 && (
+                <div className="mt-3 pt-3 border-t border-slate-100 text-xs text-right text-slate-500">
+                  Total refunded: <span className="font-bold text-orange-600">₹{totalRefunded.toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Sales Returns History card ───────────────────────────────────── */}
+          {salesReturns.length > 0 && (
+            <div className="bg-white rounded-xl border border-slate-200 p-5">
+              <h2 className="font-semibold text-slate-800 text-sm mb-3 flex items-center gap-2">
+                <RotateCcw size={15} className="text-orange-500" />
+                Return History
+              </h2>
+              <div className="space-y-2">
+                {salesReturns.map((ret) => (
+                  <div
+                    key={ret.id}
+                    className={`rounded-lg border px-3 py-2.5 text-xs ${
+                      ret.status === "Cancelled"
+                        ? "bg-red-50 border-red-200 opacity-60"
+                        : "bg-orange-50 border-orange-200"
+                    }`}
+                  >
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="font-bold text-slate-800 font-mono">{ret.returnNumber}</span>
+                      <span className={`text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                        ret.status === "Cancelled" ? "bg-red-100 text-red-700" :
+                        ret.status === "Adjusted"  ? "bg-blue-100 text-blue-700" :
+                        "bg-green-100 text-green-700"
+                      }`}>{ret.status}</span>
+                    </div>
+                    <p className="text-slate-600">{ret.reason}</p>
+                    <div className="flex justify-between mt-1">
+                      <span className="text-slate-500">{ret.refundMethod}</span>
+                      <span className={`font-bold ${ret.status === "Cancelled" ? "text-slate-400 line-through" : "text-orange-700"}`}>
+                        ₹{ret.totalRefund.toLocaleString()}
+                      </span>
+                    </div>
+                    <p className="text-slate-400 mt-1">{new Date(ret.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</p>
+                    {ret.status !== "Cancelled" && isOwner && (
+                      <button
+                        onClick={() => { setCancelReturnTarget(ret.id); setCancelReturnReason(""); }}
+                        className="mt-2 flex items-center gap-1 text-[10px] font-bold text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors cursor-pointer"
+                      >
+                        <X size={10} /> Cancel Return
+                      </button>
+                    )}
+                    {ret.cancellationReason && (
+                      <p className="text-red-600 text-[10px] mt-1 font-medium">Cancelled: {ret.cancellationReason}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Activity Timeline ────────────────────────────────────────────── */}
+          {(() => {
+            type TimelineEvent = {
+              id: string;
+              date: string;
+              icon: "create" | "pay" | "void-pay" | "return" | "cancel-return" | "void-inv";
+              title: string;
+              sub: string;
+              amount?: number;
+            };
+            const events: TimelineEvent[] = [];
+
+            // Invoice creation
+            events.push({
+              id: "created",
+              date: invoice.createdAt || invoice.date,
+              icon: "create",
+              title: "Invoice Created",
+              sub: `${invoice.paymentMethod} · ₹${invoice.total.toLocaleString()}`,
+              amount: invoice.total,
+            });
+
+            // Repayments
+            repayments.forEach((p) => {
+              events.push({
+                id: p.id,
+                date: p.date,
+                icon: p.voided ? "void-pay" : "pay",
+                title: p.voided ? "Payment Voided" : "Payment Collected",
+                sub: `${p.method} · by ${p.collectedBy}${p.voided ? ` · ${p.voidReason}` : ""}`,
+                amount: p.amount,
+              });
+            });
+
+            // Sales Returns
+            salesReturns.forEach((ret) => {
+              // Build a concise item summary: "Oil Filter ×1, Brake Pad ×2"
+              const itemsSummary = ret.items
+                .filter((ri) => ri.quantity > 0)
+                .map((ri) => `${ri.productName} ×${ri.quantity}`)
+                .join(", ");
+              const returnedLine = itemsSummary ? `Returned: ${itemsSummary}` : ret.reason;
+              const refundLine = `Refund: ₹${Math.round(ret.totalRefund).toLocaleString()}`;
+
+              events.push({
+                id: `ret-${ret.id}`,
+                date: ret.createdAt,
+                icon: "return",
+                title: `Return ${ret.returnNumber} · ${ret.refundMethod}`,
+                sub: `${returnedLine} · ${refundLine}${ret.status === "Cancelled" ? " · CANCELLED" : ""}`,
+                amount: ret.totalRefund,
+              });
+              if (ret.status === "Cancelled" && ret.cancelledAt) {
+                events.push({
+                  id: `cret-${ret.id}`,
+                  date: ret.cancelledAt,
+                  icon: "cancel-return",
+                  title: `Return Cancelled`,
+                  sub: `${ret.returnNumber} · ${ret.cancellationReason || ""}`,
+                  amount: ret.totalRefund,
+                });
+              }
+            });
+
+            // Invoice void
+            if (invoice.voided && invoice.voidedAt) {
+              events.push({
+                id: "voided",
+                date: invoice.voidedAt,
+                icon: "void-inv",
+                title: "Invoice Voided",
+                sub: invoice.voidReason || "",
+              });
+            }
+
+            events.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+            const iconMap: Record<TimelineEvent["icon"], { dot: string; label: string }> = {
+              "create":        { dot: "bg-blue-500",   label: "🧾" },
+              "pay":           { dot: "bg-green-500",  label: "💰" },
+              "void-pay":      { dot: "bg-red-400",    label: "✕" },
+              "return":        { dot: "bg-orange-400", label: "↩" },
+              "cancel-return": { dot: "bg-red-500",    label: "✕" },
+              "void-inv":      { dot: "bg-red-700",    label: "🚫" },
+            };
+
+            if (events.length === 0) return null;
+            return (
+              <div className="bg-white rounded-xl border border-slate-200 p-5">
+                <h2 className="font-semibold text-slate-800 text-sm mb-4">Activity Timeline</h2>
+                <div className="relative">
+                  {/* Vertical line */}
+                  <div className="absolute left-3 top-0 bottom-0 w-px bg-slate-200" />
+                  <div className="space-y-4">
+                    {events.map((ev) => {
+                      const { dot } = iconMap[ev.icon];
+                      return (
+                        <div key={ev.id} className="flex gap-3 relative">
+                          <div className={`w-6 h-6 rounded-full ${dot} flex items-center justify-center shrink-0 text-white text-[10px] font-bold z-10 ring-2 ring-white`}>
+                            {iconMap[ev.icon].label}
+                          </div>
+                          <div className="flex-1 min-w-0 pb-1">
+                            <p className="text-xs font-bold text-slate-800 leading-tight">{ev.title}</p>
+                            <p className="text-[10px] text-slate-500 mt-0.5 leading-tight truncate">{ev.sub}</p>
+                            <div className="flex items-center justify-between mt-0.5">
+                              <p className="text-[10px] text-slate-400">{new Date(ev.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+                              {ev.amount != null && (
+                                <p className={`text-[10px] font-bold ${ev.icon === "return" || ev.icon === "void-pay" || ev.icon === "void-inv" ? "text-red-500" : "text-green-600"}`}>
+                                  {ev.icon === "return" || ev.icon === "void-pay" ? "−" : ""}₹{ev.amount.toLocaleString()}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Payment summary */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
             <h2 className="font-semibold text-slate-800 text-sm mb-4">
@@ -442,10 +760,10 @@ export default function InvoiceDetailPage({
                       value={`₹${invoice.amountPaid.toLocaleString()}`}
                     />
                   )}
-                {invoice.dueAmount > 0 && (
+                {getInvoiceOutstanding(invoice) > 0 && (
                   <Row
                     label="Due"
-                    value={`₹${invoice.dueAmount.toLocaleString()}`}
+                    value={`₹${getInvoiceOutstanding(invoice).toLocaleString()}`}
                     valueClass="text-red-600 font-bold"
                   />
                 )}
@@ -463,9 +781,9 @@ export default function InvoiceDetailPage({
                 {customer.name}
               </p>
               <p className="text-xs text-slate-500">{customer.phone}</p>
-              {invoice.dueAmount > 0 && (
+              {getInvoiceOutstanding(invoice) > 0 && (
                 <p className="text-xs text-red-500 mt-1">
-                  Outstanding on this invoice: ₹{invoice.dueAmount.toLocaleString()}
+                  Outstanding on this invoice: ₹{getInvoiceOutstanding(invoice).toLocaleString()}
                 </p>
               )}
               <Link
@@ -542,7 +860,7 @@ export default function InvoiceDetailPage({
                     </div>
                     <div>
                       <p className="text-slate-400">Due</p>
-                      <p className="font-bold text-red-600 text-sm mt-1">₹{invoice.dueAmount.toLocaleString()}</p>
+                      <p className="font-bold text-red-600 text-sm mt-1">₹{getInvoiceOutstanding(invoice).toLocaleString()}</p>
                     </div>
                   </div>
 
@@ -551,16 +869,16 @@ export default function InvoiceDetailPage({
                     <input
                       type="number"
                       min="1"
-                      max={invoice.dueAmount}
+                      max={getInvoiceOutstanding(invoice)}
                       value={collectAmount}
                       onChange={(e) => setCollectAmount(e.target.value)}
                       className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-green-400 transition"
                       autoFocus
                     />
-                    {Number(collectAmount) > invoice.dueAmount && (
+                    {Number(collectAmount) > getInvoiceOutstanding(invoice) && (
                       <p className="text-xs text-red-500 font-bold mt-1.5 flex items-center gap-1.5 bg-red-50 border border-red-100 px-2.5 py-1.5 rounded-lg animate-in slide-in-from-top-1">
                         <AlertCircle size={13} />
-                        Amount cannot exceed outstanding due of ₹{invoice.dueAmount.toLocaleString()}.
+                        Amount cannot exceed outstanding due of ₹{getInvoiceOutstanding(invoice).toLocaleString()}.
                       </p>
                     )}
                     {Number(collectAmount) <= 0 && collectAmount !== "" && (
@@ -569,11 +887,11 @@ export default function InvoiceDetailPage({
                         Amount must be greater than 0.
                       </p>
                     )}
-                    {Number(collectAmount) > 0 && Number(collectAmount) <= invoice.dueAmount && (
-                      <p className={`text-xs mt-1.5 font-semibold ${Number(collectAmount) >= invoice.dueAmount ? "text-green-600" : "text-orange-600"}`}>
-                        {Number(collectAmount) >= invoice.dueAmount
+                    {Number(collectAmount) > 0 && Number(collectAmount) <= getInvoiceOutstanding(invoice) && (
+                      <p className={`text-xs mt-1.5 font-semibold ${Number(collectAmount) >= getInvoiceOutstanding(invoice) ? "text-green-600" : "text-orange-600"}`}>
+                        {Number(collectAmount) >= getInvoiceOutstanding(invoice)
                           ? "✓ Clears invoice fully → Paid"
-                          : `₹${(invoice.dueAmount - Number(collectAmount)).toLocaleString()} still remaining`}
+                          : `₹${(getInvoiceOutstanding(invoice) - Number(collectAmount)).toLocaleString()} still remaining`}
                       </p>
                     )}
                   </div>
@@ -612,7 +930,7 @@ export default function InvoiceDetailPage({
                             onClick={() => setCollectCollectedBy(role)}
                             className={`flex-1 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
                               active
-                                ? "bg-slate-900 border-slate-900 text-white"
+                               ? "bg-slate-900 border-slate-900 text-white"
                                 : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
                             }`}
                           >
@@ -644,7 +962,7 @@ export default function InvoiceDetailPage({
                   </button>
                   <button
                     onClick={handleCollectSubmit}
-                    disabled={!collectAmount || Number(collectAmount) <= 0 || Number(collectAmount) > invoice.dueAmount || !collectCollectedBy}
+                    disabled={!collectAmount || Number(collectAmount) <= 0 || Number(collectAmount) > getInvoiceOutstanding(invoice) || !collectCollectedBy}
                     className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Wallet size={15} />
@@ -784,6 +1102,255 @@ export default function InvoiceDetailPage({
           </div>
         );
       })()}
+
+      {/* ── Sales Return Modal ──────────────────────────────────────────────── */}
+      {returnModalOpen && invoice && (
+        <div
+          onClick={closeReturnModal}
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-slate-200 shrink-0">
+              <div>
+                <h2 className="font-bold text-slate-800 flex items-center gap-2">
+                  <RotateCcw size={16} className="text-orange-500" />
+                  Return Items
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5 font-mono">{invoice.invoiceNumber}</p>
+              </div>
+              <button onClick={closeReturnModal} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-4 overflow-y-auto">
+              {/* Per-item qty selectors */}
+              <div>
+                <p className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Select Items & Quantities</p>
+                <div className="space-y-2.5">
+                  {invoice.items.map((item, idx) => {
+                    const itemId = item.id || `item-${idx}`;
+                    const availableQty = getReturnableQuantity(itemId, invoice.id);
+                    const returnedQty = item.quantity - availableQty;
+                    const qty = returnQtys[itemId] || 0;
+                    const refundPreview = qty * item.price;
+
+                    return (
+                      <div key={itemId} className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                        <div className="flex justify-between items-start gap-2">
+                          <p className="text-xs font-bold text-slate-850">{item.name}</p>
+                          <span className="text-xs font-mono font-bold text-slate-500">₹{item.price.toLocaleString()}</span>
+                        </div>
+                        
+                        <div className="grid grid-cols-3 gap-2 text-center text-[10px] bg-white border border-slate-100 rounded-lg p-2 font-semibold">
+                          <div>
+                            <span className="text-slate-400 block uppercase tracking-wider text-[8px]">Sold</span>
+                            <span className="text-slate-700 text-xs font-bold">{item.quantity}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 block uppercase tracking-wider text-[8px]">Returned</span>
+                            <span className={`text-xs font-bold ${returnedQty > 0 ? "text-orange-650" : "text-slate-500"}`}>{returnedQty}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 block uppercase tracking-wider text-[8px]">Available</span>
+                            <span className="text-green-600 text-xs font-bold">{availableQty}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Return Qty:</span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                disabled={qty <= 0}
+                                onClick={() => setReturnQtys((q) => ({ ...q, [itemId]: Math.max(0, (q[itemId] || 0) - 1) }))}
+                                className="w-7 h-7 rounded-full bg-slate-250 hover:bg-slate-350 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 font-bold text-sm flex items-center justify-center cursor-pointer transition-colors"
+                              >−</button>
+                              <span className={`w-6 text-center font-bold text-sm ${qty > 0 ? "text-orange-600 font-black" : "text-slate-400"}`}>{qty}</span>
+                              <button
+                                type="button"
+                                disabled={qty >= availableQty}
+                                onClick={() => setReturnQtys((q) => ({ ...q, [itemId]: Math.min(availableQty, (q[itemId] || 0) + 1) }))}
+                                className="w-7 h-7 rounded-full bg-orange-100 hover:bg-orange-200 disabled:opacity-40 disabled:cursor-not-allowed text-orange-700 font-bold text-sm flex items-center justify-center cursor-pointer transition-colors"
+                              >+</button>
+                            </div>
+                          </div>
+                          
+                          <div className="text-right">
+                            <span className="text-[10px] font-bold text-slate-450 block uppercase tracking-wider">Refund</span>
+                            <span className={`text-xs font-bold ${qty > 0 ? "text-orange-600 font-black" : "text-slate-450"}`}>
+                              ₹{refundPreview.toLocaleString()}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Refund method */}
+              <div>
+                <p className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Refund Method</p>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {(["Cash", "UPI", "Bank", "Exchange", "Adjustment"] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setReturnMethod(m)}
+                      className={`py-2 rounded-xl border text-[11px] font-bold transition-all cursor-pointer ${
+                        returnMethod === m
+                          ? "bg-orange-500 border-orange-500 text-white"
+                          : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-orange-50 hover:border-orange-200"
+                      }`}
+                    >{m}</button>
+                  ))}
+                </div>
+                {returnMethod === "Adjustment" && (
+                  <p className="text-[10px] text-blue-600 mt-1.5 font-medium bg-blue-50 border border-blue-100 rounded-lg px-2.5 py-1.5">
+                    Adjustment = internal credit note. No cash leaves the business.
+                  </p>
+                )}
+              </div>
+
+              {/* Reason */}
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                  Return Reason <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={returnReason}
+                  onChange={(e) => setReturnReason(e.target.value)}
+                  placeholder="e.g. Defective product, Wrong item..."
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 transition"
+                  autoFocus
+                />
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Notes (optional)</label>
+                <input
+                  type="text"
+                  value={returnNotes}
+                  onChange={(e) => setReturnNotes(e.target.value)}
+                  placeholder="Any additional notes..."
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 transition"
+                />
+              </div>
+
+              {/* Refund summary */}
+              {(() => {
+                const returningItemsCount = Object.values(returnQtys).filter(q => q > 0).length;
+                const returningQtyTotal = Object.values(returnQtys).reduce((s, q) => s + q, 0);
+                const refundTotal = invoice.items.reduce((s, item, idx) => {
+                  const itemId = item.id || `item-${idx}`;
+                  const qty = returnQtys[itemId] || 0;
+                  return s + item.price * qty;
+                }, 0);
+                if (returningQtyTotal <= 0) return null;
+                return (
+                  <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 space-y-2">
+                    <div className="flex justify-between items-center text-xs text-orange-800">
+                      <span className="font-semibold">Total Items Returning:</span>
+                      <span className="font-bold">{returningItemsCount}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs text-orange-800">
+                      <span className="font-semibold">Total Qty Returning:</span>
+                      <span className="font-bold">{returningQtyTotal} units</span>
+                    </div>
+                    <div className="border-t border-orange-200 pt-2 flex justify-between items-center">
+                      <span className="text-xs font-bold text-orange-850">Total Refund:</span>
+                      <span className="text-base font-extrabold text-orange-700">₹{Math.round(refundTotal).toLocaleString()}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Footer */}
+            <div className="flex gap-3 px-5 pb-5 shrink-0">
+              <button
+                onClick={closeReturnModal}
+                className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReturnSubmit}
+                disabled={!returnReason.trim() || Object.values(returnQtys).reduce((s, q) => s + q, 0) <= 0}
+                className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-bold transition-colors cursor-pointer flex items-center justify-center gap-2"
+              >
+                <RotateCcw size={14} />
+                Record Return
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cancel Return Modal ─────────────────────────────────────────────── */}
+      {cancelReturnTarget && (
+        <div
+          onClick={() => { setCancelReturnTarget(null); setCancelReturnReason(""); }}
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md"
+          >
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <div>
+                <h2 className="font-bold text-slate-800">Cancel Return</h2>
+                <p className="text-xs text-slate-500 mt-0.5">This will reverse stock and refund entries.</p>
+              </div>
+              <button onClick={() => { setCancelReturnTarget(null); setCancelReturnReason(""); }} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-800 font-medium leading-relaxed">
+                ⚠️ Cancelling this return will reverse the stock restoration and append a reversing finance entry. The return record remains for audit purposes.
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                  Cancellation Reason <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={cancelReturnReason}
+                  onChange={(e) => setCancelReturnReason(e.target.value)}
+                  placeholder="Enter reason for cancelling this return..."
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-red-400 transition min-h-[80px]"
+                  autoFocus
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 px-5 pb-5">
+              <button
+                onClick={() => { setCancelReturnTarget(null); setCancelReturnReason(""); }}
+                className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                Back
+              </button>
+              <button
+                onClick={handleCancelReturn}
+                disabled={!cancelReturnReason.trim()}
+                className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-bold transition-colors cursor-pointer flex items-center justify-center gap-2"
+              >
+                <X size={14} />
+                Confirm Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

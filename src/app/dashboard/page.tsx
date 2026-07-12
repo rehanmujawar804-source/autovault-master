@@ -369,7 +369,18 @@ export default function DashboardPage() {
         const todayMs = new Date(today).getTime();
         const weekMs = todayMs + 7 * 24 * 60 * 60 * 1000;
 
-        const openPOs = allPOs.filter((po) => po.status === "Draft" || po.status === "Sent");
+        const openPOs = allPOs.filter(
+          (po) =>
+            po.status === "Draft" ||
+            po.status === "Sent" ||
+            po.status === "Supplier Confirmed" ||
+            po.status === "Partially Delivered"
+        );
+        const openPOValue = openPOs.reduce(
+          (sum, po) => sum + po.items.reduce((s, item) => s + item.quantity * item.expectedBuyPrice, 0),
+          0
+        );
+
         const latePOs = allPOs.filter((po) => {
           if (po.status === "Completed" || po.status === "Cancelled") return false;
           return new Date(po.expectedDeliveryDate).getTime() < todayMs;
@@ -396,12 +407,19 @@ export default function DashboardPage() {
                 Manage <ChevronRight size={12} />
               </Link>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {/* Open POs */}
               <Link href="/suppliers" className="group bg-blue-50/60 border border-blue-100 rounded-xl p-4 hover:bg-blue-50 transition-colors cursor-pointer">
                 <p className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">Open POs</p>
                 <p className="text-2xl font-extrabold text-blue-800 mt-1">{openPOs.length}</p>
-                <p className="text-[10px] text-blue-400 mt-1">Draft + Sent</p>
+                <p className="text-[10px] text-blue-400 mt-1">Pending Delivery</p>
+              </Link>
+
+              {/* Open PO Value */}
+              <Link href="/suppliers" className="group bg-indigo-50/60 border border-indigo-100 rounded-xl p-4 hover:bg-indigo-50 transition-colors cursor-pointer">
+                <p className="text-[10px] font-bold text-indigo-650 uppercase tracking-wider">Open PO Value</p>
+                <p className="text-2xl font-extrabold text-indigo-800 mt-1">₹{openPOValue.toLocaleString()}</p>
+                <p className="text-[10px] text-indigo-400 mt-1">Est. value of open orders</p>
               </Link>
 
               {/* Late POs */}

@@ -70,14 +70,31 @@ export interface Purchase {
   dueAmount: number;
   returnedQuantity?: number;
   purchaseOrderId?: string; // Links to source PurchaseOrder
+  expectedBuyPrice?: number; // Cost variance analysis
 }
 
 export type PurchaseOrderStatus =
   | "Draft"
   | "Sent"
-  | "Partially Received"
+  | "Supplier Confirmed"
+  | "Partially Delivered"
   | "Completed"
   | "Cancelled";
+
+export interface POActivityLog {
+  id: string;
+  type:
+    | "Created"
+    | "Edited"
+    | "Sent"
+    | "Confirmed"
+    | "Delivery"
+    | "Completed"
+    | "Cancelled";
+  date: string; // ISO timestamp
+  notes: string;
+  user?: string;
+}
 
 export interface PurchaseOrderItem {
   id: string;
@@ -97,6 +114,7 @@ export interface PurchaseOrder {
   notes: string;
   status: PurchaseOrderStatus;
   items: PurchaseOrderItem[];
+  activityLog: POActivityLog[];
 }
 
 
@@ -327,6 +345,7 @@ export interface PurchaseLineItem {
   productId: string;
   quantity: string;   // String so <input type="number"> stays controlled
   buyPrice: string;   // String so <input type="number"> stays controlled
+  expectedBuyPrice?: string; // Optional track of PO expected cost
 }
 
 // ── App Store State ───────────────────────────

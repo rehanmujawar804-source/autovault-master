@@ -57,8 +57,9 @@ const INPUT =
 const PO_STATUS_COLOR: Record<PurchaseOrderStatus, string> = {
   Draft: "bg-slate-100 text-slate-700 border-slate-200",
   Sent: "bg-blue-50 text-blue-700 border-blue-200",
-  "Partially Received": "bg-amber-50 text-amber-800 border-amber-200",
-  Completed: "bg-emerald-50 text-emerald-800 border-emerald-200",
+  "Supplier Confirmed": "bg-indigo-50 text-indigo-700 border-indigo-200",
+  "Partially Delivered": "bg-amber-50 text-amber-700 border-amber-200",
+  Completed: "bg-emerald-550 text-emerald-800 border-emerald-200",
   Cancelled: "bg-rose-50 text-rose-700 border-rose-200",
 };
 
@@ -471,6 +472,7 @@ function SupplierInvoiceModal({ isOpen, onClose, supplier, products, purchaseCou
           productId: item.productId,
           quantity: String(item.quantity - item.receivedQuantity),
           buyPrice: String(item.expectedBuyPrice),
+          expectedBuyPrice: String(item.expectedBuyPrice),
         }));
       setRows(poRows.length > 0 ? poRows : [blankRow()]);
     } else {
@@ -628,6 +630,7 @@ function SupplierInvoiceModal({ isOpen, onClose, supplier, products, purchaseCou
       productId: r.productId,
       quantity: parseInt(r.quantity),
       buyPrice: parseFloat(r.buyPrice),
+      expectedBuyPrice: r.expectedBuyPrice ? parseFloat(r.expectedBuyPrice) : undefined,
     }));
 
     try {
@@ -1059,10 +1062,11 @@ function blankPORow(): POLineItem {
 }
 
 function PurchaseOrderModal({ isOpen, onClose, supplier, products, existingPO }: POModalProps) {
-  const { createPurchaseOrder, updatePurchaseOrder, showToast } = useStore();
+  const { state, createPurchaseOrder, updatePurchaseOrder, showToast } = useStore();
 
   const today = new Date().toISOString().split("T")[0];
   const oneWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  const isPOPartiallyDelivered = existingPO?.status === "Partially Delivered";
 
   const [expectedDelivery, setExpectedDelivery] = useState(oneWeek);
   const [notes, setNotes] = useState("");
@@ -1077,13 +1081,13 @@ function PurchaseOrderModal({ isOpen, onClose, supplier, products, existingPO }:
     if (existingPO) {
       setExpectedDelivery(existingPO.expectedDeliveryDate || oneWeek);
       setNotes(existingPO.notes || "");
-      const isPartiallyReceived = existingPO.status === "Partially Received";
+      const isPartiallyDelivered = existingPO.status === "Partially Delivered";
       setRows(
         existingPO.items.map((item) => ({
           id: item.id || crypto.randomUUID(),
           productId: item.productId,
-          // When partially received, show remaining qty only
-          quantity: isPartiallyReceived
+          // When partially delivered, show remaining qty only
+          quantity: isPartiallyDelivered
             ? String(Math.max(0, item.quantity - item.receivedQuantity))
             : String(item.quantity),
           expectedBuyPrice: String(item.expectedBuyPrice),
@@ -1220,13 +1224,15 @@ function PurchaseOrderModal({ isOpen, onClose, supplier, products, existingPO }:
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-bold text-slate-600">Items</label>
-              <button
-                type="button"
-                onClick={() => setRows((prev) => [...prev, blankPORow()])}
-                className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 hover:text-emerald-600 cursor-pointer"
-              >
-                <Plus size={12} /> Add Row
-              </button>
+              {!isPOPartiallyDelivered && (
+                <button
+                  type="button"
+                  onClick={() => setRows((prev) => [...prev, blankPORow()])}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 hover:text-emerald-600 cursor-pointer"
+                >
+                  <Plus size={12} /> Add Row
+                </button>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -1237,17 +1243,52 @@ function PurchaseOrderModal({ isOpen, onClose, supplier, products, existingPO }:
                 const rowTotal = qty * price;
                 const selectedProduct = products.find((p) => p.id === row.productId);
 
+                // Compute historical pricing statistics for smart price suggestions
+                const productPurchases = (state.purchases || []).filter((p) => p.productId === row.productId);
+                const lastBuyPurchase = [...productPurchases].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+                const lastBuy = lastBuyPurchase ? lastBuyPurchase.buyPrice : null;
+                const avgBuy = productPurchases.length > 0
+                  ? productPurchases.reduce((s, p) => s + p.buyPrice, 0) / productPurchases.length
+                  : null;
+                const lowestBuy = productPurchases.length > 0
+                  ? Math.min(...productPurchases.map((p) => p.buyPrice))
+                  : null;
+                const catalogCost = selectedProduct ? selectedProduct.currentCost : null;
+
                 return (
                   <div key={row.id} className="grid grid-cols-[1fr_80px_90px_60px_24px] gap-2 items-start bg-slate-50 border border-slate-200 rounded-xl p-3">
                     {/* Product */}
                     <div>
-                      <ProductSearchCombobox
-                        value={row.productId}
-                        onChange={(pid) => setRows((prev) => prev.map((r) => r.id === row.id ? { ...r, productId: pid } : r))}
-                        products={products}
-                        rowIdx={idx}
-                      />
+                      {isPOPartiallyDelivered ? (
+                        <div className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm bg-slate-100 text-slate-500 font-semibold select-none">
+                          {selectedProduct?.name || "Unknown Product"}
+                        </div>
+                      ) : (
+                        <ProductSearchCombobox
+                          value={row.productId}
+                          onChange={(pid) => setRows((prev) => prev.map((r) => r.id === row.id ? { ...r, productId: pid } : r))}
+                          products={products}
+                          rowIdx={idx}
+                        />
+                      )}
                       {errs.productId && <p className="text-[10px] text-red-500 mt-0.5">{errs.productId}</p>}
+
+                      {selectedProduct && (
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] text-slate-400 mt-1 select-none font-medium leading-none">
+                          {lastBuy !== null && (
+                            <span>Last: <strong className="text-slate-600 font-bold">₹{lastBuy.toLocaleString()}</strong></span>
+                          )}
+                          {avgBuy !== null && (
+                            <span>Avg: <strong className="text-slate-600 font-bold">₹{Math.round(avgBuy).toLocaleString()}</strong></span>
+                          )}
+                          {lowestBuy !== null && (
+                            <span>Low: <strong className="text-slate-600 font-bold">₹{lowestBuy.toLocaleString()}</strong></span>
+                          )}
+                          {catalogCost !== null && (
+                            <span>Catalog: <strong className="text-slate-600 font-bold">₹{catalogCost.toLocaleString()}</strong></span>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Qty */}
@@ -1257,8 +1298,9 @@ function PurchaseOrderModal({ isOpen, onClose, supplier, products, existingPO }:
                         min="1"
                         placeholder="Qty"
                         value={row.quantity}
+                        disabled={isPOPartiallyDelivered}
                         onChange={(e) => setRows((prev) => prev.map((r) => r.id === row.id ? { ...r, quantity: e.target.value } : r))}
-                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600"
+                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 disabled:opacity-60 disabled:bg-slate-100 disabled:cursor-not-allowed"
                       />
                       {errs.quantity && <p className="text-[10px] text-red-500 mt-0.5">{errs.quantity}</p>}
                     </div>
@@ -1271,8 +1313,9 @@ function PurchaseOrderModal({ isOpen, onClose, supplier, products, existingPO }:
                         step="0.01"
                         placeholder="₹ Price"
                         value={row.expectedBuyPrice}
+                        disabled={isPOPartiallyDelivered}
                         onChange={(e) => setRows((prev) => prev.map((r) => r.id === row.id ? { ...r, expectedBuyPrice: e.target.value } : r))}
-                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600"
+                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 disabled:opacity-60 disabled:bg-slate-100 disabled:cursor-not-allowed"
                       />
                       {errs.buyPrice && <p className="text-[10px] text-red-500 mt-0.5">{errs.buyPrice}</p>}
                     </div>
@@ -1283,14 +1326,18 @@ function PurchaseOrderModal({ isOpen, onClose, supplier, products, existingPO }:
                     </div>
 
                     {/* Delete row */}
-                    <button
-                      type="button"
-                      onClick={() => setRows((prev) => prev.length > 1 ? prev.filter((r) => r.id !== row.id) : prev)}
-                      disabled={rows.length === 1}
-                      className="mt-1.5 w-6 h-6 rounded-md bg-slate-100 text-slate-400 hover:bg-red-50 hover:text-red-500 flex items-center justify-center transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      <Trash2 size={11} />
-                    </button>
+                    {isPOPartiallyDelivered ? (
+                      <div className="w-6 h-6 shrink-0" />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setRows((prev) => prev.length > 1 ? prev.filter((r) => r.id !== row.id) : prev)}
+                        disabled={rows.length === 1}
+                        className="mt-1.5 w-6 h-6 rounded-md bg-slate-100 text-slate-400 hover:bg-red-50 hover:text-red-500 flex items-center justify-center transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    )}
                   </div>
                 );
               })}
@@ -1456,6 +1503,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
     completePurchaseOrder,
     markPurchaseOrderSent,
     markPurchaseOrderCancelled,
+    confirmPurchaseOrder,
   } = useStore();
   const { isOwner } = useRole();
 
@@ -1470,6 +1518,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
   const [editPO, setEditPO] = useState<PurchaseOrder | null>(null);
   const [printPO, setPrintPO] = useState<PurchaseOrder | null>(null);
   const [convertingPO, setConvertingPO] = useState<PurchaseOrder | null>(null);
+  const [expandedTimelines, setExpandedTimelines] = useState<Record<string, boolean>>({});
 
   const handleConvertPOToInvoice = useCallback((po: PurchaseOrder) => {
     setConvertingPO(po);
@@ -2001,6 +2050,28 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                           </div>
                         </div>
 
+                        {pur.expectedBuyPrice !== undefined && (() => {
+                          const varianceAmt = pur.buyPrice - pur.expectedBuyPrice;
+                          const variancePct = pur.expectedBuyPrice > 0 ? (varianceAmt / pur.expectedBuyPrice) * 100 : 0;
+                          return (
+                            <div className="bg-white border border-slate-150 rounded-xl p-3 flex items-center justify-between text-xs">
+                              <div>
+                                <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest">Cost Variance Analysis</p>
+                                <div className="flex items-center gap-3 mt-1.5 text-slate-500 font-semibold">
+                                  <span>Expected Unit: <strong className="text-slate-700 font-bold">₹{pur.expectedBuyPrice.toLocaleString()}</strong></span>
+                                  <span>Actual Unit: <strong className="text-slate-700 font-bold">₹{pur.buyPrice.toLocaleString()}</strong></span>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest">Deviation</p>
+                                <span className={`inline-block font-black text-xs mt-1.5 ${varianceAmt > 0 ? "text-rose-600" : varianceAmt < 0 ? "text-emerald-600" : "text-slate-500"}`}>
+                                  {varianceAmt > 0 ? "+" : ""}{varianceAmt.toLocaleString()} ({varianceAmt > 0 ? "+" : ""}{variancePct.toFixed(1)}%)
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         {/* Vertical Timeline */}
                         <div className="relative border-l-2 border-slate-200 ml-3 pl-5 space-y-4 py-1">
                           {/* Purchase Created Event */}
@@ -2154,8 +2225,8 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                     const totalUnits = po.items.reduce((s, item) => s + item.quantity, 0);
                     const receivedUnits = po.items.reduce((s, item) => s + item.receivedQuantity, 0);
                     const remainingUnits = Math.max(0, totalUnits - receivedUnits);
-                    const isEditable = po.status === "Draft" || po.status === "Sent";
-                    const isLimitedEdit = po.status === "Partially Received";
+                    const isEditable = po.status === "Draft" || po.status === "Sent" || po.status === "Supplier Confirmed";
+                    const isLimitedEdit = po.status === "Partially Delivered";
                     const isTerminal = po.status === "Completed" || po.status === "Cancelled";
                     const canConvert = !isTerminal && remainingUnits > 0;
 
@@ -2193,7 +2264,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                             </div>
                           </div>
 
-                          {po.status === "Partially Received" && (
+                          {po.status === "Partially Delivered" && (
                             <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-800 font-semibold">
                               ⚡ {receivedUnits} of {totalUnits} units received · {remainingUnits} remaining
                             </div>
@@ -2204,6 +2275,59 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                               &ldquo;{po.notes}&rdquo;
                             </div>
                           )}
+
+                          {/* Chronological Activity Timeline (oldest -> newest stored, rendered oldest -> newest) */}
+                          <div className="border-t border-slate-100 pt-3">
+                            <button
+                              onClick={() => setExpandedTimelines((prev) => ({ ...prev, [po.id]: !prev[po.id] }))}
+                              className="w-full flex items-center justify-between text-xs text-slate-500 hover:text-slate-700 font-bold select-none cursor-pointer transition-colors"
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <Activity size={12} className="text-slate-400" />
+                                PO Activity Log ({po.activityLog?.length || 0})
+                              </span>
+                              <span className="text-[10px]">{expandedTimelines[po.id] ? "▲ Hide" : "▼ Show"}</span>
+                            </button>
+
+                            {expandedTimelines[po.id] && (
+                              <div className="mt-3 pl-3.5 border-l-2 border-slate-200 space-y-3 py-1 animate-in slide-in-from-top-1 duration-150">
+                                {(po.activityLog || []).map((log) => {
+                                  const icons = {
+                                    Created: "●",
+                                    Edited: "✏",
+                                    Sent: "📨",
+                                    Confirmed: "✔",
+                                    Delivery: "📦",
+                                    Completed: "✔",
+                                    Cancelled: "❌",
+                                  };
+                                  const colors = {
+                                    Created: "text-slate-500",
+                                    Edited: "text-slate-600 font-medium",
+                                    Sent: "text-blue-600 font-semibold",
+                                    Confirmed: "text-indigo-600 font-bold",
+                                    Delivery: "text-amber-600 font-medium",
+                                    Completed: "text-emerald-600 font-black",
+                                    Cancelled: "text-rose-600 font-bold",
+                                  };
+                                  return (
+                                    <div key={log.id} className="text-[11px] leading-relaxed relative pl-1">
+                                      <span className="absolute -left-[19.5px] top-0 font-bold bg-white text-xs px-0.5">
+                                        {icons[log.type] || "•"}
+                                      </span>
+                                      <div>
+                                        <p className={`${colors[log.type]} font-bold`}>
+                                          {log.type} {log.type === "Confirmed" ? "by Supplier" : ""}
+                                        </p>
+                                        <p className="text-slate-600 text-[10px]">{log.notes}</p>
+                                        <p className="text-[9px] text-slate-400 mt-0.5">{formatDate(log.date)}</p>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
                         </div>
 
                         {/* Card footer actions */}
@@ -2256,6 +2380,19 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                               className="px-3 py-1.5 text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-lg cursor-pointer transition-colors"
                             >
                               Mark Sent
+                            </button>
+                          )}
+
+                          {/* Confirm PO (Sent only) */}
+                          {po.status === "Sent" && (
+                            <button
+                              onClick={() => {
+                                confirmPurchaseOrder(po.id);
+                                showToast(`${po.poNumber} confirmed by supplier`, "success");
+                              }}
+                              className="px-3 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg cursor-pointer transition-colors"
+                            >
+                              Confirm
                             </button>
                           )}
 

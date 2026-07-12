@@ -54,6 +54,7 @@ import type {
   PurchaseOrder,
   PurchaseOrderItem,
   PurchaseOrderStatus,
+  POActivityLog,
 } from "@/types";
 import { todayLocalStr } from "@/lib/dateUtils";
 
@@ -144,13 +145,14 @@ type Action =
   | { type: "DELETE_HOLD_BILL"; id: string }
   | { type: "LOAD_HOLD_BILL"; id: string }
 
-  // Purchase Orders (Sprint 4.6)
-  | { type: "CREATE_PURCHASE_ORDER"; po: Omit<PurchaseOrder, "id" | "poNumber" | "createdAt" | "updatedAt"> }
+  // Purchase Orders (Sprint 4.6 & 4.6.1)
+  | { type: "CREATE_PURCHASE_ORDER"; po: Omit<PurchaseOrder, "id" | "poNumber" | "createdAt" | "updatedAt" | "activityLog"> }
   | { type: "UPDATE_PURCHASE_ORDER"; poId: string; expectedDeliveryDate: string; notes: string; items: PurchaseOrderItem[]; status: PurchaseOrderStatus }
   | { type: "DELETE_PURCHASE_ORDER"; poId: string }
   | { type: "MARK_PURCHASE_ORDER_SENT"; poId: string }
   | { type: "MARK_PURCHASE_ORDER_CANCELLED"; poId: string }
-  | { type: "COMPLETE_PURCHASE_ORDER"; poId: string };
+  | { type: "COMPLETE_PURCHASE_ORDER"; poId: string }
+  | { type: "CONFIRM_PURCHASE_ORDER"; poId: string };
 
 // ─────────────────────────────────────────────
 //  HELPERS (pure, used inside reducer)
@@ -876,7 +878,23 @@ function reducer(state: AppState, action: Action): AppState {
         purchaseReturns: action.state.purchaseReturns ?? [],
         holdBills: action.state.holdBills ?? [],
         holdBillsCounter: action.state.holdBillsCounter ?? 0,
-        purchaseOrders: action.state.purchaseOrders ?? [],
+        purchaseOrders: (action.state.purchaseOrders || []).map((po: any) => {
+          const status: PurchaseOrderStatus =
+            po.status === "Partially Received" ? "Partially Delivered" : po.status;
+          const activityLog = po.activityLog || [
+            {
+              id: `poa-${crypto.randomUUID()}`,
+              type: "Created" as const,
+              date: po.createdAt || new Date().toISOString(),
+              notes: "Purchase Order created",
+            },
+          ];
+          return {
+            ...po,
+            status,
+            activityLog,
+          };
+        }),
         purchaseOrderCounter: action.state.purchaseOrderCounter ?? 0,
       };
     }
@@ -968,12 +986,34 @@ function reducer(state: AppState, action: Action): AppState {
               receivedQuantity: item.receivedQuantity + purchase.quantity,
             };
           });
+          
+          const productName = state.products.find((p) => p.id === purchase.productId)?.name || "Unknown Product";
+          const deliveryActivity: POActivityLog = {
+            id: `poa-${crypto.randomUUID()}`,
+            type: "Delivery" as const,
+            date: new Date().toISOString(),
+            notes: `Delivered ${purchase.quantity} units of ${productName}`,
+          };
+          
+          const newActivities = [...(po.activityLog || []), deliveryActivity];
+          
           const isAllCompleted = updatedItems.every((item) => item.receivedQuantity >= item.quantity);
-          const newStatus: PurchaseOrderStatus = isAllCompleted ? "Completed" : "Partially Received";
+          const newStatus: PurchaseOrderStatus = isAllCompleted ? "Completed" : "Partially Delivered";
+          
+          if (isAllCompleted) {
+            newActivities.push({
+              id: `poa-${crypto.randomUUID()}`,
+              type: "Completed" as const,
+              date: new Date().toISOString(),
+              notes: "Purchase Order fully completed",
+            });
+          }
+
           return {
             ...po,
             items: updatedItems,
             status: newStatus,
+            activityLog: newActivities,
             updatedAt: new Date().toISOString(),
           };
         });
@@ -1175,6 +1215,14 @@ function reducer(state: AppState, action: Action): AppState {
           id: item.id || `poi-${crypto.randomUUID()}`,
           receivedQuantity: 0,
         })),
+        activityLog: [
+          {
+            id: `poa-${crypto.randomUUID()}`,
+            type: "Created" as const,
+            date: now,
+            notes: "Purchase Order created",
+          },
+        ],
       };
       return {
         ...state,
@@ -1197,6 +1245,15 @@ function reducer(state: AppState, action: Action): AppState {
             receivedQuantity: item.receivedQuantity ?? 0,
           })),
           status,
+          activityLog: [
+            ...(po.activityLog || []),
+            {
+              id: `poa-${crypto.randomUUID()}`,
+              type: "Edited" as const,
+              date: new Date().toISOString(),
+              notes: "Purchase Order details updated",
+            },
+          ],
           updatedAt: new Date().toISOString(),
         };
       });
@@ -1217,7 +1274,22 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         purchaseOrders: (state.purchaseOrders || []).map((po) =>
-          po.id === action.poId ? { ...po, status: "Sent" as const, updatedAt: new Date().toISOString() } : po
+          po.id === action.poId
+            ? {
+                ...po,
+                status: "Sent" as const,
+                activityLog: [
+                  ...(po.activityLog || []),
+                  {
+                    id: `poa-${crypto.randomUUID()}`,
+                    type: "Sent" as const,
+                    date: new Date().toISOString(),
+                    notes: "Purchase Order marked as Sent",
+                  },
+                ],
+                updatedAt: new Date().toISOString(),
+              }
+            : po
         ),
       };
     }
@@ -1226,7 +1298,22 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         purchaseOrders: (state.purchaseOrders || []).map((po) =>
-          po.id === action.poId ? { ...po, status: "Cancelled" as const, updatedAt: new Date().toISOString() } : po
+          po.id === action.poId
+            ? {
+                ...po,
+                status: "Cancelled" as const,
+                activityLog: [
+                  ...(po.activityLog || []),
+                  {
+                    id: `poa-${crypto.randomUUID()}`,
+                    type: "Cancelled" as const,
+                    date: new Date().toISOString(),
+                    notes: "Purchase Order cancelled",
+                  },
+                ],
+                updatedAt: new Date().toISOString(),
+              }
+            : po
         ),
       };
     }
@@ -1235,7 +1322,46 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         purchaseOrders: (state.purchaseOrders || []).map((po) =>
-          po.id === action.poId ? { ...po, status: "Completed" as const, updatedAt: new Date().toISOString() } : po
+          po.id === action.poId
+            ? {
+                ...po,
+                status: "Completed" as const,
+                activityLog: [
+                  ...(po.activityLog || []),
+                  {
+                    id: `poa-${crypto.randomUUID()}`,
+                    type: "Completed" as const,
+                    date: new Date().toISOString(),
+                    notes: "Purchase Order manually marked as Completed",
+                  },
+                ],
+                updatedAt: new Date().toISOString(),
+              }
+            : po
+        ),
+      };
+    }
+
+    case "CONFIRM_PURCHASE_ORDER": {
+      return {
+        ...state,
+        purchaseOrders: (state.purchaseOrders || []).map((po) =>
+          po.id === action.poId
+            ? {
+                ...po,
+                status: "Supplier Confirmed" as const,
+                activityLog: [
+                  ...(po.activityLog || []),
+                  {
+                    id: `poa-${crypto.randomUUID()}`,
+                    type: "Confirmed" as const,
+                    date: new Date().toISOString(),
+                    notes: "Supplier confirmed purchase order",
+                  },
+                ],
+                updatedAt: new Date().toISOString(),
+              }
+            : po
         ),
       };
     }
@@ -1344,7 +1470,7 @@ interface StoreContextValue {
     notes: string;
     paymentMethod: PaymentMethod;
     totalPaid: number;
-    items: Array<{ productId: string; quantity: number; buyPrice: number }>;
+    items: Array<{ productId: string; quantity: number; buyPrice: number; expectedBuyPrice?: number }>;
     purchaseOrderId?: string;
   }) => void;
   updatePurchase: (purchaseId: string, invoiceNumber: string, date: string, notes: string) => void;
@@ -1357,13 +1483,14 @@ interface StoreContextValue {
   getSupplierOutstandingBalance: (supplierId: string) => number;
   getTotalSupplierOutstanding: () => number;
 
-  // Purchase Order Helpers (Sprint 4.6)
-  createPurchaseOrder: (po: Omit<PurchaseOrder, "id" | "poNumber" | "createdAt" | "updatedAt">) => void;
+  // Purchase Order Helpers (Sprint 4.6 & 4.6.1)
+  createPurchaseOrder: (po: Omit<PurchaseOrder, "id" | "poNumber" | "createdAt" | "updatedAt" | "activityLog">) => void;
   updatePurchaseOrder: (poId: string, expectedDeliveryDate: string, notes: string, items: PurchaseOrderItem[], status: PurchaseOrderStatus) => void;
   deletePurchaseOrder: (poId: string) => void;
   completePurchaseOrder: (poId: string) => void;
   markPurchaseOrderSent: (poId: string) => void;
   markPurchaseOrderCancelled: (poId: string) => void;
+  confirmPurchaseOrder: (poId: string) => void;
 
   // Future Ready Hooks / Selectors
   getSupplierBalance: (supplierId: string) => number;
@@ -1753,7 +1880,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     notes: string;
     paymentMethod: PaymentMethod;
     totalPaid: number;
-    items: Array<{ productId: string; quantity: number; buyPrice: number }>;
+    items: Array<{ productId: string; quantity: number; buyPrice: number; expectedBuyPrice?: number }>;
     purchaseOrderId?: string;
   }) {
     const { supplierId, invoiceNumber, date, notes, paymentMethod, totalPaid, items, purchaseOrderId } = params;
@@ -1799,6 +1926,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         amountPaid: paid,
         paymentMethod,
         purchaseOrderId,
+        expectedBuyPrice: item.expectedBuyPrice,
       });
     });
   }
@@ -1874,7 +2002,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }, 0);
   }
 
-  function createPurchaseOrder(po: Omit<PurchaseOrder, "id" | "poNumber" | "createdAt" | "updatedAt">) {
+  function createPurchaseOrder(po: Omit<PurchaseOrder, "id" | "poNumber" | "createdAt" | "updatedAt" | "activityLog">) {
     dispatch({ type: "CREATE_PURCHASE_ORDER", po });
   }
 
@@ -1896,6 +2024,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   function markPurchaseOrderCancelled(poId: string) {
     dispatch({ type: "MARK_PURCHASE_ORDER_CANCELLED", poId });
+  }
+
+  function confirmPurchaseOrder(poId: string) {
+    dispatch({ type: "CONFIRM_PURCHASE_ORDER", poId });
   }
 
   // Future Ready Selectors
@@ -2042,6 +2174,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         completePurchaseOrder,
         markPurchaseOrderSent,
         markPurchaseOrderCancelled,
+        confirmPurchaseOrder,
         getSupplierBalance,
         getSupplierLifetimePurchase,
         getSupplierAveragePurchase,

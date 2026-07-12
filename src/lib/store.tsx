@@ -50,6 +50,7 @@ import type {
   FinanceAccount,
   FinanceTransaction,
   HoldBill,
+  PurchaseReturn,
 } from "@/types";
 import { todayLocalStr } from "@/lib/dateUtils";
 
@@ -125,6 +126,7 @@ type Action =
   | { type: "ADD_PURCHASE"; purchase: Purchase; paymentMethod?: PaymentMethod }
   | { type: "UPDATE_PURCHASE"; purchaseId: string; invoiceNumber: string; date: string; notes: string }
   | { type: "RECORD_SUPPLIER_PAYMENT"; payment: SupplierPayment }
+  | { type: "ADD_PURCHASE_RETURN"; returnRecord: PurchaseReturn; refundMethod: PaymentMethod | "Adjustment" }
 
   // Reset / Hydrate
   | { type: "RESET_STORE" }
@@ -248,12 +250,45 @@ const MIGRATIONS: StoreMigration[] = [
       };
     },
   },
-  // ── Add future migrations here ─────────────────────────────────────────────
-  // {
-  //   id: "m002-your-next-migration",
-  //   description: "Short description of what this repairs.",
-  //   run(state) { return { state, log: [] }; },
-  // },
+  {
+    id: "m002-restore-purchase-totals",
+    description: "Restores original purchase values that were previously modified by returns, making purchases immutable.",
+    run(inputState) {
+      const log: string[] = [];
+      const newPurchases = (inputState.purchases || []).map((p) => {
+        const originalTotal = roundMoney(p.buyPrice * p.quantity);
+        if (p.totalAmount !== originalTotal) {
+          log.push(`Restored purchase ${p.id} (INV: ${p.invoiceNumber}): totalAmount ${p.totalAmount} -> ${originalTotal}`);
+          const returnedQty = p.returnedQuantity ?? 0;
+          let newAmountPaid = p.amountPaid;
+          if (returnedQty === 0) {
+            newAmountPaid = roundMoney(originalTotal - p.dueAmount);
+          } else {
+            const returnsForP = (inputState.purchaseReturns || []).filter(r => r.purchaseId === p.id);
+            const totalRefunded = returnsForP.reduce((s, r) => s + r.refundAmount, 0);
+            newAmountPaid = roundMoney(p.amountPaid + totalRefunded);
+          }
+          const newDueAmount = roundMoney(Math.max(0, originalTotal - newAmountPaid));
+          const newPaymentStatus: "Paid" | "Partial" | "Credit" =
+            newDueAmount <= 0 ? "Paid" : newAmountPaid > 0 ? "Partial" : "Credit";
+
+          return {
+            ...p,
+            totalAmount: originalTotal,
+            amountPaid: newAmountPaid,
+            dueAmount: newDueAmount,
+            paymentStatus: newPaymentStatus,
+          };
+        }
+        return p;
+      });
+
+      return {
+        state: { ...inputState, purchases: newPurchases },
+        log,
+      };
+    }
+  },
 ];
 
 /**
@@ -803,6 +838,7 @@ function reducer(state: AppState, action: Action): AppState {
           amountPaid,
           dueAmount,
           paymentStatus,
+          returnedQuantity: pur.returnedQuantity ?? 0,
         };
       });
       const invoices = (action.state.invoices || []).map((inv) => {
@@ -824,6 +860,7 @@ function reducer(state: AppState, action: Action): AppState {
           ? action.state.financeAccounts
           : DEFAULT_FINANCE_ACCOUNTS,
         financeTransactions: action.state.financeTransactions ?? [],
+        purchaseReturns: action.state.purchaseReturns ?? [],
         holdBills: action.state.holdBills ?? [],
         holdBillsCounter: action.state.holdBillsCounter ?? 0,
       };
@@ -989,6 +1026,81 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    case "ADD_PURCHASE_RETURN": {
+      const { returnRecord, refundMethod } = action;
+
+      // Find purchase — bail if not found
+      const origPurchase = (state.purchases || []).find((p) => p.id === returnRecord.purchaseId);
+      if (!origPurchase) return state;
+
+      // Guard: returnedQuantity cannot exceed available quantity
+      const alreadyReturned = origPurchase.returnedQuantity ?? 0;
+      const availableQty = origPurchase.quantity - alreadyReturned;
+      if (returnRecord.quantity <= 0 || returnRecord.quantity > availableQty) return state;
+
+      // Guard: stock in hand must be sufficient (cannot return what was sold)
+      const product = (state.products || []).find((p) => p.id === origPurchase.productId);
+      if (!product || returnRecord.quantity > product.stock) return state;
+
+      // 1. Update purchase: increment returnedQuantity ONLY (keep totals immutable)
+      const returnedTotal = roundMoney(returnRecord.quantity * origPurchase.buyPrice);
+      const refund = Math.min(returnRecord.refundAmount, returnedTotal); // clamp refund
+      const newPurchases = (state.purchases || []).map((p) => {
+        if (p.id !== origPurchase.id) return p;
+        const newReturnedQty = (p.returnedQuantity ?? 0) + returnRecord.quantity;
+        return {
+          ...p,
+          returnedQuantity: newReturnedQty,
+        };
+      });
+
+      // 2. Decrease product stock
+      const newProducts = (state.products || []).map((prod) => {
+        if (prod.id !== origPurchase.productId) return prod;
+        return { ...prod, stock: Math.max(0, prod.stock - returnRecord.quantity) };
+      });
+
+      // 3. Stock Movement (type: "Purchase Return", negative delta)
+      const supplierName = (state.suppliers || []).find((s) => s.id === origPurchase.supplierId)?.name || "Supplier";
+      const movement: StockMovement = {
+        id: generateUniqueId("sm"),
+        productId: origPurchase.productId,
+        type: "Purchase Return" as const,
+        delta: -returnRecord.quantity,
+        date: returnRecord.createdAt,
+        desc: `Returned to ${supplierName}. Reason: ${returnRecord.reason}`,
+        reference: returnRecord.id,
+      };
+
+      // 4. Finance — Income (refund received), positive amount, skip if Adjustment
+      const newFinanceTransactions = [...(state.financeTransactions || [])];
+      if (refundMethod !== "Adjustment" && refund > 0) {
+        const accountId = methodToAccountId(refundMethod as PaymentMethod);
+        newFinanceTransactions.push({
+          id: `ft-${crypto.randomUUID()}`,
+          accountId,
+          type: "Income" as const,
+          category: "Purchase Return" as const,
+          referenceId: returnRecord.id,
+          supplierId: origPurchase.supplierId,
+          amount: refund,
+          date: returnRecord.createdAt,
+          method: refundMethod as PaymentMethod,
+          notes: `Refund — return from invoice ${origPurchase.invoiceNumber || origPurchase.id}. Reason: ${returnRecord.reason}`,
+        });
+      }
+
+      // 5. Append immutable PurchaseReturn record
+      return {
+        ...state,
+        purchases: newPurchases,
+        products: newProducts,
+        stockMovements: [...(state.stockMovements || []), movement],
+        financeTransactions: newFinanceTransactions,
+        purchaseReturns: [...(state.purchaseReturns || []), returnRecord],
+      };
+    }
+
     case "RECONCILE_DEBT_CACHE": {
       const newCustomers = state.customers.map((c) => {
         const customerInvoices = state.invoices.filter(
@@ -1104,10 +1216,23 @@ interface StoreContextValue {
   addSupplier: (supplier: Omit<Supplier, "id" | "createdAt" | "updatedAt">) => void;
   updateSupplier: (supplier: Supplier) => void;
   addPurchase: (purchase: Omit<Purchase, "id" | "createdAt" | "totalAmount" | "amountPaid" | "dueAmount"> & { amountPaid?: number; paymentMethod?: PaymentMethod }) => void;
+  /** Sprint 4.4 — records multiple purchases from one supplier invoice. */
+  addPurchaseBatch: (params: {
+    supplierId: string;
+    invoiceNumber: string;
+    date: string;
+    notes: string;
+    paymentMethod: PaymentMethod;
+    totalPaid: number;
+    items: Array<{ productId: string; quantity: number; buyPrice: number }>;
+  }) => void;
   updatePurchase: (purchaseId: string, invoiceNumber: string, date: string, notes: string) => void;
   recordSupplierPayment: (payment: Omit<SupplierPayment, "id">) => void;
+  addPurchaseReturn: (record: Omit<PurchaseReturn, "id" | "createdAt" | "originalPurchaseQuantity" | "originalPurchaseValue">, refundMethod: PaymentMethod | "Adjustment") => void;
   getSupplierPaymentsBySupplier: (supplierId: string) => SupplierPayment[];
   getSupplierPaymentsByPurchase: (purchaseId: string) => SupplierPayment[];
+  getPurchaseReturnsByPurchase: (purchaseId: string) => PurchaseReturn[];
+  getPurchaseReturnsBySupplier: (supplierId: string) => PurchaseReturn[];
   getSupplierOutstandingBalance: (supplierId: string) => number;
   getTotalSupplierOutstanding: () => number;
 
@@ -1479,6 +1604,76 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }
 
+  /**
+   * addPurchaseBatch — Sprint 4.4
+   *
+   * Records multiple purchases from a single supplier invoice in one operation.
+   * Internally calls the existing addPurchase() once per line item, so all
+   * downstream effects (stock, StockMovement, SupplierPayment, FinanceTransaction,
+   * supplier outstanding balance) continue to work automatically.
+   *
+   * Payment is distributed proportionally across items by value weight:
+   *   itemPaid = (itemTotal / grandTotal) × totalPaid
+   *
+   * Rounding residual is absorbed by the last item so Σ(itemPaid) === totalPaid exactly.
+   */
+  function addPurchaseBatch(params: {
+    supplierId: string;
+    invoiceNumber: string;
+    date: string;
+    notes: string;
+    paymentMethod: PaymentMethod;
+    totalPaid: number;
+    items: Array<{ productId: string; quantity: number; buyPrice: number }>;
+  }) {
+    const { supplierId, invoiceNumber, date, notes, paymentMethod, totalPaid, items } = params;
+
+    // 1. Compute per-item subtotals
+    const itemTotals = items.map((item) => roundMoney(item.quantity * item.buyPrice));
+    const grandTotal = itemTotals.reduce((s, t) => s + t, 0);
+
+    // Clamp paid to grand total (UI validation should already enforce this,
+    // but we guard here for safety)
+    const safePaid = Math.min(Math.max(0, totalPaid), grandTotal);
+
+    // 2. Proportional allocation with rounding correction on last item
+    let allocatedSoFar = 0;
+    const paidPerItem: number[] = items.map((_, i) => {
+      if (grandTotal === 0) return 0;
+      if (i === items.length - 1) {
+        // Last item absorbs the rounding residual
+        return roundMoney(safePaid - allocatedSoFar);
+      }
+      const share = roundMoney((itemTotals[i] / grandTotal) * safePaid);
+      allocatedSoFar = roundMoney(allocatedSoFar + share);
+      return share;
+    });
+
+    // 3. Dispatch one ADD_PURCHASE per line item via the existing addPurchase() helper
+    items.forEach((item, i) => {
+      const total = itemTotals[i];
+      const paid = paidPerItem[i];
+      const due = roundMoney(Math.max(0, total - paid));
+      const status: "Paid" | "Partial" | "Credit" =
+        due <= 0 ? "Paid" : paid > 0 ? "Partial" : "Credit";
+
+      addPurchase({
+        supplierId,
+        productId: item.productId,
+        quantity: item.quantity,
+        buyPrice: item.buyPrice,
+        invoiceNumber,
+        date,
+        notes,
+        paymentStatus: status,
+        amountPaid: paid,
+        // Always pass paymentMethod — addPurchase() already skips the
+        // SupplierPayment + FinanceTransaction when amountPaid === 0
+        paymentMethod,
+      });
+    });
+  }
+
   function updatePurchase(purchaseId: string, invoiceNumber: string, date: string, notes: string) {
     dispatch({ type: "UPDATE_PURCHASE", purchaseId, invoiceNumber, date, notes });
   }
@@ -1490,6 +1685,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }
 
+  function addPurchaseReturn(
+    record: Omit<PurchaseReturn, "id" | "createdAt" | "originalPurchaseQuantity" | "originalPurchaseValue">,
+    refundMethod: PaymentMethod | "Adjustment"
+  ) {
+    const origPurchase = (state.purchases || []).find((p) => p.id === record.purchaseId);
+    const originalPurchaseQuantity = origPurchase ? origPurchase.quantity : 0;
+    const originalPurchaseValue = origPurchase ? (origPurchase.totalAmount ?? (origPurchase.buyPrice * origPurchase.quantity)) : 0;
+
+    const returnRecord: PurchaseReturn = {
+      ...record,
+      id: generateUniqueId("prr"),
+      createdAt: new Date().toISOString(),
+      originalPurchaseQuantity,
+      originalPurchaseValue,
+    };
+    dispatch({ type: "ADD_PURCHASE_RETURN", returnRecord, refundMethod });
+  }
+
   function getSupplierPaymentsBySupplier(supplierId: string) {
     return (state.supplierPayments ?? []).filter((p) => p.supplierId === supplierId);
   }
@@ -1498,14 +1711,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return (state.supplierPayments ?? []).filter((p) => p.purchaseId === purchaseId);
   }
 
+  function getPurchaseReturnsByPurchase(purchaseId: string) {
+    return (state.purchaseReturns ?? []).filter((r) => r.purchaseId === purchaseId);
+  }
+
+  function getPurchaseReturnsBySupplier(supplierId: string) {
+    return (state.purchaseReturns ?? []).filter((r) => r.supplierId === supplierId);
+  }
+
   function getSupplierOutstandingBalance(supplierId: string) {
+    // Outstanding = Original Purchase Total - Total Returned - Total Paid
     return (state.purchases || [])
       .filter((p) => p.supplierId === supplierId)
       .reduce((sum, p) => {
         const total = p.totalAmount ?? (p.buyPrice * p.quantity);
-        const payments = (state.supplierPayments || []).filter(sp => sp.purchaseId === p.id);
+        const returns = (state.purchaseReturns || []).filter((r) => r.purchaseId === p.id);
+        const returnedValue = returns.reduce((s, r) => s + r.totalAmount, 0);
+        const payments = (state.supplierPayments || []).filter((sp) => sp.purchaseId === p.id);
         const paid = payments.reduce((s, pay) => s + pay.amount, 0);
-        return sum + Math.max(0, total - paid);
+        return sum + Math.max(0, roundMoney(total - returnedValue - paid));
       }, 0);
   }
 
@@ -1513,9 +1737,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return (state.purchases || [])
       .reduce((sum, p) => {
         const total = p.totalAmount ?? (p.buyPrice * p.quantity);
-        const payments = (state.supplierPayments || []).filter(sp => sp.purchaseId === p.id);
+        const returns = (state.purchaseReturns || []).filter((r) => r.purchaseId === p.id);
+        const returnedValue = returns.reduce((s, r) => s + r.totalAmount, 0);
+        const payments = (state.supplierPayments || []).filter((sp) => sp.purchaseId === p.id);
         const paid = payments.reduce((s, pay) => s + pay.amount, 0);
-        return sum + Math.max(0, total - paid);
+        return sum + Math.max(0, roundMoney(total - returnedValue - paid));
       }, 0);
   }
 
@@ -1646,10 +1872,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         addSupplier,
         updateSupplier,
         addPurchase,
+        addPurchaseBatch,
         updatePurchase,
         recordSupplierPayment,
+        addPurchaseReturn,
         getSupplierPaymentsBySupplier,
         getSupplierPaymentsByPurchase,
+        getPurchaseReturnsByPurchase,
+        getPurchaseReturnsBySupplier,
         getSupplierOutstandingBalance,
         getTotalSupplierOutstanding,
         getSupplierBalance,

@@ -1,8 +1,8 @@
 "use client";
 
-import { use, useMemo, useState, useEffect } from "react";
+import { use, useMemo, useState, useEffect, memo, useCallback } from "react";
 import { useStore } from "@/lib/store";
-import type { Purchase, SupplierPayment, PaymentMethod } from "@/types";
+import type { Purchase, SupplierPayment, PaymentMethod, PurchaseLineItem, PurchaseReturn } from "@/types";
 import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
 import {
@@ -27,6 +27,8 @@ import {
   Pencil,
   Coins,
   Info,
+  Trash2,
+  CornerDownLeft,
 } from "lucide-react";
 import type { Supplier, Product } from "@/types";
 
@@ -49,265 +51,866 @@ const INPUT =
   "w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-400";
 
 // ─────────────────────────────────────────────
-//  ADD PURCHASE MODAL
+//  SUPPLIER INVOICE MODAL (Sprint 4.4 + enhancements)
 // ─────────────────────────────────────────────
 
-interface AddPurchaseModalProps {
+interface SupplierInvoiceModalProps {
   isOpen: boolean;
   onClose: () => void;
   supplier: Supplier;
   products: Product[];
+  purchaseCount: number; // for ERP record number preview
 }
 
-function AddPurchaseModal({ isOpen, onClose, supplier, products }: AddPurchaseModalProps) {
-  const { addPurchase, showToast } = useStore();
+function blankRow(): PurchaseLineItem {
+  return { id: crypto.randomUUID(), productId: "", quantity: "", buyPrice: "" };
+}
 
-  const blankForm = {
-    productId: "",
-    quantity: "",
-    buyPrice: "",
-    invoiceNumber: "",
-    date: new Date().toISOString().split("T")[0],
-    notes: "",
-    paymentStatus: "Paid" as "Paid" | "Partial" | "Credit",
-    amountPaid: "",
-    paymentMethod: "Cash" as PaymentMethod,
-  };
+// ── Text Highlight Helper ───────────────────────────────────────────────────
 
-  const [form, setForm] = useState(blankForm);
+function HighlightedText({ text, query }: { text: string; query: string }) {
+  if (!query.trim()) return <span>{text}</span>;
+  const safeQuery = query.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const regex = new RegExp(`(${safeQuery})`, "gi");
+  const parts = text.split(regex);
+  return (
+    <span>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <mark key={i} className="bg-yellow-200 text-slate-900 font-bold rounded-sm px-0.5">
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
+    </span>
+  );
+}
+
+// ── Searchable Product Combobox ──────────────────────────────────────────────
+
+interface ProductSearchProps {
+  value: string;
+  onChange: (productId: string) => void;
+  products: Product[];
+  rowIdx: number;
+}
+
+function ProductSearchCombobox({ value, onChange, products, rowIdx }: ProductSearchProps) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const selected = products.find((p) => p.id === value);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        (p.brand && p.brand.toLowerCase().includes(q))
+    );
+  }, [products, query]);
+
+  function choose(p: Product) {
+    onChange(p.id);
+    setQuery("");
+    setOpen(false);
+  }
+
+  function handleFocus() {
+    setQuery("");
+    setOpen(true);
+  }
+
+  function handleBlur() {
+    setTimeout(() => setOpen(false), 200);
+  }
+
+  const displayValue = open ? query : (selected ? selected.name : "");
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        value={displayValue}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        placeholder="Search by name, SKU, brand…"
+        aria-label={`Product search row ${rowIdx + 1}`}
+        className="w-full border border-slate-200 rounded-lg px-2.5 py-2 text-xs bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-450"
+      />
+      {open && filtered.length > 0 && (
+        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-30 max-h-56 overflow-y-auto">
+          {filtered.slice(0, 30).map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onMouseDown={() => choose(p)}
+              className="w-full flex flex-col px-3.5 py-2 text-left hover:bg-navy-50 border-b border-slate-100 last:border-0 transition-colors"
+            >
+              <div className="w-full flex justify-between items-start gap-2">
+                <span className="text-xs font-black text-slate-800">
+                  <HighlightedText text={p.name} query={query} />
+                </span>
+                <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-full shrink-0 border ${
+                  p.stock === 0
+                    ? "bg-red-50 border-red-200 text-red-700"
+                    : p.stock <= p.lowStockThreshold
+                    ? "bg-amber-50 border-amber-200 text-amber-700"
+                    : "bg-green-50 border-green-200 text-green-700"
+                }`}>
+                  Stock: {p.stock}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[9px] text-slate-450 font-mono mt-1">
+                <span>SKU: <HighlightedText text={p.sku} query={query} /></span>
+                {p.brand && <span>Brand: <HighlightedText text={p.brand} query={query} /></span>}
+                <span>Last Cost: ₹{p.currentCost.toLocaleString()}</span>
+                <span>Selling: ₹{p.sellPrice.toLocaleString()}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      {open && filtered.length === 0 && (
+        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-30 p-3 text-center text-xs text-slate-400">
+          No matching products found.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Memoized Product Row Item ───────────────────────────────────────────────
+
+interface RowItemProps {
+  row: PurchaseLineItem;
+  idx: number;
+  products: Product[];
+  error?: { quantity?: string; buyPrice?: string; productId?: string };
+  onChangeProduct: (id: string, productId: string) => void;
+  onChangeQty: (id: string, qty: string) => void;
+  onChangePrice: (id: string, price: string) => void;
+  onDuplicate: (row: PurchaseLineItem) => void;
+  onDelete: (id: string) => void;
+  canDelete: boolean;
+}
+
+const SupplierInvoiceRowItem = memo(({
+  row,
+  idx,
+  products,
+  error,
+  onChangeProduct,
+  onChangeQty,
+  onChangePrice,
+  onDuplicate,
+  onDelete,
+  canDelete,
+}: RowItemProps) => {
+  const selectedProduct = products.find((p) => p.id === row.productId);
+
+  const rowQty = parseInt(row.quantity) || 0;
+  const rowPrice = parseFloat(row.buyPrice) || 0;
+  const rowTotal = rowQty * rowPrice;
+
+  // Margin calculation
+  const sellPrice = selectedProduct?.sellPrice ?? 0;
+  const marginAbs = rowPrice > 0 ? sellPrice - rowPrice : null;
+  const marginPct = rowPrice > 0 && sellPrice > 0
+    ? ((sellPrice - rowPrice) / rowPrice * 100)
+    : null;
+
+  return (
+    <div className="bg-slate-50/50 border border-slate-200 rounded-xl p-3 space-y-2 hover:border-slate-300 transition-all">
+      {/* Header section: name, sku, brand, and stock level badge with health colors */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          {selectedProduct ? (
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className="font-bold text-xs text-slate-800">{selectedProduct.name}</span>
+              <span className="text-[9px] text-slate-450 font-mono">
+                SKU: {selectedProduct.sku} {selectedProduct.brand ? `· Brand: ${selectedProduct.brand}` : ""}
+              </span>
+            </div>
+          ) : (
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+              Line {idx + 1}: Select Product
+            </span>
+          )}
+        </div>
+
+        {selectedProduct && (
+          <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full border shrink-0 ${
+            selectedProduct.stock === 0
+              ? "bg-red-50 border-red-200 text-red-700 animate-pulse"
+              : selectedProduct.stock <= selectedProduct.lowStockThreshold
+              ? "bg-amber-50 border-amber-200 text-amber-700"
+              : "bg-green-50 border-green-200 text-green-700"
+          }`}>
+            {selectedProduct.stock === 0
+              ? "Out of Stock"
+              : selectedProduct.stock <= selectedProduct.lowStockThreshold
+              ? `Low Stock: ${selectedProduct.stock}`
+              : `Stock: ${selectedProduct.stock}`}
+          </span>
+        )}
+      </div>
+
+      {/* Row 1: Search Combobox */}
+      <div className="w-full">
+        <ProductSearchCombobox
+          value={row.productId}
+          onChange={(productId) => onChangeProduct(row.id, productId)}
+          products={products}
+          rowIdx={idx}
+        />
+        {error?.productId && (
+          <span className="text-[9px] font-extrabold text-red-500 mt-1 block pl-1">{error.productId}</span>
+        )}
+      </div>
+
+      {/* Row 2: Qty | Buy Price | Margin info | Total | Actions */}
+      <div className="grid grid-cols-[80px_110px_1fr_90px_60px] gap-2 items-start pt-1">
+        {/* Qty */}
+        <div>
+          <label className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Qty</label>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            placeholder="0"
+            value={row.quantity}
+            onChange={(e) => onChangeQty(row.id, e.target.value)}
+            className={`w-full border rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all ${
+              error?.quantity ? "border-red-400 bg-red-50/50" : "border-slate-200 bg-white"
+            }`}
+          />
+          {error?.quantity && (
+            <span className="text-[9px] font-extrabold text-red-500 mt-0.5 block leading-tight">{error.quantity}</span>
+          )}
+        </div>
+
+        {/* Buy Price */}
+        <div>
+          <label className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Buy Price (₹)</label>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="0.00"
+            value={row.buyPrice}
+            onChange={(e) => onChangePrice(row.id, e.target.value)}
+            className={`w-full border rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all ${
+              error?.buyPrice ? "border-red-400 bg-red-50/50" : "border-slate-200 bg-white"
+            }`}
+          />
+          {error?.buyPrice && (
+            <span className="text-[9px] font-extrabold text-red-500 mt-0.5 block leading-tight">{error.buyPrice}</span>
+          )}
+        </div>
+
+        {/* Margin Preview */}
+        <div className="text-left pl-1 self-center">
+          {selectedProduct ? (
+            <div className="space-y-0.5">
+              <p className="text-[9px] text-slate-400 leading-tight">
+                Last: <span className="font-bold text-slate-700">₹{selectedProduct.currentCost.toLocaleString()}</span> • Sell: <span className="font-bold text-slate-700">₹{selectedProduct.sellPrice.toLocaleString()}</span>
+              </p>
+              {marginAbs !== null && marginPct !== null && (
+                <p className={`text-[9px] font-extrabold leading-tight ${marginAbs >= 0 ? "text-emerald-600" : "text-rose-500"}`}>
+                  Margin: {marginAbs >= 0 ? "▲" : "▼"} ₹{Math.abs(marginAbs).toLocaleString()} ({marginPct.toFixed(1)}%)
+                </p>
+              )}
+            </div>
+          ) : (
+            <span className="text-[9px] text-slate-300 pl-1">—</span>
+          )}
+        </div>
+
+        {/* Total Display */}
+        <div className="text-right self-center pr-1">
+          <span className={`text-xs font-black ${rowTotal > 0 ? "text-slate-800" : "text-slate-350"}`}>
+            ₹{rowTotal.toLocaleString()}
+          </span>
+        </div>
+
+        {/* Action Shortcuts: Duplicate and Delete */}
+        <div className="flex gap-1 justify-end self-center pt-0.5">
+          <button
+            type="button"
+            onClick={() => onDuplicate(row)}
+            title="Duplicate Row"
+            className="w-6 h-6 rounded-md bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 flex items-center justify-center transition-colors cursor-pointer"
+          >
+            <Plus size={11} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(row.id)}
+            disabled={!canDelete}
+            title="Delete Row"
+            className="w-6 h-6 rounded-md bg-slate-100 text-slate-400 hover:bg-red-50 hover:text-red-500 flex items-center justify-center transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <Trash2 size={11} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+SupplierInvoiceRowItem.displayName = "SupplierInvoiceRowItem";
+
+// ── Success Overlay component ────────────────────────────────────────────────
+
+interface SuccessOverlayProps {
+  purchases: number;
+  movements: number;
+  finance: number;
+}
+
+function SuccessOverlay({ purchases, movements, finance }: SuccessOverlayProps) {
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[9999] animate-in fade-in duration-200">
+      <div className="bg-slate-900 border border-slate-800 text-white rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl flex flex-col items-center gap-4 animate-in zoom-in-95 duration-200">
+        <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+          <CheckCircle size={36} className="animate-bounce" />
+        </div>
+        <div>
+          <h2 className="text-lg font-black tracking-tight text-white">✅ Supplier Invoice Recorded</h2>
+          <p className="text-xs text-slate-400 mt-1">Updates written to transaction logs successfully</p>
+        </div>
+        <div className="w-full bg-slate-850 border border-slate-800 rounded-xl p-4 text-left space-y-2 mt-2">
+          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Database Records Generated:</p>
+          <div className="flex justify-between text-xs font-mono border-b border-slate-800 pb-1.5">
+            <span className="text-slate-400">Purchase Records</span>
+            <span className="text-emerald-400 font-bold">{purchases}</span>
+          </div>
+          <div className="flex justify-between text-xs font-mono border-b border-slate-800 pb-1.5">
+            <span className="text-slate-400">Stock Movements</span>
+            <span className="text-emerald-400 font-bold">{movements}</span>
+          </div>
+          <div className="flex justify-between text-xs font-mono">
+            <span className="text-slate-400">Finance Transactions</span>
+            <span className="text-emerald-400 font-bold">{finance}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-2 font-bold uppercase tracking-widest">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+          Closing...
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Modal ───────────────────────────────────────────────────────────────
+
+function SupplierInvoiceModal({ isOpen, onClose, supplier, products, purchaseCount }: SupplierInvoiceModalProps) {
+  const { addPurchaseBatch, showToast } = useStore();
+
+  const today = new Date().toISOString().split("T")[0];
+
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [date, setDate] = useState(today);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("Cash");
+  const [paidInput, setPaidInput] = useState("");
+  const [notes, setNotes] = useState("");
+  const [rows, setRows] = useState<PurchaseLineItem[]>([blankRow()]);
   const [formError, setFormError] = useState("");
   const [initialized, setInitialized] = useState(false);
 
+  // Bulk Paste panel state
+  const [showBulkPaste, setShowBulkPaste] = useState(false);
+  const [bulkPasteText, setBulkPasteText] = useState("");
+
+  // Success screen state
+  const [successState, setSuccessState] = useState<{
+    purchases: number;
+    movements: number;
+    finance: number;
+  } | null>(null);
+
+  // Reset form when modal opens
   if (isOpen && !initialized) {
     setInitialized(true);
-    setForm(blankForm);
+    setInvoiceNumber("");
+    setDate(today);
+    setPaymentMethod("Cash");
+    setPaidInput("");
+    setNotes("");
+    setRows([blankRow()]);
     setFormError("");
+    setShowBulkPaste(false);
+    setBulkPasteText("");
+    setSuccessState(null);
   }
+
+  // ── Callbacks for Memoized Row Performance ──────────────────────────────────
+  const onChangeProduct = useCallback((id: string, productId: string) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, productId } : r));
+  }, []);
+
+  const onChangeQty = useCallback((id: string, quantity: string) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, quantity } : r));
+  }, []);
+
+  const onChangePrice = useCallback((id: string, buyPrice: string) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, buyPrice } : r));
+  }, []);
+
+  const onDuplicate = useCallback((row: PurchaseLineItem) => {
+    setRows((prev) => {
+      const idx = prev.findIndex((r) => r.id === row.id);
+      const newRow = {
+        id: crypto.randomUUID(),
+        productId: row.productId,
+        quantity: row.quantity,
+        buyPrice: row.buyPrice,
+      };
+      if (idx === -1) return [...prev, newRow];
+      const copy = [...prev];
+      copy.splice(idx + 1, 0, newRow);
+      return copy;
+    });
+  }, []);
+
+  const onDelete = useCallback((id: string) => {
+    setRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
+  }, []);
+
+  const addRow = useCallback(() => {
+    setRows((prev) => [...prev, blankRow()]);
+  }, []);
+
+  // ── Bulk Paste Import Handler ──────────────────────────────────────────────
+  const handleImportBulk = useCallback((text: string) => {
+    const lines = text.split(/\r?\n/);
+    const newItems: PurchaseLineItem[] = [];
+    const unrecognizedSKUs: string[] = [];
+
+    for (const line of lines) {
+      const clean = line.trim();
+      if (!clean) continue;
+
+      // Match whitespace split
+      const parts = clean.split(/\s+/);
+      if (parts.length >= 1) {
+        const sku = parts[0];
+        const qty = parts[1] || "1";
+        const buyPrice = parts[2] || "0";
+
+        // Find product by SKU
+        const matched = products.find((p) => p.sku.toLowerCase() === sku.toLowerCase());
+        if (matched) {
+          newItems.push({
+            id: crypto.randomUUID(),
+            productId: matched.id,
+            quantity: qty,
+            buyPrice: buyPrice,
+          });
+        } else {
+          unrecognizedSKUs.push(sku);
+        }
+      }
+    }
+
+    if (newItems.length > 0) {
+      setRows((prev) => {
+        // If the single initial row is blank/empty, replace it
+        const isInitialEmpty = prev.length === 1 && !prev[0].productId && !prev[0].quantity && !prev[0].buyPrice;
+        return isInitialEmpty ? newItems : [...prev, ...newItems];
+      });
+      showToast(`Imported ${newItems.length} products.`, "success");
+    }
+
+    if (unrecognizedSKUs.length > 0) {
+      showToast(`Skipped ${unrecognizedSKUs.length} unknown SKUs: ${unrecognizedSKUs.join(", ")}`, "info");
+    }
+  }, [products, showToast]);
 
   if (!isOpen) return null;
-
-  function setField<K extends keyof typeof form>(key: K, val: (typeof form)[K]) {
-    setForm((prev) => ({ ...prev, [key]: val }));
-    setFormError("");
-  }
 
   function handleClose() {
     setInitialized(false);
     onClose();
   }
 
-  function handleSave() {
-    if (!form.productId) { setFormError("Please select a product."); return; }
-    const qty = parseInt(form.quantity, 10);
-    const price = parseFloat(form.buyPrice);
-    if (!qty || qty <= 0) { setFormError("Quantity must be a positive number."); return; }
-    if (isNaN(price) || price < 0) { setFormError("Buy price must be a valid non-negative number."); return; }
-    if (!form.date) { setFormError("Please select a date."); return; }
+  // ── Live Summary Calculations ─────────────────
+  const subtotal = rows.reduce((s, r) => {
+    const qty = parseInt(r.quantity) || 0;
+    const price = parseFloat(r.buyPrice) || 0;
+    return s + qty * price;
+  }, 0);
 
-    const total = qty * price;
-    let paid = 0;
-    
-    if (form.paymentStatus === "Paid") {
-      paid = total;
-    } else if (form.paymentStatus === "Credit") {
-      paid = 0;
-    } else if (form.paymentStatus === "Partial") {
-      const parsedPaid = parseFloat(form.amountPaid);
-      if (isNaN(parsedPaid) || parsedPaid <= 0) {
-        setFormError("Please enter a valid amount paid.");
-        return;
-      }
-      if (parsedPaid >= total) {
-        setFormError("Amount paid cannot be equal to or greater than the total purchase amount. Select 'Paid' instead.");
-        return;
-      }
-      paid = parsedPaid;
+  const totalPaid = Math.min(Math.max(parseFloat(paidInput) || 0, 0), subtotal);
+  const balance = Math.max(0, subtotal - totalPaid);
+  const totalUnits = rows.reduce((s, r) => s + (parseInt(r.quantity) || 0), 0);
+  const productCount = rows.filter((r) => r.productId).length;
+
+  // ERP purchase preview sequence
+  const year = new Date().getFullYear();
+  const firstNum = purchaseCount + 1;
+  const lastNum = purchaseCount + rows.length;
+  const purPreview = rows.length === 1
+    ? `PUR-${year}-${String(firstNum).padStart(5, "0")}`
+    : `PUR-${year}-${String(firstNum).padStart(5, "0")} → ${String(lastNum).padStart(5, "0")}`;
+
+  // ── Inline Validation Logic ───────────────────
+  const rowErrors: Record<string, { quantity?: string; buyPrice?: string; productId?: string }> = {};
+  rows.forEach((r) => {
+    rowErrors[r.id] = {};
+    if (!r.productId) {
+      rowErrors[r.id].productId = "Please select product";
     }
+    const qVal = parseInt(r.quantity);
+    if (!r.quantity) {
+      rowErrors[r.id].quantity = "Qty required";
+    } else if (isNaN(qVal) || qVal <= 0) {
+      rowErrors[r.id].quantity = "Must be > 0";
+    }
+    const pVal = parseFloat(r.buyPrice);
+    if (!r.buyPrice) {
+      rowErrors[r.id].buyPrice = "Price required";
+    } else if (isNaN(pVal) || pVal < 0) {
+      rowErrors[r.id].buyPrice = "Must be >= 0";
+    }
+  });
+
+  const isFormValid = rows.length > 0 && Object.values(rowErrors).every(
+    (err) => !err.productId && !err.quantity && !err.buyPrice
+  );
+
+  // ── Validation & Save ─────────────────────────
+  function handleSave() {
+    if (!isFormValid) return;
+
+    if (!date) { setFormError("Please select a date."); return; }
+
+    const rawPaid = parseFloat(paidInput) || 0;
+    if (rawPaid < 0) { setFormError("Amount paid cannot be negative."); return; }
+    if (rawPaid > subtotal) { setFormError("Amount paid cannot exceed the invoice total."); return; }
+
+    const items = rows.map((r) => ({
+      productId: r.productId,
+      quantity: parseInt(r.quantity),
+      buyPrice: parseFloat(r.buyPrice),
+    }));
 
     try {
-      addPurchase({
+      addPurchaseBatch({
         supplierId: supplier.id,
-        productId: form.productId,
-        quantity: qty,
-        buyPrice: price,
-        invoiceNumber: form.invoiceNumber.trim(),
-        date: form.date,
-        notes: form.notes.trim(),
-        paymentStatus: form.paymentStatus,
-        amountPaid: paid,
-        paymentMethod: form.paymentStatus !== "Credit" ? form.paymentMethod : undefined,
+        invoiceNumber: invoiceNumber.trim(),
+        date,
+        notes: notes.trim(),
+        paymentMethod,
+        totalPaid: rawPaid,
+        items,
       });
-      showToast("Purchase recorded successfully.", "success");
-      setInitialized(false);
-      onClose();
+
+      // Show success screen animations
+      setSuccessState({
+        purchases: items.length,
+        movements: items.length,
+        finance: rawPaid > 0 ? items.length : 0,
+      });
+
+      // Auto close after 2s
+      setTimeout(() => {
+        setSuccessState(null);
+        setInitialized(false);
+        onClose();
+      }, 2000);
+
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to record purchase.";
-      setFormError(msg);
+      setFormError(err instanceof Error ? err.message : "Failed to record invoice.");
     }
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[92vh] overflow-y-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-200 sticky top-0 bg-white z-10 rounded-t-2xl">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
-              <ShoppingBag size={16} className="text-emerald-700" />
-            </div>
-            <div>
-              <h2 className="font-bold text-slate-800 text-base leading-tight">Add Purchase</h2>
-              <p className="text-[10px] text-slate-400 leading-tight">{supplier.name}</p>
-            </div>
-          </div>
-          <button onClick={handleClose} className="text-slate-400 hover:text-slate-700 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors">
-            <X size={18} />
-          </button>
-        </div>
+    <>
+      {successState && (
+        <SuccessOverlay
+          purchases={successState.purchases}
+          movements={successState.movements}
+          finance={successState.finance}
+        />
+      )}
 
-        {/* Body */}
-        <div className="p-5 space-y-4">
-          {formError && (
-            <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl">
-              <AlertCircle size={15} className="shrink-0 mt-0.5" />
-              <span>{formError}</span>
-            </div>
-          )}
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        {/* Modal — flex column so sticky summary+footer stay outside scroll */}
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[94vh] flex flex-col animate-in zoom-in-95 duration-150">
 
-          {/* Product */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
-              Product <span className="text-red-500">*</span>
-            </label>
-            <select value={form.productId} onChange={(e) => setField("productId", e.target.value)} className={INPUT}>
-              <option value="">— Select a product —</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Quantity + Buy Price */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
-                Quantity <span className="text-red-500">*</span>
-              </label>
-              <input type="number" min="1" placeholder="0" value={form.quantity} onChange={(e) => setField("quantity", e.target.value)} className={INPUT} />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
-                Buy Price (₹) <span className="text-red-500">*</span>
-              </label>
-              <input type="number" min="0" step="0.01" placeholder="0.00" value={form.buyPrice} onChange={(e) => setField("buyPrice", e.target.value)} className={INPUT} />
-            </div>
-          </div>
-
-          {/* Invoice Number */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Invoice Number</label>
-            <input type="text" placeholder="e.g. INV-2025-001" value={form.invoiceNumber} onChange={(e) => setField("invoiceNumber", e.target.value)} className={INPUT} />
-          </div>
-
-          {/* Date + Payment Status */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
-                Date <span className="text-red-500">*</span>
-              </label>
-              <input type="date" value={form.date} onChange={(e) => setField("date", e.target.value)} className={INPUT} />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Payment Status</label>
-              <select value={form.paymentStatus} onChange={(e) => setField("paymentStatus", e.target.value as "Paid" | "Partial" | "Credit")} className={INPUT}>
-                <option value="Paid">Paid</option>
-                <option value="Partial">Partial</option>
-                <option value="Credit">Credit</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Conditional Payment Method dropdown for Paid / Partial */}
-          {form.paymentStatus !== "Credit" && (
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Payment Method</label>
-              <select value={form.paymentMethod} onChange={(e) => setField("paymentMethod", e.target.value as PaymentMethod)} className={INPUT}>
-                <option value="Cash">Cash</option>
-                <option value="UPI">UPI</option>
-                <option value="Card">Card</option>
-              </select>
-            </div>
-          )}
-
-          {/* Conditional Amount Paid input for Partial */}
-          {form.paymentStatus === "Partial" && (
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
-                Amount Paid (₹) <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="How much was paid upfront?"
-                value={form.amountPaid}
-                onChange={(e) => setField("amountPaid", e.target.value)}
-                className={INPUT}
-              />
-              {form.quantity && form.buyPrice && form.amountPaid && (() => {
-                const total = (parseInt(form.quantity) || 0) * (parseFloat(form.buyPrice) || 0);
-                const paid = parseFloat(form.amountPaid) || 0;
-                const due = Math.max(0, total - paid);
-                return due > 0 ? (
-                  <p className="text-xs text-amber-600 font-semibold mt-1">
-                    ₹{due.toLocaleString()} remaining (Credit)
-                  </p>
-                ) : null;
-              })()}
-            </div>
-          )}
-
-          {/* Notes */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Notes</label>
-            <textarea placeholder="Any notes about this purchase…" rows={2} value={form.notes} onChange={(e) => setField("notes", e.target.value)} className={INPUT + " resize-none"} />
-          </div>
-
-          {/* Summary preview */}
-          {form.productId && form.quantity && form.buyPrice && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
-              <p className="text-xs font-bold text-emerald-800 mb-1">Purchase Summary</p>
-              <div className="flex justify-between items-center text-xs text-emerald-700">
-                <span>{parseInt(form.quantity) || 0} units × ₹{parseFloat(form.buyPrice).toLocaleString() || "0"}</span>
-                <span className="font-bold text-base text-emerald-900">
-                  = ₹{((parseInt(form.quantity) || 0) * (parseFloat(form.buyPrice) || 0)).toLocaleString()}
-                </span>
+          {/* ── Header ── */}
+          <div className="flex items-center justify-between p-5 border-b border-slate-200 shrink-0 rounded-t-2xl">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+                <ShoppingBag size={16} className="text-emerald-700" />
               </div>
-              {form.paymentStatus === "Partial" && form.amountPaid && (
-                <div className="mt-2 pt-2 border-t border-emerald-200 flex justify-between text-xs text-emerald-700">
-                  <span>Due after payment:</span>
-                  <span className="font-bold text-amber-700">
-                    ₹{Math.max(0, ((parseInt(form.quantity) || 0) * (parseFloat(form.buyPrice) || 0)) - (parseFloat(form.amountPaid) || 0)).toLocaleString()}
-                  </span>
+              <div>
+                <h2 className="font-bold text-slate-800 text-base leading-tight">Record Supplier Invoice</h2>
+                <p className="text-[10px] text-slate-400 leading-tight">{supplier.name}</p>
+              </div>
+            </div>
+            <button onClick={handleClose} className="text-slate-400 hover:text-slate-700 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors">
+              <X size={18} />
+            </button>
+          </div>
+
+          {/* ── Scrollable body ── */}
+          <div className="overflow-y-auto flex-1 p-5 space-y-4">
+
+            {/* Error Banner */}
+            {formError && (
+              <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl shrink-0">
+                <AlertCircle size={15} className="shrink-0 mt-0.5" />
+                <span>{formError}</span>
+              </div>
+            )}
+
+            {/* Invoice Header: Number | Date | Payment Method */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+                  Supplier Invoice No.
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. INV-5482"
+                  value={invoiceNumber}
+                  onChange={(e) => { setInvoiceNumber(e.target.value); setFormError(""); }}
+                  className={INPUT}
+                />
+                {/* ERP purchase number preview */}
+                <p className="text-[10px] text-slate-400 mt-1 font-mono pl-1 leading-tight">
+                  ERP: <span className="font-bold text-navy-800">{purPreview}</span>
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+                  Date <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => { setDate(e.target.value); setFormError(""); }}
+                  className={INPUT}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Payment Method</label>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => { setPaymentMethod(e.target.value as PaymentMethod); setFormError(""); }}
+                  className={INPUT}
+                >
+                  <option value="Cash">Cash</option>
+                  <option value="UPI">UPI</option>
+                  <option value="Card">Card / Bank</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Products Section Header & Bulk Import Actions */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-black text-slate-600 uppercase tracking-wider">Products</h3>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowBulkPaste(!showBulkPaste);
+                      setBulkPasteText("");
+                    }}
+                    className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                  >
+                    Bulk Paste
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addRow}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Plus size={13} />
+                    Add Row
+                  </button>
+                </div>
+              </div>
+
+              {/* Bulk Paste Expansion */}
+              {showBulkPaste && (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5 animate-in slide-in-from-top-2 duration-150">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                      Bulk Paste (Format: SKU Qty BuyPrice)
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder={"OF-101 2 145\nAF-201 1 620"}
+                      value={bulkPasteText}
+                      onChange={(e) => setBulkPasteText(e.target.value)}
+                      className="w-full border border-slate-200 rounded-lg p-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all font-mono placeholder:text-slate-350"
+                    />
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setShowBulkPaste(false)}
+                      className="px-3 py-1.5 text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!bulkPasteText.trim()}
+                      onClick={() => {
+                        handleImportBulk(bulkPasteText);
+                        setBulkPasteText("");
+                        setShowBulkPaste(false);
+                      }}
+                      className="px-3 py-1.5 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Import Rows
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
-          )}
-        </div>
 
-        {/* Footer */}
-        <div className="flex gap-3 px-5 py-4 border-t border-slate-200 bg-slate-50/50 rounded-b-2xl sticky bottom-0">
-          <button onClick={handleClose} className="flex-1 px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer">
-            Cancel
-          </button>
-          <button onClick={handleSave} className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-500 transition-colors cursor-pointer">
-            Record Purchase
-          </button>
+            {/* List of Product Rows (Memoized for peak performance) */}
+            <div className="space-y-2.5">
+              {rows.map((row, idx) => (
+                <SupplierInvoiceRowItem
+                  key={row.id}
+                  row={row}
+                  idx={idx}
+                  products={products}
+                  error={rowErrors[row.id]}
+                  onChangeProduct={onChangeProduct}
+                  onChangeQty={onChangeQty}
+                  onChangePrice={onChangePrice}
+                  onDuplicate={onDuplicate}
+                  onDelete={onDelete}
+                  canDelete={rows.length > 1}
+                />
+              ))}
+            </div>
+
+            {/* Add Row helper button at bottom */}
+            {rows.length >= 3 && (
+              <button
+                type="button"
+                onClick={addRow}
+                className="w-full py-2 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-dashed border-emerald-300 rounded-xl transition-colors cursor-pointer"
+              >
+                + Add Another Product
+              </button>
+            )}
+
+            {/* Notes field */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Notes (optional)</label>
+              <textarea
+                placeholder="Any notes about this invoice…"
+                rows={2}
+                value={notes}
+                onChange={(e) => { setNotes(e.target.value); }}
+                className={INPUT + " resize-none"}
+              />
+            </div>
+          </div>
+
+          {/* ── Sticky Summary & Action Footer ── */}
+          <div className="shrink-0 border-t border-slate-200 bg-slate-50/95 rounded-b-2xl">
+
+            {/* Rich 8-Card ERP Summary Grid */}
+            <div className="px-5 pt-4 pb-3">
+              <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Products</p>
+                  <p className="text-sm font-black text-slate-800 mt-0.5">{productCount}</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Units</p>
+                  <p className="text-sm font-black text-slate-800 mt-0.5">{totalUnits}</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Subtotal</p>
+                  <p className="text-sm font-black text-slate-800 mt-0.5">₹{subtotal.toLocaleString()}</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">GST</p>
+                  <p className="text-sm font-black text-slate-450 mt-0.5">₹0</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Discount</p>
+                  <p className="text-sm font-black text-slate-450 mt-0.5">₹0</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Grand Total</p>
+                  <p className="text-sm font-black text-slate-800 mt-0.5">₹{subtotal.toLocaleString()}</p>
+                </div>
+                <div className="bg-white border border-emerald-250 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-emerald-600 uppercase tracking-wider">Paid</p>
+                  <p className="text-sm font-black text-emerald-700 mt-0.5">₹{totalPaid.toLocaleString()}</p>
+                </div>
+                <div className={`border rounded-xl p-2 text-center ${balance > 0 ? "bg-amber-50 border-amber-200" : "bg-white border-slate-200"}`}>
+                  <p className={`text-[9px] font-bold uppercase tracking-wider ${balance > 0 ? "text-amber-600" : "text-slate-400"}`}>Balance</p>
+                  <p className={`text-sm font-black mt-0.5 ${balance > 0 ? "text-amber-700" : "text-slate-400"}`}>₹{balance.toLocaleString()}</p>
+                </div>
+              </div>
+
+              {/* Amount Paid Inline Input */}
+              <div className="mt-3 flex items-center gap-3">
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0 pl-1">
+                  Amount Paid (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Leave 0 for full credit"
+                  value={paidInput}
+                  onChange={(e) => { setPaidInput(e.target.value); setFormError(""); }}
+                  className="flex-1 border border-slate-200 rounded-xl px-3.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-400 font-bold"
+                />
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex gap-3 px-5 py-3 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={handleClose}
+                className="flex-1 px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={!isFormValid}
+                className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-500 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Record Invoice →
+              </button>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
+
+
+
+
+
 
 // ─────────────────────────────────────────────
 //  EDIT SUPPLIER MODAL (inline)
@@ -419,7 +1022,7 @@ type TabId = (typeof TABS)[number]["id"];
 
 export default function SupplierDetailsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { state, recordSupplierPayment, getSupplierPaymentsBySupplier, updatePurchase } = useStore();
+  const { state, addPurchaseBatch, addPurchaseReturn, recordSupplierPayment, getSupplierPaymentsBySupplier, getPurchaseReturnsByPurchase, getPurchaseReturnsBySupplier, updatePurchase } = useStore();
   const { isOwner } = useRole();
 
   const [activeTab, setActiveTab] = useState<TabId>("overview");
@@ -427,6 +1030,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
   const [showEditSupplier, setShowEditSupplier] = useState(false);
   const [payPurchase, setPayPurchase] = useState<Purchase | null>(null);
   const [editPurchase, setEditPurchase] = useState<Purchase | null>(null);
+  const [returnPurchase, setReturnPurchase] = useState<Purchase | null>(null);
 
   const supplier = useMemo(() => (state.suppliers || []).find((s) => s.id === id), [state.suppliers, id]);
   const purchases = useMemo(() => (state.purchases || []).filter((p) => p.supplierId === id).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()), [state.purchases, id]);
@@ -445,11 +1049,22 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
 
     const lifetimePurchase = purchases.reduce((sum, p) => sum + (p.totalAmount ?? (p.buyPrice * p.quantity)), 0);
 
+    const payments = getSupplierPaymentsBySupplier(id);
+    const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
+
+    const returns = getPurchaseReturnsBySupplier(id);
+    const returnsCount = returns.length;
+    const totalRefunded = returns.reduce((s, r) => s + r.refundAmount, 0);
+    const totalReturnedValue = returns.reduce((s, r) => s + r.totalAmount, 0);
+
+    // Outstanding = Original Purchase Total - Total Returned Value - Total Paid
     const outstanding = purchases.reduce((sum, p) => {
-      const paymentsForP = getSupplierPaymentsBySupplier(id).filter(sp => sp.purchaseId === p.id);
-      const paidForP = paymentsForP.reduce((s, pay) => s + pay.amount, 0);
       const totalForP = p.totalAmount ?? (p.buyPrice * p.quantity);
-      return sum + Math.max(0, totalForP - paidForP);
+      const returnsForP = returns.filter((r) => r.purchaseId === p.id);
+      const returnedValue = returnsForP.reduce((s, r) => s + r.totalAmount, 0);
+      const paymentsForP = payments.filter((sp) => sp.purchaseId === p.id);
+      const paid = paymentsForP.reduce((s, pay) => s + pay.amount, 0);
+      return sum + Math.max(0, totalForP - returnedValue - paid);
     }, 0);
 
     const lastPurchaseVal = purchases[0] ? (purchases[0].totalAmount ?? (purchases[0].buyPrice * purchases[0].quantity)) : 0;
@@ -458,8 +1073,20 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
 
     const averagePurchase = totalPurchases > 0 ? lifetimePurchase / totalPurchases : 0;
 
-    return { totalPurchases, totalUnits, lifetimePurchase, outstanding, lastPurchase, averagePurchase, lastPurchaseDate };
-  }, [purchases, id, getSupplierPaymentsBySupplier]);
+    return {
+      totalPurchases,
+      totalUnits,
+      lifetimePurchase,
+      outstanding,
+      lastPurchase,
+      averagePurchase,
+      lastPurchaseDate,
+      returnsCount,
+      totalPaid,
+      totalRefunded,
+      totalReturnedValue,
+    };
+  }, [purchases, id, getSupplierPaymentsBySupplier, getPurchaseReturnsBySupplier]);
 
   // Activity feed: all purchases as events
   const activityFeed = useMemo(() => {
@@ -524,31 +1151,34 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
           )}
           <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-2 bg-yellow-400 hover:bg-yellow-300 text-navy-950 text-sm font-bold px-4 py-2.5 rounded-xl transition-all shadow-sm hover:shadow cursor-pointer">
             <Plus size={16} />
-            Add Purchase
+            Record Invoice
           </button>
         </div>
       </div>
 
       {/* KPI Cards */}
-      <div className={`grid grid-cols-2 md:grid-cols-3 ${isOwner ? "lg:grid-cols-6" : "lg:grid-cols-2"} gap-4`}>
+      <div className={`grid grid-cols-2 sm:grid-cols-3 ${isOwner ? "lg:grid-cols-4 xl:grid-cols-9" : "lg:grid-cols-2"} gap-4`}>
         {[
           { label: "Total Purchases", value: kpis.totalPurchases, icon: ShoppingBag, color: "text-blue-600", bg: "bg-blue-50" },
           { label: "Units Received", value: kpis.totalUnits, icon: Package, color: "text-purple-700", bg: "bg-purple-50" },
           ...(isOwner ? [
             { label: "Lifetime Purchases", value: `₹${kpis.lifetimePurchase.toLocaleString()}`, icon: DollarSign, color: "text-emerald-700", bg: "bg-emerald-50" },
             { label: "Outstanding Dues", value: `₹${kpis.outstanding.toLocaleString()}`, icon: Coins, color: "text-rose-600", bg: "bg-rose-50" },
+            { label: "Total Paid", value: `₹${kpis.totalPaid.toLocaleString()}`, icon: Coins, color: "text-blue-700", bg: "bg-blue-50" },
+            { label: "Returns", value: `${kpis.returnsCount} items`, icon: CornerDownLeft, color: "text-rose-700", bg: "bg-rose-50" },
+            { label: "Refunded", value: `₹${kpis.totalRefunded.toLocaleString()}`, icon: DollarSign, color: "text-emerald-700", bg: "bg-emerald-50" },
             { label: "Last Purchase", value: kpis.lastPurchase, icon: Calendar, color: "text-amber-700", bg: "bg-amber-50" },
             { label: "Average Purchase", value: `₹${Math.round(kpis.averagePurchase).toLocaleString()}`, icon: CheckCircle, color: "text-blue-700", bg: "bg-blue-50" },
           ] : []),
         ].map((card) => (
-          <div key={card.label} className="bg-white border border-slate-200 rounded-2xl p-5 hover:shadow-sm transition-shadow">
-            <div className="flex items-start justify-between gap-2">
+          <div key={card.label} className="bg-white border border-slate-200 rounded-2xl p-4 hover:shadow-sm transition-shadow">
+            <div className="flex flex-col justify-between h-full gap-2">
               <div className="min-w-0">
-                <p className="text-slate-500 text-xs">{card.label}</p>
-                <p className="text-sm font-bold text-slate-800 mt-1 truncate" title={String(card.value)}>{card.value}</p>
+                <p className="text-slate-500 text-[10px] uppercase tracking-wider font-bold">{card.label}</p>
+                <p className="text-sm font-black text-slate-800 mt-1 truncate" title={String(card.value)}>{card.value}</p>
               </div>
-              <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${card.bg} ${card.color}`}>
-                <card.icon size={18} />
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 self-end ${card.bg} ${card.color}`}>
+                <card.icon size={16} />
               </div>
             </div>
           </div>
@@ -809,6 +1439,15 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                                   <Coins size={13} />
                                 </button>
                               )}
+                              {isOwner && (pur.quantity - (pur.returnedQuantity ?? 0)) > 0 && (
+                                <button
+                                  onClick={() => setReturnPurchase(pur)}
+                                  title="Return Stock"
+                                  className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition-colors cursor-pointer"
+                                >
+                                  <CornerDownLeft size={13} />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -849,24 +1488,56 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                     const paymentsForP = supplierPayments
                       .filter((sp) => sp.purchaseId === pur.id)
                       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+                    const returnsForP = getPurchaseReturnsByPurchase(pur.id)
+                      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+                    type TimelineEvent = 
+                      | { type: "payment"; id: string; date: string; amount: number; method: PaymentMethod; isUpfront?: boolean; paidBy: string; note?: string }
+                      | { type: "return"; id: string; date: string; qty: number; buyPrice: number; totalAmount: number; refundAmount: number; reason: string; returnedBy: string };
+
+                    const allEvents: TimelineEvent[] = [
+                      ...paymentsForP.map((p): TimelineEvent => ({
+                        type: "payment",
+                        id: p.id,
+                        date: p.date,
+                        amount: p.amount,
+                        method: p.method,
+                        isUpfront: p.isUpfront,
+                        paidBy: p.paidBy,
+                        note: p.note,
+                      })),
+                      ...returnsForP.map((r): TimelineEvent => ({
+                        type: "return",
+                        id: r.id,
+                        date: r.createdAt,
+                        qty: r.quantity,
+                        buyPrice: r.buyPrice,
+                        totalAmount: r.totalAmount,
+                        refundAmount: r.refundAmount,
+                        reason: r.reason,
+                        returnedBy: r.returnedBy,
+                      })),
+                    ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
                     
                     // Compute timeline events with remaining balance step-by-step
-                    let runningBalance = total;
-                    const timelineEvents = paymentsForP.map((sp) => {
-                      runningBalance = Math.max(0, Math.round((runningBalance - sp.amount) * 100) / 100);
+                    let runningPaid = 0;
+                    let runningReturned = 0;
+                    const timelineEvents = allEvents.map((ev) => {
+                      if (ev.type === "payment") {
+                        runningPaid += ev.amount;
+                      } else {
+                        runningReturned += ev.totalAmount;
+                      }
+                      const runningBalance = Math.max(0, Math.round((total - runningReturned - runningPaid) * 100) / 100);
                       return {
-                        id: sp.id,
-                        date: sp.date,
-                        amount: sp.amount,
-                        method: sp.method,
+                        ...ev,
                         remaining: runningBalance,
-                        isUpfront: sp.isUpfront,
-                        paidBy: sp.paidBy,
-                        note: sp.note,
                       };
                     });
 
-                    const isFullyPaid = runningBalance <= 0;
+                    const finalOutstanding = Math.max(0, Math.round((total - runningReturned - runningPaid) * 100) / 100);
+                    const isFullyPaid = finalOutstanding <= 0;
 
                     return (
                       <div key={pur.id} className="bg-slate-50/50 border border-slate-200 rounded-2xl p-5 space-y-4 hover:bg-slate-50/80 transition-all">
@@ -899,37 +1570,64 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                             </div>
                           </div>
 
-                          {/* Payments Events */}
+                          {/* Events */}
                           {timelineEvents.map((ev, index) => {
-                            const methodColors: Record<PaymentMethod, string> = {
-                              Cash: "bg-emerald-100 text-emerald-800 border-emerald-200",
-                              UPI: "bg-blue-100 text-blue-800 border-blue-200",
-                              Card: "bg-purple-100 text-purple-800 border-purple-200",
-                              Credit: "bg-red-100 text-red-800 border-red-200",
-                            };
-                            return (
-                              <div key={ev.id} className="relative">
-                                <span className="absolute -left-[27px] top-1 w-3.5 h-3.5 rounded-full border-2 border-emerald-500 bg-white flex items-center justify-center">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                                </span>
-                                <div className="space-y-1">
-                                  <div className="flex items-center gap-2">
-                                    <p className="text-xs font-bold text-slate-700">
-                                      {ev.isUpfront ? "Upfront Payment" : `Payment #${index}`}
+                            if (ev.type === "payment") {
+                              const methodColors: Record<PaymentMethod, string> = {
+                                Cash: "bg-emerald-100 text-emerald-800 border-emerald-200",
+                                UPI: "bg-blue-100 text-blue-800 border-blue-200",
+                                Card: "bg-purple-100 text-purple-800 border-purple-200",
+                                Credit: "bg-red-100 text-red-800 border-red-200",
+                              };
+                              return (
+                                <div key={ev.id} className="relative">
+                                  <span className="absolute -left-[27px] top-1 w-3.5 h-3.5 rounded-full border-2 border-emerald-500 bg-white flex items-center justify-center">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                  </span>
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-xs font-bold text-slate-700">
+                                        {ev.isUpfront ? "Upfront Payment" : `Payment #${index}`}
+                                      </p>
+                                      <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full border ${methodColors[ev.method] || "bg-slate-100 text-slate-600 border-slate-200"}`}>
+                                        {ev.method}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-slate-800 font-semibold">
+                                      Paid ₹{ev.amount.toLocaleString()} <span className="text-[10px] text-slate-400 font-normal">· Balance remaining: ₹{ev.remaining.toLocaleString()}</span>
                                     </p>
-                                    <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full border ${methodColors[ev.method] || "bg-slate-100 text-slate-600 border-slate-200"}`}>
-                                      {ev.method}
-                                    </span>
+                                    <p className="text-[10px] text-slate-400">
+                                      {formatDate(ev.date)} · Paid by {ev.paidBy} {ev.note ? `· "${ev.note}"` : ""}
+                                    </p>
                                   </div>
-                                  <p className="text-xs text-slate-800 font-semibold">
-                                    Paid ₹{ev.amount.toLocaleString()} <span className="text-[10px] text-slate-400 font-normal">· Balance remaining: ₹{ev.remaining.toLocaleString()}</span>
-                                  </p>
-                                  <p className="text-[10px] text-slate-400">
-                                    {formatDate(ev.date)} · Paid by {ev.paidBy} {ev.note ? `· "${ev.note}"` : ""}
-                                  </p>
                                 </div>
-                              </div>
-                            );
+                              );
+                            } else {
+                              return (
+                                <div key={ev.id} className="relative">
+                                  <span className="absolute -left-[27px] top-1 w-3.5 h-3.5 rounded-full border-2 border-rose-500 bg-white flex items-center justify-center">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                  </span>
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-xs font-bold text-slate-700">
+                                        Returned Qty: {ev.qty}
+                                      </p>
+                                      <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full border bg-rose-50 text-rose-700 border-rose-200">
+                                        Return
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-slate-800 font-semibold">
+                                      {ev.refundAmount > 0 ? `Refunded ₹${ev.refundAmount.toLocaleString()}` : "Adjustment only"}
+                                      <span className="text-[10px] text-slate-400 font-normal"> · Value: ₹{ev.totalAmount.toLocaleString()} · Balance remaining: ₹{ev.remaining.toLocaleString()}</span>
+                                    </p>
+                                    <p className="text-[10px] text-slate-400">
+                                      {formatDate(ev.date)} · Reason: "{ev.reason}" · Returned by {ev.returnedBy}
+                                    </p>
+                                  </div>
+                                </div>
+                              );
+                            }
                           })}
                         </div>
 
@@ -940,15 +1638,15 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                             <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
                               isFullyPaid
                                 ? "bg-green-100 text-green-800 border-green-200"
-                                : runningBalance < total
+                                : (runningPaid > 0 || runningReturned > 0)
                                 ? "bg-amber-100 text-amber-800 border-amber-200"
                                 : "bg-red-100 text-red-800 border-red-200"
                             }`}>
-                              {isFullyPaid ? "Paid" : runningBalance < total ? "Partial" : "Credit"}
+                              {isFullyPaid ? "Paid" : (runningPaid > 0 || runningReturned > 0) ? "Partial" : "Credit"}
                             </span>
                           </div>
                           <div className="font-semibold text-slate-700">
-                            Outstanding: <span className={runningBalance > 0 ? "text-red-600 font-bold" : "text-slate-400"}>₹{runningBalance.toLocaleString()}</span>
+                            Outstanding: <span className={finalOutstanding > 0 ? "text-red-600 font-bold" : "text-slate-400"}>₹{finalOutstanding.toLocaleString()}</span>
                           </div>
                         </div>
                       </div>
@@ -1000,11 +1698,12 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
       </div>
 
       {/* Modals */}
-      <AddPurchaseModal
+      <SupplierInvoiceModal
         isOpen={showAddPurchase}
         onClose={() => setShowAddPurchase(false)}
         supplier={supplier}
         products={products}
+        purchaseCount={state.purchases?.length ?? 0}
       />
       <EditSupplierModal
         isOpen={showEditSupplier}
@@ -1026,6 +1725,15 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
           onClose={() => setEditPurchase(null)}
           purchase={editPurchase}
           products={products}
+        />
+      )}
+      {returnPurchase && supplier && (
+        <ReturnPurchaseModal
+          purchase={returnPurchase}
+          supplier={supplier}
+          products={products}
+          onClose={() => setReturnPurchase(null)}
+          addPurchaseReturn={addPurchaseReturn}
         />
       )}
     </div>
@@ -1391,4 +2099,294 @@ function EditPurchaseModal({ isOpen, onClose, purchase, products }: EditPurchase
       </div>
     </div>
   );
+}
+
+// ─────────────────────────────────────────────
+//  RETURN PURCHASE MODAL  (Sprint 4.5)
+// ─────────────────────────────────────────────
+
+interface ReturnPurchaseModalProps {
+  purchase: Purchase;
+  supplier: Supplier;
+  products: Product[];
+  onClose: () => void;
+  addPurchaseReturn: (
+    record: Omit<PurchaseReturn, "id" | "createdAt" | "originalPurchaseQuantity" | "originalPurchaseValue">,
+    refundMethod: PaymentMethod | "Adjustment"
+  ) => void;
+}
+
+function ReturnPurchaseModal({
+  purchase,
+  supplier,
+  products,
+  onClose,
+  addPurchaseReturn,
+}: ReturnPurchaseModalProps) {
+  const { showToast } = useStore();
+  const product = products.find((p) => p.id === purchase.productId);
+
+  const availableQty = purchase.quantity - (purchase.returnedQuantity ?? 0);
+  const maxRefund = roundMoney(availableQty * purchase.buyPrice);
+
+  const [qty, setQty] = useState("1");
+  const [refundInput, setRefundInput] = useState(String(roundMoney(1 * purchase.buyPrice)));
+  const [refundMethod, setRefundMethod] = useState<PaymentMethod | "Adjustment">("Cash");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  const parsedQty = Math.floor(parseFloat(qty) || 0);
+  const parsedRefund = Math.round(parseFloat(refundInput) * 100) / 100 || 0;
+  const returnTotal = roundMoney(parsedQty * purchase.buyPrice);
+
+  // Auto-recalculate refund when qty changes
+  function handleQtyChange(val: string) {
+    setQty(val);
+    const q = Math.floor(parseFloat(val) || 0);
+    if (q > 0) setRefundInput(String(roundMoney(q * purchase.buyPrice)));
+    setError("");
+  }
+
+  function validate(): string | null {
+    if (!reason.trim()) return "Please enter a reason for the return.";
+    if (parsedQty <= 0 || !Number.isInteger(parsedQty)) return "Return quantity must be a whole positive number.";
+    if (parsedQty > availableQty) return `Cannot return more than ${availableQty} unit(s) available on this purchase.`;
+    if (parsedRefund < 0) return "Refund amount cannot be negative.";
+    if (parsedRefund > returnTotal) return `Refund cannot exceed return value of ₹${returnTotal.toLocaleString()}.`;
+    if (refundMethod !== "Adjustment" && parsedRefund === 0) return "Enter the refund amount, or choose 'Adjustment' if no money is returned.";
+    return null;
+  }
+
+  function handleSubmit() {
+    const err = validate();
+    if (err) { setError(err); return; }
+    setError("");
+
+    addPurchaseReturn(
+      {
+        purchaseId: purchase.id,
+        supplierId: purchase.supplierId,
+        productId: purchase.productId,
+        quantity: parsedQty,
+        buyPrice: purchase.buyPrice,
+        totalAmount: returnTotal,
+        refundAmount: refundMethod === "Adjustment" ? 0 : parsedRefund,
+        reason: reason.trim(),
+        returnedBy: "Owner",
+      },
+      refundMethod
+    );
+
+    showToast(
+      `Return recorded: ${parsedQty} unit(s) of ${product?.name ?? "product"}`,
+      "success"
+    );
+    setSuccess(true);
+    setTimeout(() => onClose(), 2000);
+  }
+
+  const REFUND_METHODS: { value: PaymentMethod | "Adjustment"; label: string; color: string }[] = [
+    { value: "Cash",       label: "Cash",       color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+    { value: "UPI",        label: "UPI",        color: "bg-blue-50 text-blue-700 border-blue-200" },
+    { value: "Card",       label: "Bank/Card",  color: "bg-purple-50 text-purple-700 border-purple-200" },
+    { value: "Adjustment", label: "Adjustment", color: "bg-slate-100 text-slate-600 border-slate-200" },
+  ];
+
+  const INPUT_CLS =
+    "w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-600/20 focus:border-rose-500 transition-all placeholder:text-slate-400";
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[95vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 rounded-t-2xl">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-rose-50 flex items-center justify-center">
+              <CornerDownLeft size={16} className="text-rose-600" />
+            </div>
+            <div>
+              <h2 className="font-bold text-slate-800 text-base leading-tight">Return to Supplier</h2>
+              <p className="text-[10px] text-slate-400 leading-tight">{supplier.name}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Body */}
+        {success ? (
+          <div className="p-12 flex flex-col items-center text-center gap-3">
+            <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
+              <CheckCircle size={36} className="text-green-500" />
+            </div>
+            <p className="font-bold text-slate-800">Return Recorded!</p>
+            <div className="text-xs text-slate-500 space-y-1">
+              <p>{parsedQty} unit(s) removed from stock</p>
+              {parsedRefund > 0 && <p>₹{parsedRefund.toLocaleString()} {refundMethod} refund logged</p>}
+              <p className="text-slate-400 mt-2">Closing…</p>
+            </div>
+          </div>
+        ) : (
+          <div className="overflow-y-auto flex-1 p-5 space-y-4">
+
+            {/* Purchase Summary Card */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Original Purchase</p>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-slate-800 truncate">{product?.name ?? "Unknown Product"}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Invoice: {purchase.invoiceNumber || "—"} · {purchase.quantity} units @ ₹{purchase.buyPrice.toLocaleString()}
+                  </p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-xs text-slate-400">Returnable</p>
+                  <p className="text-sm font-extrabold text-slate-800">{availableQty} unit{availableQty !== 1 ? "s" : ""}</p>
+                </div>
+              </div>
+              {/* Stock info */}
+              <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-2 gap-3 text-center text-xs">
+                <div>
+                  <p className="text-slate-400">Current Stock</p>
+                  <p className="font-bold text-slate-800 mt-0.5">{product?.stock ?? "?"} units</p>
+                </div>
+                <div>
+                  <p className="text-slate-400">After Return</p>
+                  <p className={`font-bold mt-0.5 ${parsedQty > 0 && product ? (product.stock - parsedQty < 0 ? "text-red-600" : "text-slate-800") : "text-slate-800"}`}>
+                    {product ? Math.max(0, product.stock - parsedQty) : "?"} units
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Error */}
+            {error && (
+              <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl">
+                <AlertCircle size={15} className="shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {/* Return Qty */}
+            <div>
+              <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                Quantity to Return <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                max={availableQty}
+                value={qty}
+                onChange={(e) => handleQtyChange(e.target.value)}
+                className={INPUT_CLS}
+                autoFocus
+              />
+              <p className="text-[10px] text-slate-400 mt-1 pl-1">
+                Max returnable: {availableQty} unit{availableQty !== 1 ? "s" : ""}
+                {parsedQty > 0 && (
+                  <span className="text-slate-600 font-semibold"> · Return value: ₹{returnTotal.toLocaleString()}</span>
+                )}
+              </p>
+            </div>
+
+            {/* Reason */}
+            <div>
+              <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                Reason <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                rows={2}
+                placeholder="e.g. Damaged goods, Wrong part supplied, Excess stock"
+                value={reason}
+                onChange={(e) => { setReason(e.target.value); setError(""); }}
+                className={INPUT_CLS + " resize-none"}
+              />
+            </div>
+
+            {/* Refund Method */}
+            <div>
+              <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Refund Method</label>
+              <div className="grid grid-cols-4 gap-2">
+                {REFUND_METHODS.map((m) => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    onClick={() => { setRefundMethod(m.value); setError(""); }}
+                    className={`py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                      refundMethod === m.value
+                        ? "bg-slate-900 border-slate-900 text-white"
+                        : `${m.color} hover:opacity-80`
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Refund Amount — hidden for Adjustment */}
+            {refundMethod !== "Adjustment" && (
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                  Refund Amount (₹) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  max={returnTotal}
+                  value={refundInput}
+                  onChange={(e) => { setRefundInput(e.target.value); setError(""); }}
+                  className={INPUT_CLS}
+                />
+                {parsedRefund > 0 && parsedRefund < returnTotal && (
+                  <p className="text-[10px] text-amber-600 font-semibold mt-1 pl-1">
+                    Partial refund — ₹{roundMoney(returnTotal - parsedRefund).toLocaleString()} written off
+                  </p>
+                )}
+                {parsedRefund === returnTotal && returnTotal > 0 && (
+                  <p className="text-[10px] text-green-600 font-semibold mt-1 pl-1">
+                    Full refund of ₹{returnTotal.toLocaleString()}
+                  </p>
+                )}
+              </div>
+            )}
+            {refundMethod === "Adjustment" && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-700 flex gap-2">
+                <Info size={14} className="shrink-0 mt-0.5 text-amber-600" />
+                <span>No refund will be recorded. The return will reduce supplier outstanding and reduce stock without creating a finance entry.</span>
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* Footer */}
+        {!success && (
+          <div className="flex gap-3 px-5 py-4 border-t border-slate-200 bg-slate-50/50 rounded-b-2xl">
+            <button
+              onClick={onClose}
+              className="flex-1 px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-rose-600 rounded-xl hover:bg-rose-500 transition-colors cursor-pointer"
+            >
+              Record Return →
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Small inline helper — mirrors the one in store but available in this module */
+function roundMoney(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
 }

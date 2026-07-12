@@ -68,6 +68,28 @@ export interface Purchase {
   totalAmount: number;
   amountPaid: number;
   dueAmount: number;
+  returnedQuantity?: number;
+}
+
+
+export interface PurchaseReturn {
+  id: string;
+  purchaseId: string;
+  supplierId: string;
+  productId: string;
+  quantity: number;
+  buyPrice: number;
+  /** Value of goods returned (qty × buyPrice). Reduces supplier liability. */
+  totalAmount: number;
+  /** Cash actually refunded by supplier. May be less than totalAmount (partial / adjustment). */
+  refundAmount: number;
+  reason: string;
+  createdAt: string;
+  returnedBy: "Owner" | "Staff";
+  /** Snapshot: original purchase.quantity at the time the return was recorded. */
+  originalPurchaseQuantity: number;
+  /** Snapshot: original purchase.totalAmount (buyPrice × quantity) at the time the return was recorded. */
+  originalPurchaseValue: number;
 }
 
 
@@ -76,6 +98,7 @@ export interface Purchase {
 export type StockMovementType =
   | "Opening Stock"
   | "Purchase"
+  | "Purchase Return"
   | "Sale"
   | "Adjustment"
   | "Return"
@@ -200,6 +223,7 @@ export type FinanceCategory =
   | "Customer Payment"
   | "Invoice Void"
   | "Payment Void"
+  | "Purchase Return"
   | "Adjustment";
 
 export interface FinanceTransaction {
@@ -263,6 +287,20 @@ export interface HoldBill {
   total: number;
 }
 
+// ── Supplier Invoice Draft (UI-only, never stored) ───────────────────────────
+
+/**
+ * One product row inside the Supplier Invoice modal.
+ * This type is ONLY used for local form state and is never persisted.
+ * The underlying Purchase type is not modified.
+ */
+export interface PurchaseLineItem {
+  id: string;         // Ephemeral row key (crypto.randomUUID) for React key prop
+  productId: string;
+  quantity: string;   // String so <input type="number"> stays controlled
+  buyPrice: string;   // String so <input type="number"> stays controlled
+}
+
 // ── App Store State ───────────────────────────
 
 export interface AppState {
@@ -276,6 +314,7 @@ export interface AppState {
   supplierPayments: SupplierPayment[];
   financeAccounts: FinanceAccount[];
   financeTransactions: FinanceTransaction[];
+  purchaseReturns?: PurchaseReturn[];
   // Temporary Hold Bills
   holdBills: HoldBill[];
   holdBillsCounter: number;

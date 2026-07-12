@@ -68,7 +68,7 @@ export default function DashboardPage() {
     paymentMethodTotals,
     last7DaysTrend,
   } = useMemo(() => {
-    const invoices = state.invoices;
+    const invoices = state.invoices.filter((inv) => !inv.voided);
 
     // Today's invoices
     const todaysInvoices = invoices.filter((inv) => inv.date === today);

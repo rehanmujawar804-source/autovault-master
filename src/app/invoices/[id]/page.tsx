@@ -1,12 +1,13 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useState, useEffect, useCallback } from "react";
 import { useStore } from "@/lib/store";
 import Link from "next/link";
-import { ArrowLeft, Printer, MessageCircle, AlertCircle, Wallet, CheckCircle, X } from "lucide-react";
+import { ArrowLeft, Printer, MessageCircle, AlertCircle, Wallet, CheckCircle, X, Trash2 } from "lucide-react";
 import type { PaymentMethod, PaymentStatus } from "@/types";
 import PrintableInvoice from "@/components/PrintableInvoice";
 import { formatInvoiceDate, formatRepaymentDate } from "@/lib/dateUtils";
+import { useRole } from "@/hooks/useRole";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  STYLE MAPS
@@ -42,7 +43,53 @@ export default function InvoiceDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const { getInvoiceById, getCustomerById, recordDebtPayment, getDebtPaymentsByInvoice, showToast } = useStore();
+  const { getInvoiceById, getCustomerById, recordDebtPayment, getDebtPaymentsByInvoice, voidInvoice, voidDebtPayment, showToast } = useStore();
+  const { isOwner } = useRole();
+
+  // ── Void Invoice Modal State ────────────────────────────────────────────
+  const [voidModalOpen, setVoidModalOpen] = useState(false);
+  const [voidReasonInput, setVoidReasonInput] = useState("");
+
+  // ── Void Payment Modal State ─────────────────────────────────────────
+  const [voidPaymentTarget, setVoidPaymentTarget] = useState<string | null>(null);
+  const [voidPaymentReason, setVoidPaymentReason] = useState("");
+
+  // ── Modal Isolation & Safety (Sprint 4.2 Runtime Bug Fixes) ──────────────
+  const closeVoidInvoiceModal = useCallback(() => {
+    setVoidModalOpen(false);
+    setVoidReasonInput("");
+  }, []);
+
+  const closeVoidPaymentModal = useCallback(() => {
+    setVoidPaymentTarget(null);
+    setVoidPaymentReason("");
+  }, []);
+
+  const openVoidInvoiceModal = useCallback(() => {
+    // Enforce SINGLE DESTRUCTIVE MODAL RULE at runtime
+    closeVoidPaymentModal();
+    setVoidReasonInput("");
+    setVoidModalOpen(true);
+  }, [closeVoidPaymentModal]);
+
+  const openVoidPaymentModal = useCallback((paymentId: string) => {
+    // Enforce SINGLE DESTRUCTIVE MODAL RULE at runtime
+    closeVoidInvoiceModal();
+    setVoidPaymentReason("");
+    setVoidPaymentTarget(paymentId);
+  }, [closeVoidInvoiceModal]);
+
+  // Global Escape Key Listener for Focus/Modal Safety
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        closeVoidInvoiceModal();
+        closeVoidPaymentModal();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [closeVoidInvoiceModal, closeVoidPaymentModal]);
 
   // ── Collect Payment Modal State ────────────────────────────────────────────
   const [collectAmount, setCollectAmount] = useState("");
@@ -61,7 +108,7 @@ export default function InvoiceDetailPage({
     ? Math.round((invoice.subtotal * invoice.discount) / 100)
     : 0;
   const repayments = invoice ? getDebtPaymentsByInvoice(invoice.id) : [];
-  const totalRepaid = repayments.reduce((s, p) => s + p.amount, 0);
+  const totalRepaid = repayments.filter((p) => !p.voided).reduce((s, p) => s + p.amount, 0);
 
   // ── Handlers — defined BEFORE any early return ────────────────────────────
   function handlePrint() {
@@ -157,6 +204,28 @@ export default function InvoiceDetailPage({
     }
   }
 
+  function handleVoidSubmit() {
+    if (!invoice || !voidReasonInput.trim()) return;
+    try {
+      voidInvoice(invoice.id, voidReasonInput.trim(), "Owner");
+      showToast("Invoice voided successfully!", "success");
+      closeVoidInvoiceModal(); // Clean up state
+    } catch (err) {
+      showToast("Failed to void invoice.", "error");
+    }
+  }
+
+  function handleVoidPaymentSubmit() {
+    if (!voidPaymentTarget || !voidPaymentReason.trim()) return;
+    try {
+      voidDebtPayment(voidPaymentTarget, voidPaymentReason.trim(), "Owner");
+      showToast("Payment voided successfully.", "success");
+      closeVoidPaymentModal(); // Clean up state
+    } catch (err) {
+      showToast("Failed to void payment.", "error");
+    }
+  }
+
   // ── Not found — early return AFTER all hooks ──────────────────────────────
   if (!invoice) {
     return (
@@ -187,7 +256,16 @@ export default function InvoiceDetailPage({
         </Link>
 
         <div className="flex gap-2">
-          {invoice.dueAmount > 0 && invoice.customerId && (
+          {!invoice.voided && isOwner && (
+            <button
+              onClick={openVoidInvoiceModal}
+              className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white text-sm px-4 py-2 rounded-lg transition-all font-semibold cursor-pointer hover:shadow active:scale-97"
+            >
+              <Trash2 size={14} />
+              Void Invoice
+            </button>
+          )}
+          {invoice.dueAmount > 0 && invoice.customerId && !invoice.voided && (
             <button
               onClick={openCollect}
               className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-sm px-4 py-2 rounded-lg transition-colors font-semibold cursor-pointer"
@@ -225,8 +303,29 @@ export default function InvoiceDetailPage({
         {/* ── Right sidebar ─────────────────────────────────────────────── */}
         <div className="space-y-4 print:hidden">
 
+          {/* Voided Details Sidebar Card */}
+          {invoice.voided && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-5 space-y-3">
+              <div className="flex items-center gap-2 text-red-800">
+                <AlertCircle size={18} className="shrink-0" />
+                <h3 className="font-extrabold uppercase tracking-wider text-xs">Voided Invoice</h3>
+              </div>
+              <div className="text-xs text-red-700 space-y-1 bg-white border border-red-100 p-3 rounded-lg font-medium leading-relaxed">
+                <div>
+                  <span className="font-bold text-red-800">Reason:</span> {invoice.voidReason}
+                </div>
+                <div>
+                  <span className="font-bold text-red-800">Voided By:</span> {invoice.voidedBy || "Owner"}
+                </div>
+                <div>
+                  <span className="font-bold text-red-800">Voided Date:</span> {invoice.voidedAt ? new Date(invoice.voidedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Collect Payment card — shows only when there's due */}
-          {invoice.dueAmount > 0 && invoice.customerId && (
+          {invoice.dueAmount > 0 && invoice.customerId && !invoice.voided && (
             <div className="bg-red-50 border border-red-200 rounded-xl p-5">
               <h2 className="font-bold text-red-800 text-sm mb-1">Outstanding Due</h2>
               <p className="text-2xl font-extrabold text-red-600 mb-3">
@@ -248,19 +347,61 @@ export default function InvoiceDetailPage({
               <h2 className="font-semibold text-slate-800 text-sm mb-3">Repayment History</h2>
               <div className="space-y-2">
                 {repayments.map((p) => (
-                  <div key={p.id} className="flex flex-col text-xs bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+                  <div
+                    key={p.id}
+                    className={`flex flex-col text-xs rounded-lg px-3 py-2 border ${
+                      p.voided
+                        ? "bg-red-50 border-red-200 opacity-70"
+                        : "bg-green-50 border-green-100"
+                    }`}
+                  >
                     <div className="flex justify-between items-start">
                       <div>
-                        <span className="font-bold text-green-700">₹{p.amount.toLocaleString()}</span>
-                        <span className="text-slate-600 ml-1">collected on {formatRepaymentDate(p.date)} by <span className="font-semibold text-slate-800">{p.collectedBy}</span></span>
+                        <span className={`font-bold ${p.voided ? "text-red-600 line-through" : "text-green-700"}`}>
+                          ₹{p.amount.toLocaleString()}
+                        </span>
+                        <span className="text-slate-600 ml-1">
+                          collected on {formatRepaymentDate(p.date)} by{" "}
+                          <span className="font-semibold text-slate-800">{p.collectedBy}</span>
+                        </span>
                       </div>
-                      <span className="text-[10px] font-bold uppercase tracking-wider bg-green-100 text-green-800 px-1.5 py-0.5 rounded shrink-0">{p.method}</span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                          p.voided ? "bg-red-100 text-red-700" : "bg-green-100 text-green-800"
+                        }`}>
+                          {p.method}
+                        </span>
+                        {p.voided && (
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider bg-red-600 text-white px-1.5 py-0.5 rounded">
+                            VOIDED
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    {p.note && <p className="text-slate-500 italic mt-1 border-t border-green-100/50 pt-1">{p.note}</p>}
+                    {/* Void metadata — always visible, never hidden */}
+                    {p.voided && (
+                      <div className="mt-1.5 pt-1.5 border-t border-red-200 space-y-0.5">
+                        <p className="text-red-700 font-semibold">Reason: {p.voidReason}</p>
+                        <p className="text-red-500">Voided by {p.voidedBy} · {p.voidedAt ? new Date(p.voidedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</p>
+                      </div>
+                    )}
+                    {p.note && !p.voided && (
+                      <p className="text-slate-500 italic mt-1 border-t border-green-100/50 pt-1">{p.note}</p>
+                    )}
+                    {/* Void Payment button — Owner only, active payments only, non-voided invoice only */}
+                    {!p.voided && !invoice.voided && isOwner && (
+                      <button
+                        onClick={() => openVoidPaymentModal(p.id)}
+                        className="mt-2 self-start flex items-center gap-1 text-[10px] font-bold text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors cursor-pointer"
+                      >
+                        <X size={10} />
+                        Void Payment
+                      </button>
+                    )}
                   </div>
                 ))}
                 <div className="text-xs text-right text-slate-500 font-semibold pt-1 border-t border-slate-100">
-                  Total repaid: ₹{totalRepaid.toLocaleString()}
+                  Total repaid (active): ₹{totalRepaid.toLocaleString()}
                 </div>
               </div>
             </div>
@@ -344,6 +485,16 @@ export default function InvoiceDetailPage({
             <Printer size={14} />
             Print Invoice
           </button>
+
+          {!invoice.voided && isOwner && (
+            <button
+              onClick={openVoidInvoiceModal}
+              className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer hover:shadow active:scale-97"
+            >
+              <Trash2 size={14} />
+              Void Invoice
+            </button>
+          )}
 
           {invoice.customerPhone && (
             <button
@@ -505,6 +656,134 @@ export default function InvoiceDetailPage({
           </div>
         </div>
       )}
+
+      {/* ── Void Invoice Modal ────────────────────────────────────────────────── */}
+      {voidModalOpen && (
+        <div
+          onClick={closeVoidInvoiceModal}
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md"
+          >
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <h2 className="font-bold text-slate-800">Void Invoice</h2>
+              <button onClick={closeVoidInvoiceModal} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                Voiding this invoice will increase product stock levels, deduct customer debt, and create a reversing finance transaction. This action is irreversible.
+              </p>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Void Reason <span className="text-red-500">*</span></label>
+                <textarea
+                  value={voidReasonInput}
+                  onChange={(e) => setVoidReasonInput(e.target.value)}
+                  placeholder="Enter the reason for voiding this invoice..."
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-red-400 transition min-h-[80px]"
+                  required
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 px-5 pb-5">
+              <button
+                onClick={closeVoidInvoiceModal}
+                className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleVoidSubmit}
+                disabled={!voidReasonInput.trim()}
+                className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-bold transition-colors cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Trash2 size={14} />
+                Void Invoice
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Void Payment Modal ───────────────────────────────────────────────────────── */}
+      {voidPaymentTarget && (() => {
+        const targetPmt = repayments.find((p) => p.id === voidPaymentTarget);
+        return (
+          <div
+            onClick={closeVoidPaymentModal}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md"
+            >
+              <div className="flex items-center justify-between p-5 border-b border-slate-200">
+                <div>
+                  <h2 className="font-bold text-slate-800">Void Payment</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">This cancels only this payment. The invoice remains active.</p>
+                </div>
+                <button onClick={closeVoidPaymentModal} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="p-5 space-y-4">
+                {/* Payment summary for context */}
+                {targetPmt && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 grid grid-cols-3 gap-3 text-center text-xs">
+                    <div>
+                      <p className="text-slate-400">Amount</p>
+                      <p className="font-bold text-slate-800 text-sm mt-1">₹{targetPmt.amount.toLocaleString()}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-400">Method</p>
+                      <p className="font-bold text-slate-800 text-sm mt-1">{targetPmt.method}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-400">Date</p>
+                      <p className="font-bold text-slate-800 text-sm mt-1">{formatRepaymentDate(targetPmt.date)}</p>
+                    </div>
+                  </div>
+                )}
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-800 font-medium leading-relaxed">
+                  ⚠️ Voiding this payment will increase the invoice due and update the customer ledger. This action is irreversible.
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                    Void Reason <span className="text-red-500">*</span>
+                  </label>
+                  <textarea
+                    value={voidPaymentReason}
+                    onChange={(e) => setVoidPaymentReason(e.target.value)}
+                    placeholder="Enter the reason for voiding this payment..."
+                    className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-red-400 transition min-h-[80px]"
+                    autoFocus
+                    required
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3 px-5 pb-5">
+                <button
+                  onClick={closeVoidPaymentModal}
+                  className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleVoidPaymentSubmit}
+                  disabled={!voidPaymentReason.trim()}
+                  className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-bold transition-colors cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <Trash2 size={14} />
+                  Void Payment
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

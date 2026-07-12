@@ -76,6 +76,7 @@ export default function InvoicesPage() {
   // Repayments tab search
   const [repaySearch, setRepaySearch] = useState("");
   const [repayMethodFilter, setRepayMethodFilter] = useState<string>("All");
+  const [voidFilter, setVoidFilter] = useState<"All" | "Normal" | "Voided">("All");
 
   // ── Collect Payment Modal State ───────────────────────────────────────────
   const [collectInvoice, setCollectInvoice] = useState<Invoice | null>(null);
@@ -104,6 +105,11 @@ export default function InvoicesPage() {
     if (filter !== "All") {
       list = list.filter((i) => i.paymentStatus === filter);
     }
+    if (voidFilter === "Normal") {
+      list = list.filter((i) => !i.voided);
+    } else if (voidFilter === "Voided") {
+      list = list.filter((i) => i.voided);
+    }
     const q = search.trim().toLowerCase();
     if (q) {
       list = list.filter(
@@ -114,7 +120,7 @@ export default function InvoicesPage() {
       );
     }
     return list;
-  }, [state.invoices, filter, search]);
+  }, [state.invoices, filter, voidFilter, search]);
 
   // ── Repayments data ───────────────────────────────────────────────────────
   const allRepayments = useMemo(() => {
@@ -356,10 +362,19 @@ export default function InvoicesPage() {
 
                       let borderClass = "border-l-4 border-l-transparent";
                       let bgClass = "hover:bg-slate-50/80";
-                      if (isPaid) borderClass = "border-l-4 border-l-emerald-500";
-                      else if (isPartial) { borderClass = "border-l-4 border-l-orange-400"; bgClass = "bg-orange-50/10 hover:bg-orange-50/20"; }
-                      else { borderClass = "border-l-4 border-l-red-500"; bgClass = "bg-red-50/10 hover:bg-red-50/20"; }
-                      if (isExpanded) bgClass = "bg-slate-50/60";
+                      if (inv.voided) {
+                        borderClass = "border-l-4 border-l-red-400";
+                        bgClass = "bg-red-50/30 hover:bg-red-50/50 text-slate-500";
+                      } else if (isPaid) {
+                        borderClass = "border-l-4 border-l-emerald-500";
+                      } else if (isPartial) {
+                        borderClass = "border-l-4 border-l-orange-400";
+                        bgClass = "bg-orange-50/10 hover:bg-orange-50/20";
+                      } else {
+                        borderClass = "border-l-4 border-l-red-500";
+                        bgClass = "bg-red-50/10 hover:bg-red-50/20";
+                      }
+                      if (isExpanded) bgClass = inv.voided ? "bg-red-50/40" : "bg-slate-50/60";
 
                       return (
                         <Fragment key={inv.id}>
@@ -395,9 +410,15 @@ export default function InvoicesPage() {
                               </span>
                             </td>
                             <td className="px-5 py-3.5">
-                              <span className={`text-xs px-2.5 py-1 rounded-md font-bold border ${STATUS_BADGE[inv.paymentStatus]}`}>
-                                {inv.paymentStatus}
-                              </span>
+                              {inv.voided ? (
+                                <span className="text-xs px-2.5 py-1 rounded-md font-bold border bg-red-150 text-red-750 border-red-200">
+                                  Voided
+                                </span>
+                              ) : (
+                                <span className={`text-xs px-2.5 py-1 rounded-md font-bold border ${STATUS_BADGE[inv.paymentStatus]}`}>
+                                  {inv.paymentStatus === "Debt" ? "Debt / Unpaid" : inv.paymentStatus}
+                                </span>
+                              )}
                             </td>
                             <td className="px-5 py-3.5 text-right font-extrabold text-slate-800">
                               ₹{inv.total.toLocaleString()}
@@ -485,20 +506,39 @@ export default function InvoicesPage() {
                                         </div>
                                         <div className="space-y-1.5 max-h-28 overflow-y-auto pr-0.5">
                                           {payments.map((p) => (
-                                            <div key={p.id} className="flex flex-col bg-green-50 border border-green-100 rounded-lg px-2.5 py-1 text-[10px]">
-                                              <div className="flex justify-between">
-                                                <span className="font-bold text-green-700">₹{p.amount.toLocaleString()}</span>
-                                                <span className="text-slate-400 font-mono">{formatRepaymentDate(p.date)}</span>
+                                            <div
+                                              key={p.id}
+                                              className={`flex flex-col rounded-lg px-2.5 py-1 text-[10px] border ${
+                                                p.voided
+                                                  ? "bg-red-50 border-red-200 opacity-70"
+                                                  : "bg-green-50 border-green-100"
+                                              }`}
+                                            >
+                                              <div className="flex justify-between items-center">
+                                                <span className={`font-bold ${p.voided ? "text-red-600 line-through" : "text-green-700"}`}>
+                                                  ₹{p.amount.toLocaleString()}
+                                                </span>
+                                                <div className="flex items-center gap-1">
+                                                  <span className="text-slate-400 font-mono">{formatRepaymentDate(p.date)}</span>
+                                                  {p.voided && (
+                                                    <span className="text-[9px] font-extrabold uppercase bg-red-600 text-white px-1 py-0.5 rounded">
+                                                      VOIDED
+                                                    </span>
+                                                  )}
+                                                </div>
                                               </div>
                                               <p className="text-[10px] text-slate-500 mt-0.5">
                                                 via {p.method} · collected by <span className="font-semibold">{p.collectedBy}</span>
                                               </p>
-                                              {p.note && <p className="text-slate-400 italic mt-0.5">{p.note}</p>}
+                                              {p.voided && p.voidReason && (
+                                                <p className="text-red-600 italic mt-0.5">Voided: {p.voidReason}</p>
+                                              )}
+                                              {p.note && !p.voided && <p className="text-slate-400 italic mt-0.5">{p.note}</p>}
                                             </div>
                                           ))}
                                         </div>
                                         <p className="text-[10px] text-right text-green-700 font-bold mt-1.5">
-                                          Total repaid: ₹{payments.reduce((s, p) => s + p.amount, 0).toLocaleString()}
+                                          Total repaid (active): ₹{payments.filter((p) => !p.voided).reduce((s, p) => s + p.amount, 0).toLocaleString()}
                                         </p>
                                       </div>
                                     )}

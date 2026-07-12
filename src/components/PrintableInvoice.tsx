@@ -85,6 +85,15 @@ export default function PrintableInvoice({ invoice }: PrintableInvoiceProps) {
       id="invoice-print"
       className="bg-white text-slate-900 border-4 border-double border-navy-950 p-6 rounded-xl w-full font-sans select-text shadow-sm max-w-[210mm] mx-auto print:border-4 print:p-6 print:m-0 print:rounded-none print:shadow-none print:max-w-full"
     >
+      {/* Void Warning Header */}
+      {invoice.voided && (
+        <div className="border-4 border-red-500 rounded-xl p-4 mb-5 bg-red-50 text-red-700 flex flex-col items-center justify-center text-center print:border-red-500 print:bg-red-50 print:text-red-700">
+          <span className="text-lg font-black tracking-widest uppercase">VOIDED INVOICE</span>
+          <p className="text-[10px] mt-1 font-semibold">
+            Reason: {invoice.voidReason} | By: {invoice.voidedBy || "Owner"} | Date: {invoice.voidedAt ? new Date(invoice.voidedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : ""}
+          </p>
+        </div>
+      )}
       {/* SECTION A: TOP HEADER */}
       <div className="border-b border-slate-200 pb-4 mb-4">
         {/* Memo Info Row */}

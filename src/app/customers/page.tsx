@@ -68,7 +68,7 @@ export default function CustomersPage() {
     // Derive each customer's real debt from invoices
     const debtByCustomer: Record<string, number> = {};
     for (const inv of state.invoices) {
-      if (inv.customerId && inv.dueAmount > 0) {
+      if (inv.customerId && inv.dueAmount > 0 && !inv.voided) {
         debtByCustomer[inv.customerId] = (debtByCustomer[inv.customerId] ?? 0) + inv.dueAmount;
       }
     }

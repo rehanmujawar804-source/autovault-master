@@ -110,9 +110,11 @@ type Action =
 
   // Invoices
   | { type: "ADD_INVOICE"; invoice: Invoice }
+  | { type: "VOID_INVOICE"; invoiceId: string; reason: string; voidedBy: string }
 
   // Debt Repayment — core new action
   | { type: "RECORD_DEBT_PAYMENT"; payment: DebtPayment }
+  | { type: "VOID_DEBT_PAYMENT"; paymentId: string; reason: string; voidedBy: string }
 
   // Suppliers Sprint 1 & 2
   | { type: "ADD_SUPPLIER"; supplier: Supplier }
@@ -432,6 +434,16 @@ function reducer(state: AppState, action: Action): AppState {
             visits: c.visits + 1,
             lastVisit: inv.date,
             invoiceIds: [...c.invoiceIds, inv.id],
+            activities: [
+              ...(c.activities || []),
+              {
+                id: `ca-${crypto.randomUUID()}`,
+                type: "Invoice" as const,
+                description: "Invoice Created",
+                reference: inv.invoiceNumber,
+                date: inv.createdAt || new Date().toISOString(),
+              },
+            ],
           };
         });
       } else if (inv.customer && inv.customer !== "Walk-in Customer") {
@@ -444,6 +456,15 @@ function reducer(state: AppState, action: Action): AppState {
           visits: 1,
           lastVisit: inv.date,
           invoiceIds: [inv.id],
+          activities: [
+            {
+              id: `ca-${crypto.randomUUID()}`,
+              type: "Invoice" as const,
+              description: "Invoice Created",
+              reference: inv.invoiceNumber,
+              date: inv.createdAt || new Date().toISOString(),
+            },
+          ],
         };
         newCustomers = [...state.customers, newCustomer];
       } else {
@@ -510,13 +531,27 @@ function reducer(state: AppState, action: Action): AppState {
       const newCustomers = state.customers.map((c) => {
         if (c.id !== payment.customerId) return c;
         const customerInvoices = newInvoices.filter(
-          (inv) => inv.customerId === c.id
+          (inv) => inv.customerId === c.id && !inv.voided
         );
         const totalDue = customerInvoices.reduce(
           (s, inv) => s + inv.dueAmount,
           0
         );
-        return { ...c, debt: totalDue };
+        const invoice = state.invoices.find((i) => i.id === payment.invoiceId);
+        return {
+          ...c,
+          debt: totalDue,
+          activities: [
+            ...(c.activities || []),
+            {
+              id: `ca-${crypto.randomUUID()}`,
+              type: "Repayment" as const,
+              description: "Debt Repayment",
+              reference: invoice?.invoiceNumber || "",
+              date: payment.date,
+            },
+          ],
+        };
       });
 
       // Finance entry: Income for customer debt repayment
@@ -540,6 +575,199 @@ function reducer(state: AppState, action: Action): AppState {
         invoices: newInvoices,
         customers: newCustomers,
         financeTransactions: debtFinanceTxs,
+      };
+    }
+
+    // ── Void Debt Payment (Void a single repayment) ────────────────────────
+    //
+    // Reverses ONE repayment without touching the invoice void status.
+    // Appends void metadata to the DebtPayment — never deletes or overwrites.
+    // Recalculates invoice amountPaid / dueAmount / paymentStatus from active payments only.
+    // Recalculates customer.debt from all non-voided invoice dues.
+    // Appends a reversing Finance Expense (category: Payment Void).
+    // Stock is NEVER touched.
+    case "VOID_DEBT_PAYMENT": {
+      const { paymentId, reason, voidedBy } = action;
+      const voidedAt = new Date().toISOString();
+
+      // Find the payment — return unchanged if already voided (idempotency guard)
+      const targetPayment = (state.debtPayments ?? []).find((p) => p.id === paymentId);
+      if (!targetPayment || targetPayment.voided) return state;
+
+      // Find the linked invoice — return unchanged if invoice itself is voided
+      const targetInvoice = state.invoices.find((i) => i.id === targetPayment.invoiceId);
+      if (!targetInvoice || targetInvoice.voided) return state;
+
+      // 1. Mark payment as voided — immutable append only, never overwrite other fields
+      const voidedPayments = (state.debtPayments ?? []).map((p) => {
+        if (p.id !== paymentId) return p;
+        return { ...p, voided: true, voidedAt, voidReason: reason, voidedBy };
+      });
+
+      // 2. Recalculate invoice totals using ONLY active (non-voided) payments
+      const activePaymentsForInvoice = voidedPayments.filter(
+        (p) => p.invoiceId === targetInvoice.id && !p.voided
+      );
+      const totalActiveRepaid = activePaymentsForInvoice.reduce((s, p) => s + p.amount, 0);
+
+      // amountPaid = initial POS payment + all active repayments
+      // Initial POS payment = invoice total - original dueAmount at creation.
+      // We recover the initial payment as: current amountPaid - previous repayment total (before void).
+      const previousActivePayments = (state.debtPayments ?? []).filter(
+        (p) => p.invoiceId === targetInvoice.id && !p.voided
+      );
+      const prevTotalRepaid = previousActivePayments.reduce((s, p) => s + p.amount, 0);
+      const initialPOSPayment = roundMoney(targetInvoice.amountPaid - prevTotalRepaid);
+      const newAmountPaid = roundMoney(Math.max(0, initialPOSPayment + totalActiveRepaid));
+      const newDueAmount = roundMoney(Math.max(0, targetInvoice.total - newAmountPaid));
+      const newPaymentStatus = calcPaymentStatus(newDueAmount, targetInvoice.total);
+
+      const newInvoices = state.invoices.map((inv) => {
+        if (inv.id !== targetInvoice.id) return inv;
+        return {
+          ...inv,
+          amountPaid: newAmountPaid,
+          dueAmount: newDueAmount,
+          paymentStatus: newPaymentStatus,
+        };
+      });
+
+      // 3. Recalculate customer.debt from all non-voided invoice dues + append activity
+      const newCustomers = state.customers.map((c) => {
+        if (c.id !== targetPayment.customerId) return c;
+        const customerInvoices = newInvoices.filter(
+          (inv) => inv.customerId === c.id && !inv.voided
+        );
+        const totalDue = customerInvoices.reduce((s, inv) => s + inv.dueAmount, 0);
+        return {
+          ...c,
+          debt: roundMoney(totalDue),
+          activities: [
+            ...(c.activities || []),
+            {
+              id: `ca-${crypto.randomUUID()}`,
+              type: "Void" as const,
+              description: `Payment Voided — ${reason}`,
+              reference: targetInvoice.invoiceNumber,
+              date: voidedAt,
+            },
+          ],
+        };
+      });
+
+      // 4. Append reversing Finance Expense — only if real money changed hands (not Credit)
+      const newFinanceTxs = [...(state.financeTransactions ?? [])];
+      if (targetPayment.method !== "Credit") {
+        newFinanceTxs.push({
+          id: `ft-${crypto.randomUUID()}`,
+          accountId: methodToAccountId(targetPayment.method),
+          type: "Expense" as const,
+          category: "Payment Void" as const,
+          referenceId: targetPayment.invoiceId,
+          customerId: targetPayment.customerId,
+          amount: targetPayment.amount,
+          date: voidedAt,
+          method: targetPayment.method,
+          notes: `Payment Voided — ${reason}`,
+        });
+      }
+
+      return {
+        ...state,
+        debtPayments: voidedPayments,
+        invoices: newInvoices,
+        customers: newCustomers,
+        financeTransactions: newFinanceTxs,
+      };
+    }
+
+    case "VOID_INVOICE": {
+      const { invoiceId, reason, voidedBy } = action;
+      const invoice = state.invoices.find((i) => i.id === invoiceId);
+      if (!invoice || invoice.voided) return state; // Stock restore safety & already voided guard
+
+      const voidedAt = new Date().toISOString();
+
+      // 1. Mark invoice as voided
+      const newInvoices = state.invoices.map((inv) => {
+        if (inv.id !== invoiceId) return inv;
+        return {
+          ...inv,
+          voided: true,
+          voidReason: reason,
+          voidedAt,
+          voidedBy,
+        };
+      });
+
+      // 2. Restore stock levels
+      const newProducts = state.products.map((p) => {
+        const item = invoice.items.find((it) => it.productId === p.id);
+        if (!item) return p;
+        return {
+          ...p,
+          stock: p.stock + item.quantity,
+        };
+      });
+
+      // 3. Append stock movements
+      const movements = [...(state.stockMovements || [])];
+      invoice.items.forEach((item) => {
+        movements.push({
+          id: generateUniqueId("sm"),
+          productId: item.productId,
+          type: "Adjustment" as const,
+          delta: item.quantity,
+          date: voidedAt,
+          desc: "Invoice Voided",
+          reference: invoice.invoiceNumber,
+        });
+      });
+
+      // 4. Reverse customer dues and total spent, plus append customer activity log
+      const newCustomers = state.customers.map((c) => {
+        if (c.id !== invoice.customerId) return c;
+        return {
+          ...c,
+          debt: Math.max(0, roundMoney(c.debt - invoice.dueAmount)),
+          totalSpent: Math.max(0, roundMoney(c.totalSpent - invoice.amountPaid)),
+          activities: [
+            ...(c.activities || []),
+            {
+              id: `ca-${crypto.randomUUID()}`,
+              type: "Void" as const,
+              description: "Invoice Voided",
+              reference: invoice.invoiceNumber,
+              date: voidedAt,
+            },
+          ],
+        };
+      });
+
+      // 5. Append reversing finance transaction (only for amount actually paid)
+      const newFinanceTransactions = [...(state.financeTransactions || [])];
+      if (invoice.amountPaid > 0 && invoice.paymentMethod !== "Credit") {
+        newFinanceTransactions.push({
+          id: `ft-${crypto.randomUUID()}`,
+          accountId: methodToAccountId(invoice.paymentMethod),
+          type: "Expense" as const,
+          category: "Invoice Void" as const,
+          referenceId: invoice.id,
+          customerId: invoice.customerId ?? undefined,
+          amount: invoice.amountPaid,
+          date: voidedAt,
+          method: invoice.paymentMethod,
+          notes: "Invoice Voided",
+        });
+      }
+
+      return {
+        ...state,
+        invoices: newInvoices,
+        products: newProducts,
+        stockMovements: movements,
+        customers: newCustomers,
+        financeTransactions: newFinanceTransactions,
       };
     }
 
@@ -568,10 +796,17 @@ function reducer(state: AppState, action: Action): AppState {
           paymentStatus,
         };
       });
+      const invoices = (action.state.invoices || []).map((inv) => {
+        return {
+          ...inv,
+          voided: inv.voided ?? false,
+        };
+      });
       return {
         ...action.state,
         products,
         purchases,
+        invoices,
         debtPayments: action.state.debtPayments ?? [],
         suppliers: action.state.suppliers ?? [],
         stockMovements: action.state.stockMovements ?? [],
@@ -781,12 +1016,14 @@ interface StoreContextValue {
 
   // Convenience helpers
   addInvoice: (invoice: Invoice) => void;
+  voidInvoice: (invoiceId: string, reason: string, voidedBy: string) => void;
   addProduct: (product: Omit<Product, "id">) => void;
   updateProduct: (product: Product) => void;
   adjustStock: (productId: string, delta: number) => void;
   addCustomer: (customer: Omit<Customer, "id">) => void;
   updateCustomer: (customer: Customer) => void;
   recordDebtPayment: (payment: Omit<DebtPayment, "id">) => void;
+  voidDebtPayment: (paymentId: string, reason: string, voidedBy: string) => void;
   reconcileDebtCache: () => void;
   exportStoreAsJSON: () => void;
 
@@ -922,6 +1159,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "ADD_INVOICE", invoice });
   }
 
+  function voidInvoice(invoiceId: string, reason: string, voidedBy: string) {
+    dispatch({ type: "VOID_INVOICE", invoiceId, reason, voidedBy });
+  }
+
   function addProduct(product: Omit<Product, "id">) {
     const duplicate = state.products.find(
       (p) => p.sku.trim().toLowerCase() === product.sku.trim().toLowerCase()
@@ -983,6 +1224,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       type: "RECORD_DEBT_PAYMENT",
       payment: { ...payment, id: `dp-${crypto.randomUUID()}` },
     });
+  }
+
+  function voidDebtPayment(paymentId: string, reason: string, voidedBy: string) {
+    dispatch({ type: "VOID_DEBT_PAYMENT", paymentId, reason, voidedBy });
   }
 
   function reconcileDebtCache() {
@@ -1298,12 +1543,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         toast,
         showToast,
         addInvoice,
+        voidInvoice,
         addProduct,
         updateProduct,
         adjustStock,
         addCustomer,
         updateCustomer,
         recordDebtPayment,
+        voidDebtPayment,
         reconcileDebtCache,
         exportStoreAsJSON,
         addSupplier,

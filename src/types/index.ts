@@ -126,9 +126,16 @@ export interface Invoice {
   voided?: boolean;
   voidedAt?: string;
   voidReason?: string;
+  voidedBy?: string;
 }
 
-// ── Customer ──────────────────────────────────
+export interface CustomerActivity {
+  id: string;
+  type: "Invoice" | "Repayment" | "Void";
+  description: string;
+  reference: string;
+  date: string;
+}
 
 export interface Customer {
   id: string;
@@ -139,6 +146,7 @@ export interface Customer {
   visits: number;
   lastVisit: string; // ISO date string
   invoiceIds: string[];
+  activities?: CustomerActivity[];
 }
 
 // ── Debt Payment (Repayment Ledger) ──────────
@@ -152,6 +160,11 @@ export interface DebtPayment {
   method: PaymentMethod;
   note?: string;
   collectedBy: "Owner" | "Staff";
+  // Void metadata — appended only; existing records safely default to undefined (falsy)
+  voided?: boolean;
+  voidedAt?: string;
+  voidReason?: string;
+  voidedBy?: string;
 }
 
 // ── Supplier Payment (Purchase Payment Ledger) ──
@@ -185,6 +198,8 @@ export type FinanceCategory =
   | "Supplier Payment"
   | "Sale"
   | "Customer Payment"
+  | "Invoice Void"
+  | "Payment Void"
   | "Adjustment";
 
 export interface FinanceTransaction {

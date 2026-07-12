@@ -74,7 +74,7 @@ export default function CustomerProfilePage({
           (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
         )
       : [];
-    const debt = invList.reduce((s, inv) => s + inv.dueAmount, 0);
+    const debt = invList.filter((inv) => !inv.voided).reduce((s, inv) => s + inv.dueAmount, 0);
     return [invList, debt] as const;
   }, [customer, getInvoicesByCustomer]);
 
@@ -259,6 +259,24 @@ export default function CustomerProfilePage({
             />
           </div>
 
+          {/* Activity Log */}
+          {customer.activities && customer.activities.length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-3">
+              <h2 className="font-semibold text-slate-800 text-sm">Activity Log</h2>
+              <div className="space-y-3 relative before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-100">
+                {customer.activities.map((act) => (
+                  <div key={act.id} className="relative pl-6 text-xs font-medium">
+                    <span className={`absolute left-0.5 top-1.5 w-3 h-3 rounded-full border-2 border-white ${
+                      act.type === "Void" ? "bg-red-500" : act.type === "Repayment" ? "bg-green-500" : "bg-blue-500"
+                    }`} />
+                    <p className="font-bold text-slate-850">{act.description}</p>
+                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">{act.reference} · {new Date(act.date).toLocaleDateString("en-IN")}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Outstanding Invoices collect section */}
           {outstandingInvoices.length > 0 && (
             <div className="bg-white rounded-2xl border border-red-200 p-5">
@@ -368,11 +386,17 @@ export default function CustomerProfilePage({
                             <span className="font-mono text-xs text-slate-600">
                               {inv.invoiceNumber}
                             </span>
-                            <span
-                              className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_BADGE[inv.paymentStatus]}`}
-                            >
-                              {inv.paymentStatus}
-                            </span>
+                            {inv.voided ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full font-bold bg-red-100 text-red-700">
+                                Voided
+                              </span>
+                            ) : (
+                              <span
+                                className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_BADGE[inv.paymentStatus]}`}
+                              >
+                                {inv.paymentStatus}
+                              </span>
+                            )}
                             <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
                               {inv.paymentMethod}
                             </span>
@@ -440,7 +464,7 @@ export default function CustomerProfilePage({
                             </p>
                           )}
                           <div className="mt-2 flex flex-col gap-1 items-end">
-                            {inv.dueAmount > 0 && (
+                            {inv.dueAmount > 0 && !inv.voided && (
                               <button
                                 onClick={() => openCollect(inv)}
                                 className="text-[10px] bg-green-600 hover:bg-green-700 text-white px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer"

@@ -145,7 +145,13 @@ export default function SettingsPage() {
         const normalizedState: AppState = {
           products: parsed.products ?? [],
           customers: parsed.customers ?? [],
-          invoices: parsed.invoices ?? [],
+          invoices: (parsed.invoices ?? []).map((inv: any) => ({
+            ...inv,
+            voided: inv.voided ?? false,
+            voidedAt: inv.voidedAt ?? undefined,
+            voidReason: inv.voidReason ?? undefined,
+            voidedBy: inv.voidedBy ?? undefined,
+          })),
           debtPayments: Array.isArray(parsed.debtPayments) ? parsed.debtPayments : [],
           suppliers: Array.isArray(parsed.suppliers) ? parsed.suppliers : [],
           purchases: Array.isArray(parsed.purchases) ? parsed.purchases : [],

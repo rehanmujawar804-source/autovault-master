@@ -76,7 +76,7 @@ export default function AnalyticsPage() {
 
   // ── Date Filtering Helper ─────────────────────────────────────────────────
   const filteredInvoices = useMemo(() => {
-    const invoices = state.invoices;
+    const invoices = state.invoices.filter((inv) => !inv.voided);
     const todayStr = todayLocalStr();
     const [tYear, tMonth, tDay] = todayStr.split("-").map(Number);
     const todayTime = Date.UTC(tYear, tMonth - 1, tDay);

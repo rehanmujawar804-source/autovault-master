@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
@@ -242,12 +243,21 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
 
 export default function SuppliersPage() {
   const { state, getTotalSupplierOutstanding } = useStore();
-  const { isOwner } = useRole();
+  const { isOwner, loading } = useRole();
+  const router = useRouter();
+
+  // ── Owner-only route guard ──────────────────────────────────────────
+  useEffect(() => {
+    if (!loading && !isOwner) router.push("/dashboard");
+  }, [loading, isOwner, router]);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"All" | "Active" | "Inactive">("All");
   const [showModal, setShowModal] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+
+  // Block render until guard has resolved
+  if (loading || !isOwner) return null;
 
   const suppliers = state.suppliers || [];
   const purchases = state.purchases || [];

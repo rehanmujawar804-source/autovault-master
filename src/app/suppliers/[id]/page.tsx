@@ -4,6 +4,7 @@ import { use, useMemo, useState, useEffect, memo, useCallback } from "react";
 import { useStore } from "@/lib/store";
 import type { Purchase, SupplierPayment, PaymentMethod, PurchaseLineItem, PurchaseReturn, PurchaseOrder, PurchaseOrderItem, PurchaseOrderStatus } from "@/types";
 import { useRole } from "@/hooks/useRole";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -1505,7 +1506,13 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
     markPurchaseOrderCancelled,
     confirmPurchaseOrder,
   } = useStore();
-  const { isOwner } = useRole();
+  const { isOwner, loading } = useRole();
+  const router = useRouter();
+
+  // ── Owner-only route guard ──────────────────────────────────────────
+  useEffect(() => {
+    if (!loading && !isOwner) router.push("/dashboard");
+  }, [loading, isOwner, router]);
 
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [showAddPurchase, setShowAddPurchase] = useState(false);
@@ -1595,6 +1602,9 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
       };
     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [purchases, products]);
+
+  // Owner guard early return — placed after all hooks to satisfy Rules of Hooks
+  if (loading || !isOwner) return null;
 
   if (!supplier) {
     return (

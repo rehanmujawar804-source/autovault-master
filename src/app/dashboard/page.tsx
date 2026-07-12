@@ -201,9 +201,12 @@ export default function DashboardPage() {
       {/* ── Top Bar ───────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 leading-tight">Owner Command Center</h1>
+          <h1 className="text-2xl font-black text-slate-900 leading-tight">
+            {isOwner ? "Owner Command Center" : "Store Dashboard"}
+          </h1>
           <p className="text-xs text-slate-500 mt-1">
             7 Star Car Accessories · {new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+            {!isOwner && <span className="ml-2 bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-200">Staff View</span>}
           </p>
         </div>
         <Link

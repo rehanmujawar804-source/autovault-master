@@ -24,10 +24,10 @@ const NAV_ITEMS = [
   { href: "/billing",    label: "Billing",    icon: Receipt },
   { href: "/invoices",   label: "Invoices",   icon: FileText },
   { href: "/customers",  label: "Customers",  icon: Users },
-  { href: "/suppliers",  label: "Suppliers",  icon: Truck },
 ];
 
 const OWNER_ONLY_ITEMS = [
+  { href: "/suppliers",  label: "Suppliers",  icon: Truck },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
 ];
 

@@ -145,14 +145,15 @@ type Action =
   | { type: "DELETE_HOLD_BILL"; id: string }
   | { type: "LOAD_HOLD_BILL"; id: string }
 
-  // Purchase Orders (Sprint 4.6 & 4.6.1)
+  // Purchase Orders (Sprint 4.6, 4.6.1 & 4.6.2)
   | { type: "CREATE_PURCHASE_ORDER"; po: Omit<PurchaseOrder, "id" | "poNumber" | "createdAt" | "updatedAt" | "activityLog"> }
   | { type: "UPDATE_PURCHASE_ORDER"; poId: string; expectedDeliveryDate: string; notes: string; items: PurchaseOrderItem[]; status: PurchaseOrderStatus }
   | { type: "DELETE_PURCHASE_ORDER"; poId: string }
   | { type: "MARK_PURCHASE_ORDER_SENT"; poId: string }
   | { type: "MARK_PURCHASE_ORDER_CANCELLED"; poId: string }
   | { type: "COMPLETE_PURCHASE_ORDER"; poId: string }
-  | { type: "CONFIRM_PURCHASE_ORDER"; poId: string };
+  | { type: "CONFIRM_PURCHASE_ORDER"; poId: string }
+  | { type: "RECORD_PO_ACTIVITY"; poId: string; entry: POActivityLog };
 
 // ─────────────────────────────────────────────
 //  HELPERS (pure, used inside reducer)
@@ -1366,6 +1367,21 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    case "RECORD_PO_ACTIVITY": {
+      return {
+        ...state,
+        purchaseOrders: (state.purchaseOrders || []).map((po) =>
+          po.id === action.poId
+            ? {
+                ...po,
+                activityLog: [...(po.activityLog || []), action.entry],
+                updatedAt: new Date().toISOString(),
+              }
+            : po
+        ),
+      };
+    }
+
     // ── Hold Bills Reducers ──────────────────────────────────────────────────
     //
     // Complete isolation constraint: None of these actions interact with stock,
@@ -1491,6 +1507,7 @@ interface StoreContextValue {
   markPurchaseOrderSent: (poId: string) => void;
   markPurchaseOrderCancelled: (poId: string) => void;
   confirmPurchaseOrder: (poId: string) => void;
+  recordPOActivity: (poId: string, entry: POActivityLog) => void;
 
   // Future Ready Hooks / Selectors
   getSupplierBalance: (supplierId: string) => number;
@@ -1814,7 +1831,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return `INV-${year}-${String(count).padStart(4, "0")}`;
   }
 
+  // ── Procurement Role Guard ───────────────────────────────────────────────
+  // Reads role directly from localStorage so the guard works even if called
+  // programmatically (e.g. via DevTools) without going through the UI layer.
+  function isProcurementAllowed(): boolean {
+    if (typeof window === "undefined") return true; // SSR — allow
+    const role = localStorage.getItem("role");
+    if (role !== "owner") {
+      showToast("Access denied. Owner only.", "error");
+      return false;
+    }
+    return true;
+  }
+
   function addSupplier(supplier: Omit<Supplier, "id" | "createdAt" | "updatedAt">) {
+    if (!isProcurementAllowed()) return;
     const timestamp = new Date().toISOString();
     dispatch({
       type: "ADD_SUPPLIER",
@@ -1828,6 +1859,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function updateSupplier(supplier: Supplier) {
+    if (!isProcurementAllowed()) return;
     const timestamp = new Date().toISOString();
     dispatch({
       type: "UPDATE_SUPPLIER",
@@ -1839,6 +1871,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function addPurchase(purchase: Omit<Purchase, "id" | "createdAt" | "totalAmount" | "amountPaid" | "dueAmount"> & { amountPaid?: number; paymentMethod?: PaymentMethod }) {
+    if (!isProcurementAllowed()) return;
     const timestamp = new Date().toISOString();
     const total = roundMoney(purchase.quantity * purchase.buyPrice);
     const paid = purchase.paymentStatus === "Paid" ? total : (purchase.paymentStatus === "Credit" ? 0 : roundMoney(purchase.amountPaid ?? 0));
@@ -1883,6 +1916,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     items: Array<{ productId: string; quantity: number; buyPrice: number; expectedBuyPrice?: number }>;
     purchaseOrderId?: string;
   }) {
+    if (!isProcurementAllowed()) return;
     const { supplierId, invoiceNumber, date, notes, paymentMethod, totalPaid, items, purchaseOrderId } = params;
 
     // 1. Compute per-item subtotals
@@ -1936,6 +1970,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function recordSupplierPayment(payment: Omit<SupplierPayment, "id">) {
+    if (!isProcurementAllowed()) return;
     dispatch({
       type: "RECORD_SUPPLIER_PAYMENT",
       payment: { ...payment, id: `sp-${crypto.randomUUID()}` },
@@ -1946,6 +1981,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     record: Omit<PurchaseReturn, "id" | "createdAt" | "originalPurchaseQuantity" | "originalPurchaseValue">,
     refundMethod: PaymentMethod | "Adjustment"
   ) {
+    if (!isProcurementAllowed()) return;
     const origPurchase = (state.purchases || []).find((p) => p.id === record.purchaseId);
     const originalPurchaseQuantity = origPurchase ? origPurchase.quantity : 0;
     const originalPurchaseValue = origPurchase ? (origPurchase.totalAmount ?? (origPurchase.buyPrice * origPurchase.quantity)) : 0;
@@ -2003,31 +2039,43 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function createPurchaseOrder(po: Omit<PurchaseOrder, "id" | "poNumber" | "createdAt" | "updatedAt" | "activityLog">) {
+    if (!isProcurementAllowed()) return;
     dispatch({ type: "CREATE_PURCHASE_ORDER", po });
   }
 
   function updatePurchaseOrder(poId: string, expectedDeliveryDate: string, notes: string, items: PurchaseOrderItem[], status: PurchaseOrderStatus) {
+    if (!isProcurementAllowed()) return;
     dispatch({ type: "UPDATE_PURCHASE_ORDER", poId, expectedDeliveryDate, notes, items, status });
   }
 
   function deletePurchaseOrder(poId: string) {
+    if (!isProcurementAllowed()) return;
     dispatch({ type: "DELETE_PURCHASE_ORDER", poId });
   }
 
   function completePurchaseOrder(poId: string) {
+    if (!isProcurementAllowed()) return;
     dispatch({ type: "COMPLETE_PURCHASE_ORDER", poId });
   }
 
   function markPurchaseOrderSent(poId: string) {
+    if (!isProcurementAllowed()) return;
     dispatch({ type: "MARK_PURCHASE_ORDER_SENT", poId });
   }
 
   function markPurchaseOrderCancelled(poId: string) {
+    if (!isProcurementAllowed()) return;
     dispatch({ type: "MARK_PURCHASE_ORDER_CANCELLED", poId });
   }
 
   function confirmPurchaseOrder(poId: string) {
+    if (!isProcurementAllowed()) return;
     dispatch({ type: "CONFIRM_PURCHASE_ORDER", poId });
+  }
+
+  function recordPOActivity(poId: string, entry: POActivityLog) {
+    if (!isProcurementAllowed()) return;
+    dispatch({ type: "RECORD_PO_ACTIVITY", poId, entry });
   }
 
   // Future Ready Selectors
@@ -2175,6 +2223,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         markPurchaseOrderSent,
         markPurchaseOrderCancelled,
         confirmPurchaseOrder,
+        recordPOActivity,
         getSupplierBalance,
         getSupplierLifetimePurchase,
         getSupplierAveragePurchase,

@@ -69,6 +69,34 @@ export interface Purchase {
   amountPaid: number;
   dueAmount: number;
   returnedQuantity?: number;
+  purchaseOrderId?: string; // Links to source PurchaseOrder
+}
+
+export type PurchaseOrderStatus =
+  | "Draft"
+  | "Sent"
+  | "Partially Received"
+  | "Completed"
+  | "Cancelled";
+
+export interface PurchaseOrderItem {
+  id: string;
+  productId: string;
+  quantity: number;
+  expectedBuyPrice: number;
+  receivedQuantity: number;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  poNumber: string;
+  supplierId: string;
+  createdAt: string;
+  updatedAt: string;
+  expectedDeliveryDate: string;
+  notes: string;
+  status: PurchaseOrderStatus;
+  items: PurchaseOrderItem[];
 }
 
 
@@ -318,6 +346,8 @@ export interface AppState {
   // Temporary Hold Bills
   holdBills: HoldBill[];
   holdBillsCounter: number;
+  purchaseOrders?: PurchaseOrder[];
+  purchaseOrderCounter?: number;
 }
 
 

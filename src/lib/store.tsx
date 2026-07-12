@@ -51,6 +51,9 @@ import type {
   FinanceTransaction,
   HoldBill,
   PurchaseReturn,
+  PurchaseOrder,
+  PurchaseOrderItem,
+  PurchaseOrderStatus,
 } from "@/types";
 import { todayLocalStr } from "@/lib/dateUtils";
 
@@ -92,6 +95,8 @@ const INITIAL_STATE: AppState = {
   financeTransactions: [],
   holdBills: [],
   holdBillsCounter: 0,
+  purchaseOrders: [],
+  purchaseOrderCounter: 0,
 };
 
 const STORAGE_KEY = "autovault_store";
@@ -137,7 +142,15 @@ type Action =
   | { type: "CREATE_HOLD_BILL"; bill: Omit<HoldBill, "id" | "createdAt" | "updatedAt" | "holdNumber"> }
   | { type: "UPDATE_HOLD_BILL"; billId: string; bill: Omit<HoldBill, "id" | "createdAt" | "updatedAt" | "holdNumber"> }
   | { type: "DELETE_HOLD_BILL"; id: string }
-  | { type: "LOAD_HOLD_BILL"; id: string };
+  | { type: "LOAD_HOLD_BILL"; id: string }
+
+  // Purchase Orders (Sprint 4.6)
+  | { type: "CREATE_PURCHASE_ORDER"; po: Omit<PurchaseOrder, "id" | "poNumber" | "createdAt" | "updatedAt"> }
+  | { type: "UPDATE_PURCHASE_ORDER"; poId: string; expectedDeliveryDate: string; notes: string; items: PurchaseOrderItem[]; status: PurchaseOrderStatus }
+  | { type: "DELETE_PURCHASE_ORDER"; poId: string }
+  | { type: "MARK_PURCHASE_ORDER_SENT"; poId: string }
+  | { type: "MARK_PURCHASE_ORDER_CANCELLED"; poId: string }
+  | { type: "COMPLETE_PURCHASE_ORDER"; poId: string };
 
 // ─────────────────────────────────────────────
 //  HELPERS (pure, used inside reducer)
@@ -863,6 +876,8 @@ function reducer(state: AppState, action: Action): AppState {
         purchaseReturns: action.state.purchaseReturns ?? [],
         holdBills: action.state.holdBills ?? [],
         holdBillsCounter: action.state.holdBillsCounter ?? 0,
+        purchaseOrders: action.state.purchaseOrders ?? [],
+        purchaseOrderCounter: action.state.purchaseOrderCounter ?? 0,
       };
     }
 
@@ -942,6 +957,28 @@ function reducer(state: AppState, action: Action): AppState {
         });
       }
 
+      let newPurchaseOrders = state.purchaseOrders || [];
+      if (purchase.purchaseOrderId) {
+        newPurchaseOrders = (state.purchaseOrders || []).map((po) => {
+          if (po.id !== purchase.purchaseOrderId) return po;
+          const updatedItems = po.items.map((item) => {
+            if (item.productId !== purchase.productId) return item;
+            return {
+              ...item,
+              receivedQuantity: item.receivedQuantity + purchase.quantity,
+            };
+          });
+          const isAllCompleted = updatedItems.every((item) => item.receivedQuantity >= item.quantity);
+          const newStatus: PurchaseOrderStatus = isAllCompleted ? "Completed" : "Partially Received";
+          return {
+            ...po,
+            items: updatedItems,
+            status: newStatus,
+            updatedAt: new Date().toISOString(),
+          };
+        });
+      }
+
       return {
         ...state,
         purchases: newPurchases,
@@ -949,6 +986,7 @@ function reducer(state: AppState, action: Action): AppState {
         stockMovements: newStockMovements,
         supplierPayments: newPayments,
         financeTransactions: newFinanceTransactions,
+        purchaseOrders: newPurchaseOrders,
       };
     }
 
@@ -1120,6 +1158,88 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    // ── Purchase Order Reducers (Sprint 4.6) ─────────────────────────────────
+    case "CREATE_PURCHASE_ORDER": {
+      const nextCounter = (state.purchaseOrderCounter || 0) + 1;
+      const poNumber = `PO-2026-${String(nextCounter).padStart(5, "0")}`;
+      const now = new Date().toISOString();
+      const newPo: PurchaseOrder = {
+        ...action.po,
+        id: generateUniqueId("po"),
+        poNumber,
+        createdAt: now,
+        updatedAt: now,
+        status: action.po.status || "Draft",
+        items: action.po.items.map((item) => ({
+          ...item,
+          id: item.id || `poi-${crypto.randomUUID()}`,
+          receivedQuantity: 0,
+        })),
+      };
+      return {
+        ...state,
+        purchaseOrders: [...(state.purchaseOrders || []), newPo],
+        purchaseOrderCounter: nextCounter,
+      };
+    }
+
+    case "UPDATE_PURCHASE_ORDER": {
+      const { poId, expectedDeliveryDate, notes, items, status } = action;
+      const newPurchaseOrders = (state.purchaseOrders || []).map((po) => {
+        if (po.id !== poId) return po;
+        return {
+          ...po,
+          expectedDeliveryDate,
+          notes,
+          items: items.map((item) => ({
+            ...item,
+            id: item.id || `poi-${crypto.randomUUID()}`,
+            receivedQuantity: item.receivedQuantity ?? 0,
+          })),
+          status,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      return {
+        ...state,
+        purchaseOrders: newPurchaseOrders,
+      };
+    }
+
+    case "DELETE_PURCHASE_ORDER": {
+      return {
+        ...state,
+        purchaseOrders: (state.purchaseOrders || []).filter((po) => po.id !== action.poId),
+      };
+    }
+
+    case "MARK_PURCHASE_ORDER_SENT": {
+      return {
+        ...state,
+        purchaseOrders: (state.purchaseOrders || []).map((po) =>
+          po.id === action.poId ? { ...po, status: "Sent" as const, updatedAt: new Date().toISOString() } : po
+        ),
+      };
+    }
+
+    case "MARK_PURCHASE_ORDER_CANCELLED": {
+      return {
+        ...state,
+        purchaseOrders: (state.purchaseOrders || []).map((po) =>
+          po.id === action.poId ? { ...po, status: "Cancelled" as const, updatedAt: new Date().toISOString() } : po
+        ),
+      };
+    }
+
+    case "COMPLETE_PURCHASE_ORDER": {
+      return {
+        ...state,
+        purchaseOrders: (state.purchaseOrders || []).map((po) =>
+          po.id === action.poId ? { ...po, status: "Completed" as const, updatedAt: new Date().toISOString() } : po
+        ),
+      };
+    }
+
     // ── Hold Bills Reducers ──────────────────────────────────────────────────
     //
     // Complete isolation constraint: None of these actions interact with stock,
@@ -1225,6 +1345,7 @@ interface StoreContextValue {
     paymentMethod: PaymentMethod;
     totalPaid: number;
     items: Array<{ productId: string; quantity: number; buyPrice: number }>;
+    purchaseOrderId?: string;
   }) => void;
   updatePurchase: (purchaseId: string, invoiceNumber: string, date: string, notes: string) => void;
   recordSupplierPayment: (payment: Omit<SupplierPayment, "id">) => void;
@@ -1235,6 +1356,14 @@ interface StoreContextValue {
   getPurchaseReturnsBySupplier: (supplierId: string) => PurchaseReturn[];
   getSupplierOutstandingBalance: (supplierId: string) => number;
   getTotalSupplierOutstanding: () => number;
+
+  // Purchase Order Helpers (Sprint 4.6)
+  createPurchaseOrder: (po: Omit<PurchaseOrder, "id" | "poNumber" | "createdAt" | "updatedAt">) => void;
+  updatePurchaseOrder: (poId: string, expectedDeliveryDate: string, notes: string, items: PurchaseOrderItem[], status: PurchaseOrderStatus) => void;
+  deletePurchaseOrder: (poId: string) => void;
+  completePurchaseOrder: (poId: string) => void;
+  markPurchaseOrderSent: (poId: string) => void;
+  markPurchaseOrderCancelled: (poId: string) => void;
 
   // Future Ready Hooks / Selectors
   getSupplierBalance: (supplierId: string) => number;
@@ -1625,8 +1754,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     paymentMethod: PaymentMethod;
     totalPaid: number;
     items: Array<{ productId: string; quantity: number; buyPrice: number }>;
+    purchaseOrderId?: string;
   }) {
-    const { supplierId, invoiceNumber, date, notes, paymentMethod, totalPaid, items } = params;
+    const { supplierId, invoiceNumber, date, notes, paymentMethod, totalPaid, items, purchaseOrderId } = params;
 
     // 1. Compute per-item subtotals
     const itemTotals = items.map((item) => roundMoney(item.quantity * item.buyPrice));
@@ -1667,9 +1797,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         notes,
         paymentStatus: status,
         amountPaid: paid,
-        // Always pass paymentMethod — addPurchase() already skips the
-        // SupplierPayment + FinanceTransaction when amountPaid === 0
         paymentMethod,
+        purchaseOrderId,
       });
     });
   }
@@ -1743,6 +1872,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const paid = payments.reduce((s, pay) => s + pay.amount, 0);
         return sum + Math.max(0, roundMoney(total - returnedValue - paid));
       }, 0);
+  }
+
+  function createPurchaseOrder(po: Omit<PurchaseOrder, "id" | "poNumber" | "createdAt" | "updatedAt">) {
+    dispatch({ type: "CREATE_PURCHASE_ORDER", po });
+  }
+
+  function updatePurchaseOrder(poId: string, expectedDeliveryDate: string, notes: string, items: PurchaseOrderItem[], status: PurchaseOrderStatus) {
+    dispatch({ type: "UPDATE_PURCHASE_ORDER", poId, expectedDeliveryDate, notes, items, status });
+  }
+
+  function deletePurchaseOrder(poId: string) {
+    dispatch({ type: "DELETE_PURCHASE_ORDER", poId });
+  }
+
+  function completePurchaseOrder(poId: string) {
+    dispatch({ type: "COMPLETE_PURCHASE_ORDER", poId });
+  }
+
+  function markPurchaseOrderSent(poId: string) {
+    dispatch({ type: "MARK_PURCHASE_ORDER_SENT", poId });
+  }
+
+  function markPurchaseOrderCancelled(poId: string) {
+    dispatch({ type: "MARK_PURCHASE_ORDER_CANCELLED", poId });
   }
 
   // Future Ready Selectors
@@ -1882,6 +2035,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         getPurchaseReturnsBySupplier,
         getSupplierOutstandingBalance,
         getTotalSupplierOutstanding,
+        // Purchase Orders
+        createPurchaseOrder,
+        updatePurchaseOrder,
+        deletePurchaseOrder,
+        completePurchaseOrder,
+        markPurchaseOrderSent,
+        markPurchaseOrderCancelled,
         getSupplierBalance,
         getSupplierLifetimePurchase,
         getSupplierAveragePurchase,

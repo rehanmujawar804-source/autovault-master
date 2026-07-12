@@ -363,6 +363,68 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* ── Purchase Orders KPI Strip (Owner only) ── */}
+      {isOwner && (() => {
+        const allPOs = state.purchaseOrders ?? [];
+        const todayMs = new Date(today).getTime();
+        const weekMs = todayMs + 7 * 24 * 60 * 60 * 1000;
+
+        const openPOs = allPOs.filter((po) => po.status === "Draft" || po.status === "Sent");
+        const latePOs = allPOs.filter((po) => {
+          if (po.status === "Completed" || po.status === "Cancelled") return false;
+          return new Date(po.expectedDeliveryDate).getTime() < todayMs;
+        });
+        const dueThisWeek = allPOs.filter((po) => {
+          if (po.status === "Completed" || po.status === "Cancelled") return false;
+          const ms = new Date(po.expectedDeliveryDate).getTime();
+          return ms >= todayMs && ms <= weekMs;
+        });
+
+        if (allPOs.length === 0) return null;
+
+        return (
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2">
+                <FileText size={15} className="text-blue-500" />
+                <h2 className="font-extrabold text-slate-900 text-sm uppercase tracking-wider">Purchase Orders</h2>
+              </div>
+              <Link
+                href="/suppliers"
+                className="text-xs font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1 cursor-pointer"
+              >
+                Manage <ChevronRight size={12} />
+              </Link>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              {/* Open POs */}
+              <Link href="/suppliers" className="group bg-blue-50/60 border border-blue-100 rounded-xl p-4 hover:bg-blue-50 transition-colors cursor-pointer">
+                <p className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">Open POs</p>
+                <p className="text-2xl font-extrabold text-blue-800 mt-1">{openPOs.length}</p>
+                <p className="text-[10px] text-blue-400 mt-1">Draft + Sent</p>
+              </Link>
+
+              {/* Late POs */}
+              <Link href="/suppliers" className={`group rounded-xl p-4 border transition-colors cursor-pointer ${latePOs.length > 0 ? "bg-rose-50/60 border-rose-100 hover:bg-rose-50" : "bg-slate-50 border-slate-100"}`}>
+                <div className="flex items-center gap-1.5">
+                  {latePOs.length > 0 && <span className="w-1.5 h-1.5 bg-rose-500 rounded-full animate-pulse" />}
+                  <p className={`text-[10px] font-bold uppercase tracking-wider ${latePOs.length > 0 ? "text-rose-600" : "text-slate-400"}`}>Late POs</p>
+                </div>
+                <p className={`text-2xl font-extrabold mt-1 ${latePOs.length > 0 ? "text-rose-800" : "text-slate-400"}`}>{latePOs.length}</p>
+                <p className={`text-[10px] mt-1 ${latePOs.length > 0 ? "text-rose-400" : "text-slate-300"}`}>Past expected date</p>
+              </Link>
+
+              {/* Due This Week */}
+              <Link href="/suppliers" className={`group rounded-xl p-4 border transition-colors cursor-pointer ${dueThisWeek.length > 0 ? "bg-amber-50/60 border-amber-100 hover:bg-amber-50" : "bg-slate-50 border-slate-100"}`}>
+                <p className={`text-[10px] font-bold uppercase tracking-wider ${dueThisWeek.length > 0 ? "text-amber-600" : "text-slate-400"}`}>Due This Week</p>
+                <p className={`text-2xl font-extrabold mt-1 ${dueThisWeek.length > 0 ? "text-amber-800" : "text-slate-400"}`}>{dueThisWeek.length}</p>
+                <p className={`text-[10px] mt-1 ${dueThisWeek.length > 0 ? "text-amber-400" : "text-slate-300"}`}>Next 7 days</p>
+              </Link>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── ZONE 3: 12-Column Layout Grid (Invoices & Trends vs Sidebar Controls) ── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
 

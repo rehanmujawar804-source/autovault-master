@@ -2,7 +2,7 @@
 
 import { use, useMemo, useState, useEffect, memo, useCallback } from "react";
 import { useStore } from "@/lib/store";
-import type { Purchase, SupplierPayment, PaymentMethod, PurchaseLineItem, PurchaseReturn } from "@/types";
+import type { Purchase, SupplierPayment, PaymentMethod, PurchaseLineItem, PurchaseReturn, PurchaseOrder, PurchaseOrderItem, PurchaseOrderStatus } from "@/types";
 import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
 import {
@@ -29,6 +29,10 @@ import {
   Info,
   Trash2,
   CornerDownLeft,
+  FileText,
+  Printer,
+  Copy,
+  Ban,
 } from "lucide-react";
 import type { Supplier, Product } from "@/types";
 
@@ -50,6 +54,14 @@ function formatDate(dateStr?: string | null) {
 const INPUT =
   "w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-400";
 
+const PO_STATUS_COLOR: Record<PurchaseOrderStatus, string> = {
+  Draft: "bg-slate-100 text-slate-700 border-slate-200",
+  Sent: "bg-blue-50 text-blue-700 border-blue-200",
+  "Partially Received": "bg-amber-50 text-amber-800 border-amber-200",
+  Completed: "bg-emerald-50 text-emerald-800 border-emerald-200",
+  Cancelled: "bg-rose-50 text-rose-700 border-rose-200",
+};
+
 // ─────────────────────────────────────────────
 //  SUPPLIER INVOICE MODAL (Sprint 4.4 + enhancements)
 // ─────────────────────────────────────────────
@@ -60,6 +72,7 @@ interface SupplierInvoiceModalProps {
   supplier: Supplier;
   products: Product[];
   purchaseCount: number; // for ERP record number preview
+  initialPO?: PurchaseOrder | null; // Sprint 4.6 — pre-fill from PO conversion
 }
 
 function blankRow(): PurchaseLineItem {
@@ -411,7 +424,7 @@ function SuccessOverlay({ purchases, movements, finance }: SuccessOverlayProps) 
 
 // ── Main Modal ───────────────────────────────────────────────────────────────
 
-function SupplierInvoiceModal({ isOpen, onClose, supplier, products, purchaseCount }: SupplierInvoiceModalProps) {
+function SupplierInvoiceModal({ isOpen, onClose, supplier, products, purchaseCount, initialPO }: SupplierInvoiceModalProps) {
   const { addPurchaseBatch, showToast } = useStore();
 
   const today = new Date().toISOString().split("T")[0];
@@ -443,12 +456,27 @@ function SupplierInvoiceModal({ isOpen, onClose, supplier, products, purchaseCou
     setDate(today);
     setPaymentMethod("Cash");
     setPaidInput("");
-    setNotes("");
-    setRows([blankRow()]);
     setFormError("");
     setShowBulkPaste(false);
     setBulkPasteText("");
     setSuccessState(null);
+
+    // Pre-fill from PO conversion: only remaining quantities
+    if (initialPO) {
+      setNotes(`Received against ${initialPO.poNumber}`);
+      const poRows: PurchaseLineItem[] = initialPO.items
+        .filter((item) => item.quantity - item.receivedQuantity > 0)
+        .map((item) => ({
+          id: crypto.randomUUID(),
+          productId: item.productId,
+          quantity: String(item.quantity - item.receivedQuantity),
+          buyPrice: String(item.expectedBuyPrice),
+        }));
+      setRows(poRows.length > 0 ? poRows : [blankRow()]);
+    } else {
+      setNotes("");
+      setRows([blankRow()]);
+    }
   }
 
   // ── Callbacks for Memoized Row Performance ──────────────────────────────────
@@ -611,6 +639,7 @@ function SupplierInvoiceModal({ isOpen, onClose, supplier, products, purchaseCou
         paymentMethod,
         totalPaid: rawPaid,
         items,
+        purchaseOrderId: initialPO?.id,
       });
 
       // Show success screen animations
@@ -1007,6 +1036,394 @@ function EditSupplierModal({ isOpen, onClose, supplier }: EditSupplierModalProps
 }
 
 // ─────────────────────────────────────────────
+//  PURCHASE ORDER MODAL (Sprint 4.6)
+// ─────────────────────────────────────────────
+
+interface POModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  supplier: Supplier;
+  products: Product[];
+  existingPO?: PurchaseOrder | null; // null → create, PurchaseOrder → edit
+}
+
+interface POLineItem {
+  id: string;
+  productId: string;
+  quantity: string;
+  expectedBuyPrice: string;
+}
+
+function blankPORow(): POLineItem {
+  return { id: crypto.randomUUID(), productId: "", quantity: "", expectedBuyPrice: "" };
+}
+
+function PurchaseOrderModal({ isOpen, onClose, supplier, products, existingPO }: POModalProps) {
+  const { createPurchaseOrder, updatePurchaseOrder, showToast } = useStore();
+
+  const today = new Date().toISOString().split("T")[0];
+  const oneWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+  const [expectedDelivery, setExpectedDelivery] = useState(oneWeek);
+  const [notes, setNotes] = useState("");
+  const [rows, setRows] = useState<POLineItem[]>([blankPORow()]);
+  const [formError, setFormError] = useState("");
+  const [initialized, setInitialized] = useState(false);
+
+  // Reset / seed when modal opens
+  if (isOpen && !initialized) {
+    setInitialized(true);
+    setFormError("");
+    if (existingPO) {
+      setExpectedDelivery(existingPO.expectedDeliveryDate || oneWeek);
+      setNotes(existingPO.notes || "");
+      const isPartiallyReceived = existingPO.status === "Partially Received";
+      setRows(
+        existingPO.items.map((item) => ({
+          id: item.id || crypto.randomUUID(),
+          productId: item.productId,
+          // When partially received, show remaining qty only
+          quantity: isPartiallyReceived
+            ? String(Math.max(0, item.quantity - item.receivedQuantity))
+            : String(item.quantity),
+          expectedBuyPrice: String(item.expectedBuyPrice),
+        }))
+      );
+    } else {
+      setExpectedDelivery(oneWeek);
+      setNotes("");
+      setRows([blankPORow()]);
+    }
+  }
+
+  function handleClose() {
+    setInitialized(false);
+    onClose();
+  }
+
+  const estTotal = rows.reduce((s, r) => {
+    const qty = parseInt(r.quantity) || 0;
+    const price = parseFloat(r.expectedBuyPrice) || 0;
+    return s + qty * price;
+  }, 0);
+
+  // Inline validation
+  const rowErrors: Record<string, { quantity?: string; buyPrice?: string; productId?: string }> = {};
+  rows.forEach((r) => {
+    rowErrors[r.id] = {};
+    if (!r.productId) rowErrors[r.id].productId = "Select product";
+    const qVal = parseInt(r.quantity);
+    if (!r.quantity) rowErrors[r.id].quantity = "Required";
+    else if (isNaN(qVal) || qVal <= 0) rowErrors[r.id].quantity = "> 0";
+    const pVal = parseFloat(r.expectedBuyPrice);
+    if (!r.expectedBuyPrice) rowErrors[r.id].buyPrice = "Required";
+    else if (isNaN(pVal) || pVal < 0) rowErrors[r.id].buyPrice = ">= 0";
+  });
+
+  const isFormValid =
+    rows.length > 0 &&
+    Object.values(rowErrors).every((e) => !e.productId && !e.quantity && !e.buyPrice);
+
+  function handleSave() {
+    if (!isFormValid) { setFormError("Please fix all row errors before saving."); return; }
+    if (!expectedDelivery) { setFormError("Expected delivery date is required."); return; }
+    setFormError("");
+
+    const items: PurchaseOrderItem[] = rows.map((r) => ({
+      id: r.id,
+      productId: r.productId,
+      quantity: parseInt(r.quantity),
+      expectedBuyPrice: parseFloat(r.expectedBuyPrice),
+      receivedQuantity: 0,
+    }));
+
+    if (existingPO) {
+      // Edit — preserve received quantities
+      const mergedItems: PurchaseOrderItem[] = items.map((item) => {
+        const orig = existingPO.items.find((i) => i.id === item.id);
+        return { ...item, receivedQuantity: orig?.receivedQuantity ?? 0 };
+      });
+      updatePurchaseOrder(
+        existingPO.id,
+        expectedDelivery,
+        notes.trim(),
+        mergedItems,
+        existingPO.status
+      );
+      showToast(`${existingPO.poNumber} updated`, "success");
+    } else {
+      createPurchaseOrder({
+        supplierId: supplier.id,
+        expectedDeliveryDate: expectedDelivery,
+        notes: notes.trim(),
+        items,
+        status: "Draft",
+      });
+      showToast("Purchase Order created", "success");
+    }
+
+    setInitialized(false);
+    onClose();
+  }
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
+          <div>
+            <h2 className="text-base font-black text-slate-800">
+              {existingPO ? `Edit ${existingPO.poNumber}` : "New Purchase Order"}
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {supplier.name} · Planning document only — no stock or finance changes
+            </p>
+          </div>
+          <button onClick={handleClose} className="p-2 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors">
+            <X size={16} className="text-slate-500" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          {/* Metadata row */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1.5 block">
+                Expected Delivery Date <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="date"
+                value={expectedDelivery}
+                min={today}
+                onChange={(e) => setExpectedDelivery(e.target.value)}
+                className={INPUT}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1.5 block">
+                Notes / Reference
+              </label>
+              <input
+                type="text"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="e.g. Diwali restock"
+                className={INPUT}
+              />
+            </div>
+          </div>
+
+          {/* Items */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-slate-600">Items</label>
+              <button
+                type="button"
+                onClick={() => setRows((prev) => [...prev, blankPORow()])}
+                className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 hover:text-emerald-600 cursor-pointer"
+              >
+                <Plus size={12} /> Add Row
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {rows.map((row, idx) => {
+                const errs = rowErrors[row.id] || {};
+                const qty = parseInt(row.quantity) || 0;
+                const price = parseFloat(row.expectedBuyPrice) || 0;
+                const rowTotal = qty * price;
+                const selectedProduct = products.find((p) => p.id === row.productId);
+
+                return (
+                  <div key={row.id} className="grid grid-cols-[1fr_80px_90px_60px_24px] gap-2 items-start bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    {/* Product */}
+                    <div>
+                      <ProductSearchCombobox
+                        value={row.productId}
+                        onChange={(pid) => setRows((prev) => prev.map((r) => r.id === row.id ? { ...r, productId: pid } : r))}
+                        products={products}
+                        rowIdx={idx}
+                      />
+                      {errs.productId && <p className="text-[10px] text-red-500 mt-0.5">{errs.productId}</p>}
+                    </div>
+
+                    {/* Qty */}
+                    <div>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Qty"
+                        value={row.quantity}
+                        onChange={(e) => setRows((prev) => prev.map((r) => r.id === row.id ? { ...r, quantity: e.target.value } : r))}
+                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600"
+                      />
+                      {errs.quantity && <p className="text-[10px] text-red-500 mt-0.5">{errs.quantity}</p>}
+                    </div>
+
+                    {/* Expected Buy Price */}
+                    <div>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="₹ Price"
+                        value={row.expectedBuyPrice}
+                        onChange={(e) => setRows((prev) => prev.map((r) => r.id === row.id ? { ...r, expectedBuyPrice: e.target.value } : r))}
+                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600"
+                      />
+                      {errs.buyPrice && <p className="text-[10px] text-red-500 mt-0.5">{errs.buyPrice}</p>}
+                    </div>
+
+                    {/* Row total */}
+                    <div className="text-right pt-2 text-xs font-bold text-slate-700">
+                      {rowTotal > 0 ? `₹${rowTotal.toLocaleString()}` : "—"}
+                    </div>
+
+                    {/* Delete row */}
+                    <button
+                      type="button"
+                      onClick={() => setRows((prev) => prev.length > 1 ? prev.filter((r) => r.id !== row.id) : prev)}
+                      disabled={rows.length === 1}
+                      className="mt-1.5 w-6 h-6 rounded-md bg-slate-100 text-slate-400 hover:bg-red-50 hover:text-red-500 flex items-center justify-center transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {formError && (
+            <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-xs font-semibold text-red-700">
+              {formError}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-100 shrink-0 flex items-center justify-between gap-3">
+          <div className="text-sm">
+            <span className="text-slate-400 font-medium">Est. Total: </span>
+            <span className="font-extrabold text-slate-800">₹{estTotal.toLocaleString()}</span>
+          </div>
+          <div className="flex gap-3">
+            <button onClick={handleClose} className="px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer">
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!isFormValid}
+              className="px-5 py-2.5 text-sm font-bold text-navy-950 bg-yellow-400 rounded-xl hover:bg-yellow-300 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {existingPO ? "Save Changes" : "Create PO"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  PO PRINT SLIP OVERLAY (Sprint 4.6)
+// ─────────────────────────────────────────────
+
+function POPrintSlip({ po, supplier, products, onClose }: { po: PurchaseOrder; supplier: Supplier; products: Product[]; onClose: () => void }) {
+  const estTotal = po.items.reduce((s, item) => s + item.quantity * item.expectedBuyPrice, 0);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
+        {/* Print header */}
+        <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+          <div>
+            <p className="text-xs text-slate-400 font-mono uppercase tracking-wider">Purchase Order</p>
+            <h2 className="text-xl font-extrabold tracking-tight mt-0.5">{po.poNumber}</h2>
+          </div>
+          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${PO_STATUS_COLOR[po.status]}`}>
+            {po.status}
+          </span>
+        </div>
+
+        {/* Supplier & meta */}
+        <div className="px-6 py-4 grid grid-cols-2 gap-4 border-b border-slate-100 text-xs">
+          <div>
+            <p className="text-slate-400 font-semibold">Supplier</p>
+            <p className="font-bold text-slate-800 mt-0.5">{supplier.name}</p>
+            {supplier.phone && <p className="text-slate-500">{supplier.phone}</p>}
+          </div>
+          <div className="text-right">
+            <p className="text-slate-400 font-semibold">Expected Delivery</p>
+            <p className="font-bold text-slate-800 mt-0.5">{formatDate(po.expectedDeliveryDate)}</p>
+            <p className="text-slate-400 mt-1 font-semibold">Created</p>
+            <p className="text-slate-600">{formatDate(po.createdAt)}</p>
+          </div>
+        </div>
+
+        {/* Items table */}
+        <div className="px-6 py-4">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-slate-100">
+                <th className="text-left text-slate-400 font-semibold pb-2">Product</th>
+                <th className="text-center text-slate-400 font-semibold pb-2">Qty</th>
+                <th className="text-right text-slate-400 font-semibold pb-2">Unit Price</th>
+                <th className="text-right text-slate-400 font-semibold pb-2">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {po.items.map((item) => {
+                const product = products.find((p) => p.id === item.productId);
+                return (
+                  <tr key={item.id} className="py-2">
+                    <td className="py-2 font-semibold text-slate-800">{product?.name || "Unknown"}</td>
+                    <td className="py-2 text-center text-slate-600">{item.quantity}</td>
+                    <td className="py-2 text-right text-slate-600">₹{item.expectedBuyPrice.toLocaleString()}</td>
+                    <td className="py-2 text-right font-bold text-slate-800">₹{(item.quantity * item.expectedBuyPrice).toLocaleString()}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-slate-200">
+                <td colSpan={3} className="pt-3 text-right font-bold text-slate-600 text-sm">Estimated Total</td>
+                <td className="pt-3 text-right font-extrabold text-slate-800 text-sm">₹{estTotal.toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        {po.notes && (
+          <div className="px-6 pb-3">
+            <p className="text-xs text-slate-500 italic">&ldquo;{po.notes}&rdquo;</p>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-3">
+          <p className="text-[10px] text-slate-400">AutoVault ERP · For Supplier Acknowledgement Only</p>
+          <div className="flex gap-3">
+            <button
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-slate-800 rounded-xl hover:bg-slate-700 cursor-pointer transition-colors"
+            >
+              <Printer size={13} /> Print
+            </button>
+            <button onClick={onClose} className="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 cursor-pointer transition-colors">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 //  SUPPLIER DETAILS PAGE
 // ─────────────────────────────────────────────
 
@@ -1014,6 +1431,7 @@ const TABS = [
   { id: "overview", label: "Overview", icon: Truck },
   { id: "products", label: "Products Supplied", icon: Package },
   { id: "purchases", label: "Purchase History", icon: ShoppingBag },
+  { id: "purchase_orders", label: "Purchase Orders", icon: FileText },
   { id: "payments", label: "Payment History", icon: Coins },
   { id: "activity", label: "Activity", icon: Activity },
 ] as const;
@@ -1022,7 +1440,23 @@ type TabId = (typeof TABS)[number]["id"];
 
 export default function SupplierDetailsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { state, addPurchaseBatch, addPurchaseReturn, recordSupplierPayment, getSupplierPaymentsBySupplier, getPurchaseReturnsByPurchase, getPurchaseReturnsBySupplier, updatePurchase } = useStore();
+  const {
+    state,
+    showToast,
+    addPurchaseBatch,
+    addPurchaseReturn,
+    recordSupplierPayment,
+    getSupplierPaymentsBySupplier,
+    getPurchaseReturnsByPurchase,
+    getPurchaseReturnsBySupplier,
+    updatePurchase,
+    createPurchaseOrder,
+    updatePurchaseOrder,
+    deletePurchaseOrder,
+    completePurchaseOrder,
+    markPurchaseOrderSent,
+    markPurchaseOrderCancelled,
+  } = useStore();
   const { isOwner } = useRole();
 
   const [activeTab, setActiveTab] = useState<TabId>("overview");
@@ -1031,6 +1465,16 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
   const [payPurchase, setPayPurchase] = useState<Purchase | null>(null);
   const [editPurchase, setEditPurchase] = useState<Purchase | null>(null);
   const [returnPurchase, setReturnPurchase] = useState<Purchase | null>(null);
+
+  const [showAddPO, setShowAddPO] = useState(false);
+  const [editPO, setEditPO] = useState<PurchaseOrder | null>(null);
+  const [printPO, setPrintPO] = useState<PurchaseOrder | null>(null);
+  const [convertingPO, setConvertingPO] = useState<PurchaseOrder | null>(null);
+
+  const handleConvertPOToInvoice = useCallback((po: PurchaseOrder) => {
+    setConvertingPO(po);
+    setShowAddPurchase(true);
+  }, []);
 
   const supplier = useMemo(() => (state.suppliers || []).find((s) => s.id === id), [state.suppliers, id]);
   const purchases = useMemo(() => (state.purchases || []).filter((p) => p.supplierId === id).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()), [state.purchases, id]);
@@ -1658,6 +2102,210 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
           );
         })()}
 
+        {/* ── PURCHASE ORDERS TAB ── */}
+        {activeTab === "purchase_orders" && (() => {
+          const pos = (state.purchaseOrders || [])
+            .filter((po) => po.supplierId === id)
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+          return (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-black text-slate-800">Purchase Orders</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Planning documents · No impact on stock or finance until converted</p>
+                </div>
+                {isOwner && (
+                  <button
+                    onClick={() => setShowAddPO(true)}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-navy-950 bg-yellow-400 px-3 py-1.5 rounded-xl hover:bg-yellow-300 transition-colors cursor-pointer"
+                  >
+                    <Plus size={13} />
+                    Create PO
+                  </button>
+                )}
+              </div>
+
+              {pos.length === 0 ? (
+                <div className="py-16 flex flex-col items-center justify-center gap-3 text-center">
+                  <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center">
+                    <FileText size={20} className="text-slate-300" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-700">No Purchase Orders</p>
+                    <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
+                      Create purchase orders to plan inventory restocking before committing a purchase.
+                    </p>
+                  </div>
+                  {isOwner && (
+                    <button
+                      onClick={() => setShowAddPO(true)}
+                      className="inline-flex items-center gap-2 text-xs font-bold text-navy-950 bg-yellow-400 px-3 py-2 rounded-xl hover:bg-yellow-300 transition-colors cursor-pointer mt-2"
+                    >
+                      <Plus size={13} />
+                      Create First PO
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {pos.map((po) => {
+                    const estTotal = po.items.reduce((s, item) => s + item.quantity * item.expectedBuyPrice, 0);
+                    const totalUnits = po.items.reduce((s, item) => s + item.quantity, 0);
+                    const receivedUnits = po.items.reduce((s, item) => s + item.receivedQuantity, 0);
+                    const remainingUnits = Math.max(0, totalUnits - receivedUnits);
+                    const isEditable = po.status === "Draft" || po.status === "Sent";
+                    const isLimitedEdit = po.status === "Partially Received";
+                    const isTerminal = po.status === "Completed" || po.status === "Cancelled";
+                    const canConvert = !isTerminal && remainingUnits > 0;
+
+                    return (
+                      <div key={po.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col">
+                        {/* Card header */}
+                        <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">Purchase Order</span>
+                            <span className="font-extrabold text-slate-800 text-sm block mt-0.5">{po.poNumber}</span>
+                          </div>
+                          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${PO_STATUS_COLOR[po.status]}`}>
+                            {po.status}
+                          </span>
+                        </div>
+
+                        {/* Card body */}
+                        <div className="px-5 py-4 flex-1 space-y-3">
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                            <div>
+                              <p className="text-slate-400 font-medium">Created</p>
+                              <p className="font-bold text-slate-700 mt-0.5">{formatDate(po.createdAt)}</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-400 font-medium">Expected Delivery</p>
+                              <p className="font-bold text-slate-700 mt-0.5">{formatDate(po.expectedDeliveryDate)}</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-400 font-medium">Items / Units</p>
+                              <p className="font-bold text-slate-700 mt-0.5">{po.items.length} products · {totalUnits} units</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-400 font-medium">Est. Value</p>
+                              <p className="font-bold text-slate-700 mt-0.5">₹{estTotal.toLocaleString()}</p>
+                            </div>
+                          </div>
+
+                          {po.status === "Partially Received" && (
+                            <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-800 font-semibold">
+                              ⚡ {receivedUnits} of {totalUnits} units received · {remainingUnits} remaining
+                            </div>
+                          )}
+
+                          {po.notes && (
+                            <div className="bg-slate-50 border border-slate-100 rounded-xl px-3 py-2 text-xs text-slate-500 italic">
+                              &ldquo;{po.notes}&rdquo;
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Card footer actions */}
+                        <div className="px-5 py-3 border-t border-slate-100 flex items-center gap-2 flex-wrap justify-end bg-slate-50/50">
+                          {/* Print */}
+                          <button
+                            onClick={() => setPrintPO(po)}
+                            title="Print PO Slip"
+                            className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg cursor-pointer transition-colors"
+                          >
+                            <Printer size={14} />
+                          </button>
+
+                          {/* Duplicate */}
+                          <button
+                            onClick={() => {
+                              const deliveryDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+                              createPurchaseOrder({
+                                supplierId: po.supplierId,
+                                expectedDeliveryDate: deliveryDate,
+                                notes: `Copy of ${po.poNumber}${po.notes ? " · " + po.notes : ""}`,
+                                items: po.items.map((it) => ({ ...it, id: crypto.randomUUID(), receivedQuantity: 0 })),
+                                status: "Draft",
+                              });
+                              showToast(`Duplicated ${po.poNumber} as Draft`, "success");
+                            }}
+                            title="Duplicate as Draft"
+                            className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg cursor-pointer transition-colors"
+                          >
+                            <Copy size={14} />
+                          </button>
+
+                          {/* Edit — Draft, Sent, or Partially Received */}
+                          {(isEditable || isLimitedEdit) && (
+                            <button
+                              onClick={() => setEditPO(po)}
+                              className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors"
+                            >
+                              {isLimitedEdit ? "Edit Notes" : "Edit"}
+                            </button>
+                          )}
+
+                          {/* Mark as Sent (Draft only) */}
+                          {po.status === "Draft" && (
+                            <button
+                              onClick={() => {
+                                markPurchaseOrderSent(po.id);
+                                showToast(`${po.poNumber} marked as Sent`, "success");
+                              }}
+                              className="px-3 py-1.5 text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-lg cursor-pointer transition-colors"
+                            >
+                              Mark Sent
+                            </button>
+                          )}
+
+                          {/* Cancel — non-terminal */}
+                          {!isTerminal && (
+                            <button
+                              onClick={() => {
+                                markPurchaseOrderCancelled(po.id);
+                                showToast(`${po.poNumber} cancelled`, "info");
+                              }}
+                              title="Cancel PO"
+                              className="p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-700 rounded-lg cursor-pointer transition-colors"
+                            >
+                              <Ban size={14} />
+                            </button>
+                          )}
+
+                          {/* Delete — Draft only */}
+                          {po.status === "Draft" && (
+                            <button
+                              onClick={() => {
+                                deletePurchaseOrder(po.id);
+                                showToast(`${po.poNumber} deleted`, "error");
+                              }}
+                              title="Delete PO"
+                              className="p-1.5 text-red-500 hover:bg-red-50 hover:text-red-700 rounded-lg cursor-pointer transition-colors"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+
+                          {/* Convert → Receive Stock */}
+                          {canConvert && (
+                            <button
+                              onClick={() => handleConvertPOToInvoice(po)}
+                              className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg cursor-pointer transition-all shadow-sm"
+                            >
+                              Receive Stock →
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* ── ACTIVITY TAB ── */}
         {activeTab === "activity" && (
           <div className="space-y-4">
@@ -1700,10 +2348,14 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
       {/* Modals */}
       <SupplierInvoiceModal
         isOpen={showAddPurchase}
-        onClose={() => setShowAddPurchase(false)}
+        onClose={() => {
+          setShowAddPurchase(false);
+          setConvertingPO(null);
+        }}
         supplier={supplier}
         products={products}
         purchaseCount={state.purchases?.length ?? 0}
+        initialPO={convertingPO}
       />
       <EditSupplierModal
         isOpen={showEditSupplier}
@@ -1734,6 +2386,34 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
           products={products}
           onClose={() => setReturnPurchase(null)}
           addPurchaseReturn={addPurchaseReturn}
+        />
+      )}
+
+      {/* Purchase Order Modals (Sprint 4.6) */}
+      {supplier && (
+        <PurchaseOrderModal
+          isOpen={showAddPO}
+          onClose={() => setShowAddPO(false)}
+          supplier={supplier}
+          products={products}
+          existingPO={null}
+        />
+      )}
+      {editPO && supplier && (
+        <PurchaseOrderModal
+          isOpen={!!editPO}
+          onClose={() => setEditPO(null)}
+          supplier={supplier}
+          products={products}
+          existingPO={editPO}
+        />
+      )}
+      {printPO && supplier && (
+        <POPrintSlip
+          po={printPO}
+          supplier={supplier}
+          products={products}
+          onClose={() => setPrintPO(null)}
         />
       )}
     </div>

@@ -4,6 +4,7 @@ import { useMemo, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toLocalDateStr, todayLocalStr } from "@/lib/dateUtils";
+import { calculateRevenue } from "@/lib/revenueUtils";
 import StatCard from "@/components/StatCard";
 import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
@@ -116,6 +117,49 @@ export default function AnalyticsPage() {
     });
   }, [state.invoices, timeRange, startDate, endDate]);
 
+  const filteredSalesReturns = useMemo(() => {
+    const returns = (state.salesReturns || []).filter((r) => r.status !== "Cancelled");
+    const todayStr = todayLocalStr();
+    const [tYear, tMonth, tDay] = todayStr.split("-").map(Number);
+    const todayTime = Date.UTC(tYear, tMonth - 1, tDay);
+    const oneDay = 24 * 60 * 60 * 1000;
+
+    return returns.filter((r) => {
+      const rLocalDateStr = toLocalDateStr(r.createdAt);
+      if (!rLocalDateStr) return false;
+      const [year, month, day] = rLocalDateStr.split("-").map(Number);
+      const rTime = Date.UTC(year, month - 1, day);
+
+      if (timeRange === "Today") {
+        return rLocalDateStr === todayStr;
+      }
+      if (timeRange === "Week") {
+        return rTime >= todayTime - 6 * oneDay && rTime <= todayTime;
+      }
+      if (timeRange === "Month") {
+        return rTime >= todayTime - 29 * oneDay && rTime <= todayTime;
+      }
+      if (timeRange === "Quarter") {
+        return rTime >= todayTime - 89 * oneDay && rTime <= todayTime;
+      }
+      if (timeRange === "Year") {
+        return rTime >= todayTime - 364 * oneDay && rTime <= todayTime;
+      }
+      if (timeRange === "Custom") {
+        const start = startDate ? (() => {
+          const [sY, sM, sD] = startDate.split("-").map(Number);
+          return Date.UTC(sY, sM - 1, sD);
+        })() : 0;
+        const end = endDate ? (() => {
+          const [eY, eM, eD] = endDate.split("-").map(Number);
+          return Date.UTC(eY, eM - 1, eD);
+        })() : Infinity;
+        return rTime >= start && rTime <= end;
+      }
+      return true; // All Time
+    });
+  }, [state.salesReturns, timeRange, startDate, endDate]);
+
   // ── Derived Metrics (dynamic based on timeRange) ─────────────────────────
   const data = useMemo(() => {
     const products = state.products;
@@ -123,7 +167,7 @@ export default function AnalyticsPage() {
 
     // Financial KPIs
     const totalBilled = filteredInvoices.reduce((s, i) => s + i.total, 0);
-    const totalRevenue = filteredInvoices.reduce((s, i) => s + i.amountPaid, 0);
+    const totalRevenue = calculateRevenue(filteredInvoices, filteredSalesReturns);
     const totalDebt = filteredInvoices.reduce((s, i) => s + getInvoiceOutstanding(i), 0);
 
     const totalProfit = filteredInvoices.reduce((sum, inv) => {
@@ -198,11 +242,25 @@ export default function AnalyticsPage() {
             profit: 0,
           };
         }
-        const currentCost = products.find((p) => p.id === item.productId)?.currentCost ?? 0;
         productSalesMap[item.productId].qty += item.quantity;
-        productSalesMap[item.productId].revenue += item.price * item.quantity;
-        productSalesMap[item.productId].profit += (item.price - currentCost) * item.quantity;
       });
+    });
+
+    filteredSalesReturns.forEach((r) => {
+      r.items.forEach((ri) => {
+        if (productSalesMap[ri.productId]) {
+          productSalesMap[ri.productId].qty -= ri.quantity;
+        }
+      });
+    });
+
+    Object.keys(productSalesMap).forEach((productId) => {
+      const pInvs = filteredInvoices.filter((inv) => inv.items.some((item) => item.productId === productId));
+      const pReturns = filteredSalesReturns.filter((r) => r.items.some((item) => item.productId === productId));
+      productSalesMap[productId].revenue = calculateRevenue(pInvs, pReturns, productId);
+      
+      const currentCost = products.find((p) => p.id === productId)?.currentCost ?? 0;
+      productSalesMap[productId].profit = productSalesMap[productId].revenue - (productSalesMap[productId].qty * currentCost);
     });
 
     const topProducts = Object.entries(productSalesMap)
@@ -217,10 +275,38 @@ export default function AnalyticsPage() {
         const product = products.find((p) => p.id === item.productId);
         const cat = product?.category ?? "Accessories";
         if (!categoryMap[cat]) categoryMap[cat] = { revenue: 0, qty: 0 };
-        categoryMap[cat].revenue += item.price * item.quantity;
         categoryMap[cat].qty += item.quantity;
       });
     });
+
+    filteredSalesReturns.forEach((r) => {
+      r.items.forEach((ri) => {
+        const product = products.find((p) => p.id === ri.productId);
+        const cat = product?.category ?? "Accessories";
+        if (categoryMap[cat]) {
+          categoryMap[cat].qty -= ri.quantity;
+        }
+      });
+    });
+
+    Object.keys(categoryMap).forEach((cat) => {
+      const catProducts = products.filter((p) => p.category === cat);
+      const catProductIds = new Set(catProducts.map((p) => p.id));
+      
+      const catInvs = filteredInvoices.filter((inv) => inv.items.some((item) => catProductIds.has(item.productId)));
+      const catReturns = filteredSalesReturns.filter((r) => r.items.some((item) => catProductIds.has(item.productId)));
+      
+      let catRevenue = 0;
+      catProducts.forEach((p) => {
+        catRevenue += calculateRevenue(
+          catInvs.filter((inv) => inv.items.some((item) => item.productId === p.id)),
+          catReturns.filter((r) => r.items.some((item) => item.productId === p.id)),
+          p.id
+        );
+      });
+      categoryMap[cat].revenue = catRevenue;
+    });
+
     const categoryData = Object.entries(categoryMap)
       .map(([cat, v]) => ({ cat, ...v }))
       .sort((a, b) => b.revenue - a.revenue);
@@ -246,8 +332,17 @@ export default function AnalyticsPage() {
         spenderMap[cId] = { name: inv.customer, visits: 0, spent: 0 };
       }
       spenderMap[cId].visits += 1;
-      spenderMap[cId].spent += inv.total;
     });
+
+    Object.keys(spenderMap).forEach((cId) => {
+      const customerInvs = filteredInvoices.filter((inv) => (inv.customerId || `walkin-${inv.customer}`) === cId);
+      const customerReturns = filteredSalesReturns.filter((r) => {
+        const rCustId = r.customerId || `walkin-${state.invoices.find((i) => i.id === r.invoiceId)?.customer}`;
+        return rCustId === cId;
+      });
+      spenderMap[cId].spent = calculateRevenue(customerInvs, customerReturns);
+    });
+
     const topCustomers = Object.entries(spenderMap)
       .map(([id, v]) => ({ id, ...v }))
       .sort((a, b) => b.spent - a.spent)
@@ -348,7 +443,7 @@ export default function AnalyticsPage() {
       productReturnRates,
       customerReturnRates,
     };
-  }, [filteredInvoices, state]);
+  }, [filteredInvoices, filteredSalesReturns, state]);
 
   // ── Sales Trend Calculations ─────────────────────────────────────────────
   const { salesLinePath, salesAreaPath, profitLinePath, profitAreaPath, trendPoints, maxChartVal } = useMemo(() => {
@@ -449,18 +544,40 @@ export default function AnalyticsPage() {
       points.forEach((p) => {
         if (timeRange === "Quarter" && p._startTime !== undefined) {
           if (invTime >= p._startTime && invTime < (p._endTime ?? 0)) {
-            p.sales += inv.amountPaid;
+            p.sales += inv.total;
             p.profit += invProfit;
           }
         } else if (timeRange === "Year" && p._year !== undefined) {
           if (invY === p._year && (invM - 1) === p._month) {
-            p.sales += inv.amountPaid;
+            p.sales += inv.total;
             p.profit += invProfit;
           }
         } else {
           if (inv.date === p.dateStr) {
-            p.sales += inv.amountPaid;
+            p.sales += inv.total;
             p.profit += invProfit;
+          }
+        }
+      });
+    });
+
+    filteredSalesReturns.forEach((r) => {
+      const [rY, rM, rD] = toLocalDateStr(r.createdAt).split("-").map(Number);
+      const rTime = Date.UTC(rY, rM - 1, rD);
+      const rLocalDateStr = toLocalDateStr(r.createdAt);
+
+      points.forEach((p) => {
+        if (timeRange === "Quarter" && p._startTime !== undefined) {
+          if (rTime >= p._startTime && rTime < (p._endTime ?? 0)) {
+            p.sales -= r.totalRefund;
+          }
+        } else if (timeRange === "Year" && p._year !== undefined) {
+          if (rY === p._year && (rM - 1) === p._month) {
+            p.sales -= r.totalRefund;
+          }
+        } else {
+          if (rLocalDateStr === p.dateStr) {
+            p.sales -= r.totalRefund;
           }
         }
       });
@@ -507,7 +624,7 @@ export default function AnalyticsPage() {
       trendPoints: points,
       maxChartVal,
     };
-  }, [filteredInvoices, timeRange, startDate, endDate, state.products]);
+  }, [filteredInvoices, filteredSalesReturns, timeRange, startDate, endDate, state.products]);
 
   // ── Donut Chart Data Calculations ─────────────────────────────────────────
   const { donutSlices, totalMethodAmount } = useMemo(() => {

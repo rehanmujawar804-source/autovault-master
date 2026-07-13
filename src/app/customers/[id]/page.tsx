@@ -4,6 +4,7 @@ import { use, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import Link from "next/link";
 import { formatInvoiceDate } from "@/lib/dateUtils";
+import { calculateRevenue } from "@/lib/revenueUtils";
 import {
   ArrowLeft,
   MessageCircle,
@@ -49,6 +50,7 @@ export default function CustomerProfilePage({
 }) {
   const { id } = use(params);
   const {
+    state,
     getCustomerById,
     getInvoicesByCustomer,
     getCustomerOutstandingInvoices,
@@ -82,6 +84,11 @@ export default function CustomerProfilePage({
       .reduce((s, inv) => s + getInvoiceOutstanding(inv), 0);
     return [invList, debt] as const;
   }, [customer, getInvoicesByCustomer, getInvoiceOutstanding]);
+
+  const customerTotalSpent = useMemo(() => {
+    if (!customer) return 0;
+    return calculateRevenue(state.invoices, state.salesReturns, undefined, customer.id);
+  }, [state.invoices, state.salesReturns, customer]);
 
   const outstandingInvoices = customer
     ? getCustomerOutstandingInvoices(customer.id)
@@ -244,7 +251,7 @@ export default function CustomerProfilePage({
               icon={<TrendingUp size={14} />}
               iconBg="bg-blue-50 text-blue-600"
               label="Total Spent"
-              value={`₹${customer.totalSpent.toLocaleString()}`}
+              value={`₹${customerTotalSpent.toLocaleString()}`}
               valueClass="text-blue-700 font-bold"
             />
             <StatRow

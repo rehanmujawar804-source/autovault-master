@@ -5,6 +5,7 @@ import { useStore } from "@/lib/store";
 import type { Invoice, PaymentMethod } from "@/types";
 import Link from "next/link";
 import { formatInvoiceDate } from "@/lib/dateUtils";
+import { calculateRevenue } from "@/lib/revenueUtils";
 import {
   Search,
   Users,
@@ -327,7 +328,8 @@ export default function CustomersPage() {
                   const isExpanded = expandedCustomerId === customer.id;
                   const isHighDebt = derivedDebt >= HIGH_DEBT_THRESHOLD;
                   const isPartial = derivedDebt > 0 && derivedDebt < HIGH_DEBT_THRESHOLD;
-                  const isHighValue = customer.totalSpent >= 15000;
+                  const customerTotalSpent = calculateRevenue(state.invoices, state.salesReturns, undefined, customer.id);
+                  const isHighValue = customerTotalSpent >= 15000;
                   const isLoyal = customer.visits >= 5;
 
                   const outstandingInvoices = getCustomerOutstandingInvoices(customer.id);
@@ -422,7 +424,7 @@ export default function CustomersPage() {
 
                         {/* Total spent */}
                         <td className="px-5 py-3.5 text-right font-semibold text-slate-800 hidden md:table-cell">
-                          ₹{customer.totalSpent.toLocaleString()}
+                          ₹{customerTotalSpent.toLocaleString()}
                         </td>
 
                         {/* Visits */}
@@ -475,7 +477,7 @@ export default function CustomersPage() {
                                   </div>
                                   <div className="flex justify-between py-0.5">
                                     <span className="text-slate-500">Lifetime Value:</span>
-                                    <span className="font-bold text-slate-800">₹{customer.totalSpent.toLocaleString()}</span>
+                                    <span className="font-bold text-slate-800">₹{customerTotalSpent.toLocaleString()}</span>
                                   </div>
                                   <div className="flex justify-between py-0.5">
                                     <span className="text-slate-500">Total Visits:</span>
@@ -484,7 +486,7 @@ export default function CustomersPage() {
                                   <div className="flex justify-between py-0.5">
                                     <span className="text-slate-500">Avg Spend:</span>
                                     <span className="font-semibold text-emerald-700">
-                                      ₹{customer.visits > 0 ? Math.round(customer.totalSpent / customer.visits).toLocaleString() : "0"}/visit
+                                      ₹{customer.visits > 0 ? Math.round(customerTotalSpent / customer.visits).toLocaleString() : "0"}/visit
                                     </span>
                                   </div>
                                   <div className="flex justify-between py-0.5 border-t border-slate-50 pt-2">

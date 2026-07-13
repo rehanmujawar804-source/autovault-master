@@ -60,6 +60,7 @@ import type {
   SalesReturnStatus,
 } from "@/types";
 import { todayLocalStr } from "@/lib/dateUtils";
+import { calculateRevenue } from "./revenueUtils";
 
 // ─────────────────────────────────────────────
 //  VERSION — bump this to force localStorage reset on all clients
@@ -517,7 +518,7 @@ function reducer(state: AppState, action: Action): AppState {
           return {
             ...c,
             debt: c.debt + inv.dueAmount,
-            totalSpent: c.totalSpent + inv.amountPaid,
+            totalSpent: c.totalSpent + inv.total,
             visits: c.visits + 1,
             lastVisit: inv.date,
             invoiceIds: [...c.invoiceIds, inv.id],
@@ -539,7 +540,7 @@ function reducer(state: AppState, action: Action): AppState {
           name: inv.customer,
           phone: inv.customerPhone,
           debt: inv.dueAmount,
-          totalSpent: inv.amountPaid,
+          totalSpent: inv.total,
           visits: 1,
           lastVisit: inv.date,
           invoiceIds: [inv.id],
@@ -832,7 +833,7 @@ function reducer(state: AppState, action: Action): AppState {
         return {
           ...c,
           debt: roundMoney(totalDue),
-          totalSpent: Math.max(0, roundMoney(c.totalSpent - invoice.amountPaid)),
+          totalSpent: Math.max(0, roundMoney(c.totalSpent - invoice.total)),
           activities: [
             ...(c.activities || []),
             {
@@ -1239,7 +1240,7 @@ function reducer(state: AppState, action: Action): AppState {
             .reduce((sum, r) => sum + r.totalRefund, 0);
           return s + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
         }, 0);
-        const totalSpent = customerInvoices.reduce((s, inv) => s + inv.amountPaid, 0);
+        const totalSpent = calculateRevenue(state.invoices, state.salesReturns, undefined, c.id);
         return {
           ...c,
           debt: roundMoney(totalDue),
@@ -1566,6 +1567,7 @@ function reducer(state: AppState, action: Action): AppState {
         const itemsStr = salesReturn.items.map((it) => `${it.productName} ×${it.quantity}`).join(", ");
         return {
           ...c,
+          totalSpent: Math.max(0, roundMoney(c.totalSpent - salesReturn.totalRefund)),
           activities: [
             ...(c.activities || []),
             {
@@ -1670,6 +1672,7 @@ function reducer(state: AppState, action: Action): AppState {
         const itemsStr = target.items.map((it) => `${it.productName} ×${it.quantity}`).join(", ");
         return {
           ...c,
+          totalSpent: roundMoney(c.totalSpent + target.totalRefund),
           activities: [
             ...(c.activities || []),
             {
@@ -2087,7 +2090,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function getTotalRevenue() {
-    return state.invoices.filter((inv) => !inv.voided).reduce((sum, inv) => sum + inv.amountPaid, 0);
+    return calculateRevenue(state.invoices, state.salesReturns);
   }
 
   function getTotalProfit() {

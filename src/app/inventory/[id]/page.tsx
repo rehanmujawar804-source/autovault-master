@@ -29,6 +29,8 @@ import {
 } from "lucide-react";
 import type { Invoice, InvoiceItem } from "@/types";
 import { ProductFormModal, AdjustStockModal } from "../components/ProductModals";
+import { calculateRevenue } from "@/lib/revenueUtils";
+import { toLocalDateStr } from "@/lib/dateUtils";
 
 // Custom date formatter helper
 function formatDisplayDate(dateStr?: string) {
@@ -76,10 +78,9 @@ export default function ProductDetailsPage({
     );
   }, [state.invoices, id]);
 
-  // Derived Analytics from dynamic invoices
   const salesStats = useMemo(() => {
     let units = 0;
-    let rev = 0;
+    let rev = calculateRevenue(state.invoices, state.salesReturns, id);
     let lastDate = "—";
     let lastCust = "—";
     let lastInvNo = "—";
@@ -94,9 +95,17 @@ export default function ProductDetailsPage({
       inv.items.forEach((item) => {
         if (item.productId === id) {
           units += item.quantity;
-          rev += item.quantity * item.price;
         }
       });
+    });
+
+    const activeProductReturns = (state.salesReturns || [])
+      .filter((r) => r.status !== "Cancelled")
+      .flatMap((r) => r.items)
+      .filter((item) => item.productId === id);
+
+    activeProductReturns.forEach((item) => {
+      units -= item.quantity;
     });
 
     if (sortedSales.length > 0) {
@@ -108,7 +117,7 @@ export default function ProductDetailsPage({
     }
 
     return {
-      totalUnitsSold: units,
+      totalUnitsSold: Math.max(0, units),
       totalRevenue: rev,
       avgSellingPrice: units > 0 ? Math.round(rev / units) : 0,
       lastSoldDate: lastDate,
@@ -116,7 +125,7 @@ export default function ProductDetailsPage({
       lastInvoiceNumber: lastInvNo,
       lastInvoiceId: lastInvId,
     };
-  }, [productSales, id]);
+  }, [productSales, state.salesReturns, state.invoices, id]);
 
   if (!product) {
     return (

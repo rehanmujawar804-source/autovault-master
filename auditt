@@ -1,0 +1,597 @@
+# AutoVault Desktop ERP — Full Audit Report
+### Senior ERP Architect / QA Lead Assessment | July 2026
+
+---
+
+## METHODOLOGY
+
+I read every file. Every reducer case (line by line). Every selector. Every page. Every modal. Every useMemo. Every dependency array. This is not a surface-level review.
+
+---
+
+## MODULE AUDIT
+
+---
+
+### 1. DASHBOARD
+**Completion: 82%**
+
+**Strengths**
+- Dynamic debt derived from `getInvoiceOutstanding` (returns-aware) ✅
+- 7-day sales trend chart with hover tooltip ✅
+- Purchase Order KPI strip (open, late, due this week) ✅
+- Sales Returns KPI strip ✅
+- Low stock + stockout alerts with direct links ✅
+- Role-based visibility (staff sees less) ✅
+
+**Weaknesses / Missing**
+- `highDebtCustomers` useMemo on line 154 is missing `state.salesReturns` in its dependency array. After recording a return, the debt figures on the dashboard do NOT recompute. This is a stale render bug.
+- `todaysRevenue` counts `amountPaid` only. Excludes walk-in credit sales from today's billing activity count. Misleading.
+- The "Dues Pending Collection" count reads `state.customers.filter(c => c.debt > 0).length` — uses the stale `customer.debt` cache, not dynamic. Different source from the amount displayed. Count and amount are from different truth sources.
+- No supplier outstanding summary. Owner checks this every morning.
+
+**Priority: Critical** — Fix the useMemo dependency bug. The rest is Important.
+
+---
+
+### 2. BILLING / POS
+**Completion: 88%**
+
+**Strengths**
+- 3-panel layout (catalog / cart / checkout) ✅
+- Hold bill / recall with Ctrl+H shortcut ✅
+- Dynamic categories from product catalog ✅
+- Customer debt warning shown inline ✅
+- Validation: debt/partial requires name + phone ✅
+- Stock guard on qty increase ✅
+- Discontinued product status: NOT filtered from POS catalog ❌
+
+**Weaknesses / Missing**
+- Discontinued and Inactive products appear in the billing catalog. A Discontinued product has no supplier reorder possible — it should be hidden from billing.
+- No per-line price override. Every Indian shop negotiates. This is a real daily gap.
+- Cart uses `item.product.sellPrice` permanently. There is no way to change the line item price.
+- The `InvoiceItem` does not capture `costPrice` at time of sale. `getTotalProfit()` fetches `product.currentCost` live. After a supplier price change, all historical profit is wrong.
+- Billing page shows `customer.debt` (stale cache) in the customer selection badge, not `getInvoiceOutstanding`. A customer who recently had a return will show wrong debt warning.
+
+**Priority: Critical** — costPrice snapshot. Important — price override, discontinued filter.
+
+---
+
+### 3. INVOICES
+**Completion: 85%**
+
+**Strengths**
+- Invoice list with status, search, void filter tabs ✅
+- Repayments tab ✅
+- Invoice detail with full timeline ✅
+- Void invoice with reason ✅
+- Sales return flow fully integrated ✅
+- Collect payment on individual invoices ✅
+
+**Weaknesses / Missing**
+- No date range filter on the invoice list. 500 invoices → useless scrolling.
+- Invoice "Repayments" tab has no customer filter.
+- No printable customer statement (list of all invoices + payments + balance for a customer).
+- The `invoices/page.tsx` counts `state.invoices` including voided ones for the KPI chips. `state.invoices.filter(i => i.paymentStatus === "Debt").length` includes voided-debt invoices. The count badge is inaccurate.
+
+**Priority: Important** — Date filter. Nice-to-have — Customer statement from this page.
+
+---
+
+### 4. INVENTORY
+**Completion: 90%**
+
+**Strengths**
+- Full filtering: search, category, brand, stock, status ✅
+- 11 sort options ✅
+- Add / edit / adjust stock modals ✅
+- CSV export / import ✅
+- Inventory insights (health score, top category, margins) ✅
+- Product detail page with 6 tabs (Overview, Stock, Sales, Purchases, Movements, Vehicles) ✅
+- SKU duplicate guard ✅
+- Manual stock adjustment with stock movement record ✅
+- Keyboard shortcut Ctrl+F to focus search ✅
+
+**Weaknesses / Missing**
+- `filteredProducts` in the billing page does NOT filter out Discontinued/Inactive products. Line 228: `let list = state.products;` — no status guard. Fix required.
+- No margin column displayed in the inventory list (margin IS a sort option but never shown as a column).
+- `preferredSupplierId` is in the type and product form but never shown or editable in any UI panel. Dead data.
+- No "reorder from supplier" quick action on out-of-stock or low-stock rows.
+
+**Priority: Important** — Discontinued/Inactive filter from billing. Nice-to-have — margin column.
+
+---
+
+### 5. CUSTOMERS
+**Completion: 80%**
+
+**Strengths**
+- Debt filters (All / High Debt / Partial / No Debt) ✅
+- Dynamic debt from `getInvoiceOutstanding` ✅
+- Expandable row with invoice history ✅
+- Collect payment inline ✅
+- WhatsApp link ✅
+- Customer detail page with full history ✅
+
+**Weaknesses / Missing**
+- **No customer edit**. Name and phone typos from billing are permanent. This is the #1 usability complaint in field ERP deployments.
+- `stats` useMemo on line 91 is missing `getInvoiceOutstanding` in dependency array. `getInvoiceOutstanding` is a function that reads `state.salesReturns` — the result can go stale.
+- `Total Spent` on customer detail includes Credit invoices where money was never received — misleads the owner.
+- "Collect Payment" requires selecting a specific invoice. Real scenario: "Customer gave ₹500. Apply it." Staff doesn't know which invoice. Auto-apply to oldest unpaid is standard ERP behavior.
+- No customer statement / printable account ledger.
+
+**Priority: Critical** — Customer edit. Important — Auto-apply payment, statement.
+
+---
+
+### 6. SUPPLIERS
+**Completion: 87%**
+
+**Strengths**
+- Multi-product purchase entry (batch invoice) ✅
+- Purchase Order full workflow (Draft → Sent → Confirmed → Delivered → Complete) ✅
+- PO conversion to purchase ✅
+- Supplier detail with payment ledger + outstanding ✅
+- Purchase returns with finance reversal ✅
+- Finance transaction auto-created on each payment ✅
+
+**Weaknesses / Missing**
+- No "Pay All Outstanding" button. If supplier has 5 overdue purchases, the owner must open 5 separate payment dialogs. A lump-sum payment workflow is standard.
+- WhatsApp field stored but no click-to-call or click-to-message action button anywhere.
+- `DELETE_PURCHASE_ORDER` has no status guard. A Completed PO can be deleted, orphaning all linked purchases.
+- `addPurchaseBatch` dispatches N separate state updates (N=items). 10 items = 10 re-renders + 10 localStorage writes + 10 PO activity log entries. Should be a single atomic batch dispatch.
+
+**Priority: Important** — Lump-sum payment, PO delete guard.
+
+---
+
+### 7. PURCHASE ORDERS
+**Completion: 88%**
+
+**Strengths**
+- Full lifecycle (Draft → Sent → Confirmed → Partially Delivered → Completed → Cancelled) ✅
+- PO-to-purchase conversion ✅
+- Activity log per PO ✅
+- Dashboard KPI strip with Late + Due This Week ✅
+- Multi-product line items ✅
+
+**Weaknesses / Missing**
+- PO number counter is hardcoded to `PO-2026-${counter}`. Year does not rotate.
+- No partial delivery tracking per item visible to user in the PO detail. The `receivedQuantity` is updated but there's no visual progress bar or "Partially Delivered" per-item status in the UI.
+- Completed PO can be deleted (no reducer guard).
+
+**Priority: Important** — Delete guard. Nice-to-have — per-item delivery progress.
+
+---
+
+### 8. PURCHASES
+**Completion: 85%**
+
+**Strengths**
+- Multi-product batch entry ✅
+- Stock updated on purchase ✅
+- currentCost updated on purchase ✅
+- Finance transaction logged ✅
+- Supplier payment ledger updated ✅
+
+**Weaknesses / Missing**
+- `currentCost` is updated on every new purchase (last-purchase-price), which causes historical profit to be incorrect. This is the core profit accuracy issue.
+- `addPurchaseBatch` calls `addPurchase()` N times = N separate dispatches.
+
+**Priority: Critical** — Cost snapshot on invoice. (Requires billing page change too.)
+
+---
+
+### 9. PURCHASE RETURNS
+**Completion: 88%**
+
+**Strengths**
+- Stock decremented ✅
+- Purchase `returnedQuantity` incremented ✅
+- Finance Income entry created ✅
+- Stock movement logged ✅
+- Guard: cannot return more than available, cannot return more than in stock ✅
+
+**Weaknesses / Missing**
+- Finance transaction for Purchase Return is `Income` in the supplier account. This is correct (you get money back). But it uses `methodToAccountId` which maps to Cash/UPI/Card accounts. If method is "Credit Memo" (supplier deducts from next invoice), there's no matching account. Currently forced to pick Cash/UPI/Card/Credit — Credit being closest but semantically wrong.
+- No list view of all purchase returns anywhere on the Suppliers list page. Returns are visible only from within each supplier's detail page.
+
+**Priority: Nice-to-have.**
+
+---
+
+### 10. SALES RETURNS
+**Completion: 85%**
+
+**Strengths**
+- Item-level partial returns ✅
+- Return quantity guard (cannot exceed available) ✅
+- Stock restored on return ✅
+- Finance Expense logged (Adjustment skipped, correct) ✅
+- Customer activity appended ✅
+- Invoice activity timeline updated ✅
+- Cancel return reverses all effects ✅
+
+**Weaknesses / Missing**
+- **CRITICAL**: `VOID_INVOICE` at line 803 restores `item.quantity` (full sold qty) to stock unconditionally. If a sales return already returned some units, voiding restores too much stock. Example: Sold 5, returned 2 → stock +2. Void invoice → stock +5. Net: stock overcounted by 2.
+- `CANCEL_SALES_RETURN` does not check if parent invoice is voided. Cancelling a return on a voided invoice decreases stock a second time.
+- `ADD_SALES_RETURN` does NOT update `customer.debt` (the cached field). It only updates `customer.activities`. The cache stays stale until next RECORD_DEBT_PAYMENT or RECONCILE. The dashboard debt count widget reads the stale cache.
+- `getTotalRevenue()` does NOT subtract sales return refunds. Revenue is overstated by the total of all Cash/UPI/Bank refunds issued.
+
+**Priority: Critical** — Void + return stock bug, revenue calculation.
+
+---
+
+### 11. FINANCE LEDGER
+**Completion: 80%**
+
+**Strengths**
+- Append-only ledger with reversal entries ✅
+- Separate finance accounts (Cash, UPI, Card) ✅
+- Finance entries on: sales, debt payment, void, purchase, supplier payment, purchase return, sales return ✅
+
+**Weaknesses / Missing**
+- No Finance page in the UI. The finance engine is fully built in the reducer but there is no `/finance` page visible to the user. The owner cannot see their ledger, account balances, or income/expense breakdown.
+- `exportStoreAsJSON` at line 2007-2022 does NOT include: `salesReturns`, `salesReturnCounter`, `purchaseReturns`, `purchaseOrders`, `purchaseOrderCounter`. A full backup export loses all returns and purchase orders.
+- `getTotalRevenue()` uses `inv.amountPaid` without subtracting sales return refunds.
+- `getTotalProfit()` uses live `product.currentCost`, not historical COGS.
+
+**Priority: Critical** — Finance page. Critical — Backup export completeness.
+
+---
+
+### 12. ANALYTICS
+**Completion: 85%**
+
+**Strengths**
+- Time range selector (Today/Week/Month/Quarter/Year/Custom) ✅
+- Revenue, Profit, Debt, Avg Order, Items Sold KPIs ✅
+- Dual-axis trend chart (Sales + Profit) ✅
+- Top products, categories, customers ✅
+- Returns analysis (product return rates, customer return rates) ✅
+- Inventory alerts integration ✅
+- CSV export ✅
+
+**Weaknesses / Missing**
+- `totalProfit` in analytics (line 129-138) uses `product.currentCost` — same historical COGS error. Profit chart is wrong.
+- `totalRevenue` does not subtract sales return refunds.
+- The analytics dependency: `}, [filteredInvoices, state])` — `state` as a whole dependency means analytics re-renders on every state change (even unrelated ones like holdBills). Should be granular.
+- No purchase analytics section (how much spent on stock, which supplier, which category).
+
+**Priority: Important** — Fix profit/revenue calc once billing captures costPrice.
+
+---
+
+### 13. SETTINGS
+**Completion: 82%**
+
+**Strengths**
+- Shop name, owner, phone, address, invoice prefix, GST number, currency ✅
+- Debt audit: compares cache vs live derived debt ✅
+- Reconcile button ✅
+- JSON backup export + import ✅
+- Factory reset with confirmation ✅
+- Import validates required collections ✅
+
+**Weaknesses / Missing**
+- Backup export silently omits: `salesReturns`, `salesReturnCounter`, `purchaseReturns`, `purchaseOrders`, `purchaseOrderCounter`. This is a **data loss bug** disguised as a feature.
+- Backup import handler (line 145-164) does not restore `salesReturns`, `purchaseReturns`, or `purchaseOrders` — they fall back to `[]`.
+- No staff pin / password change mechanism (intentionally deferred, but noted).
+
+**Priority: Critical** — Fix backup export/import immediately.
+
+---
+
+### 14. PRINTING
+**Completion: 80%**
+
+**Strengths**
+- Printable invoice component exists ✅
+- Print CSS classes implemented ✅
+- Number-to-words helper (Indian format) ✅
+- Voided invoice banner on print ✅
+
+**Weaknesses / Missing**
+- Supplier name, address, phone, contact on the printable invoice are hardcoded strings ("Sambhaji Chowk Road...", "7448138484"). These should read from the shop `settings` object in localStorage.
+- No print button on Customer Statement.
+- No print or PDF export for Purchase Orders.
+
+**Priority: Important** — Settings integration into printed invoice.
+
+---
+
+### 15. BACKUP / DATA
+**Completion: 60%**
+
+**Strengths**
+- Manual JSON export/import exists ✅
+- Settings included in backup ✅
+- Import validates structure ✅
+
+**Weaknesses / Missing**
+- Missing from export: `salesReturns`, `salesReturnCounter`, `purchaseReturns`, `purchaseOrders`, `purchaseOrderCounter`.
+- localStorage overflow is silently ignored. No warning when storage is near limit.
+- No automatic periodic reminder to back up ("It's been 7 days since your last backup").
+
+**Priority: Critical** — Fix export completeness.
+
+---
+
+### 16. SEARCH
+**Completion: 75%**
+
+**Strengths**
+- Search within each module (inventory, customers, invoices, billing) ✅
+- Ctrl+F keyboard shortcut on inventory ✅
+
+**Weaknesses / Missing**
+- No global search across all modules. In Vyapar, pressing F3 opens a global search. Owner types a customer name and finds their invoices instantly.
+- No invoice search by amount.
+- No search in supplier payments tab (only the supplier list has search).
+
+**Priority: Nice-to-have** — Global search is a V1 quality differentiator vs Vyapar.
+
+---
+
+### 17. KEYBOARD PRODUCTIVITY
+**Completion: 70%**
+
+**Strengths**
+- Ctrl+H to hold bill ✅
+- Ctrl+F to focus search on inventory ✅
+- Escape to close modals ✅
+
+**Weaknesses / Missing**
+- No keyboard shortcut to generate invoice (F9 or Enter in checkout panel).
+- No keyboard navigation of product catalog in POS (arrow keys to select).
+- No keyboard shortcut to open billing (F2 is standard in POS systems).
+- Tab order in billing form is not explicitly managed.
+
+**Priority: Nice-to-have** — Add F9 to generate invoice, F2 to go to billing.
+
+---
+
+### 18. DESKTOP UX
+**Completion: 83%**
+
+**Strengths**
+- 3-panel POS layout is excellent ✅
+- Expandable rows throughout the app ✅
+- Empty states everywhere ✅
+- Toast notifications ✅
+- Loading skeletons on inventory ✅
+- Confirmation dialogs before destructive actions ✅
+
+**Weaknesses / Missing**
+- No sidebar count badges for active alerts (e.g., "3 low stock" next to Inventory in nav).
+- Collect Payment across all customer invoices requires going into each one. No quick "bulk apply" UX.
+- The Finance module has no page. Clicking finance in any hypothetical nav goes nowhere.
+- Inventory table has no "margin %" column even though margin is a sort option.
+
+**Priority: Important** — Nav badges. Nice-to-have — margin column.
+
+---
+
+## INTERNAL CONNECTION AUDIT
+
+### Workflow: Sales Return happens
+
+| Effect | Implemented? | Notes |
+|---|---|---|
+| `salesReturns` record appended | ✅ | Correct |
+| `invoice.items[].returnedQuantity` updated | ✅ | Convenience cache |
+| Product stock restored | ✅ | Correct |
+| Stock movement logged | ✅ | Correct |
+| Finance Expense logged | ✅ | Correct (skipped for Adjustment) |
+| Customer activity appended | ✅ | Correct |
+| `customer.debt` cache updated | ❌ | **NOT updated. Cache stays stale.** |
+| Dashboard debt figures recomputed | ❌ | **useMemo missing `state.salesReturns`** |
+| Revenue (`getTotalRevenue`) reduced | ❌ | **Revenue still overstated** |
+| `getInvoiceOutstanding` correct | ✅ | Returns-aware selector works |
+| Analytics `totalRevenue` reduced | ❌ | Same bug |
+
+### Workflow: Void Invoice happens
+
+| Effect | Implemented? | Notes |
+|---|---|---|
+| Invoice marked voided | ✅ | Correct |
+| Stock restored | ⚠️ | **Restores full qty, ignoring prior returns** |
+| Customer debt updated | ✅ | Recalculated from invoices |
+| Customer totalSpent reduced | ✅ | Correct |
+| Finance reversal appended | ✅ | Correct |
+| Debt payments orphaned (not voided) | ⚠️ | Payments remain as-is. Correct for audit trail, but no UI indicates this. |
+| Sales returns on the invoice not cancelled | ⚠️ | Returns stay "Active" on a voided invoice. Stock was restored on return + restored again on void. |
+
+### Workflow: Purchase Return happens
+
+| Effect | Implemented? | Notes |
+|---|---|---|
+| `purchaseReturns` record appended | ✅ | Correct |
+| Purchase `returnedQuantity` incremented | ✅ | Correct |
+| Product stock decreased | ✅ | Correct |
+| Stock movement logged (negative delta) | ✅ | Correct |
+| Finance Income logged | ✅ | Correct |
+| Supplier outstanding reduced | ❌ | **Supplier outstanding reads from `purchase.dueAmount` directly. Purchase return does NOT reduce `purchase.dueAmount`. Supplier still shows old outstanding.** |
+| Analytics updated | ✅ | Via state dependency |
+
+**This is a critical business logic bug.** When goods are returned to a supplier, the supplier's outstanding balance should decrease (either: the supplier owes you money, or the liability is reduced). Currently `purchase.dueAmount` is not touched by `ADD_PURCHASE_RETURN`.
+
+### Workflow: Record Debt Payment
+
+| Effect | Implemented? | Notes |
+|---|---|---|
+| `debtPayments` record appended | ✅ | Correct |
+| `invoice.amountPaid` updated | ✅ | Correct |
+| `invoice.dueAmount` reduced | ✅ | Correct |
+| `invoice.paymentStatus` updated | ✅ | Correct |
+| `customer.debt` recalculated from invoices | ✅ | Correct |
+| Finance Income logged | ✅ | Correct |
+| Analytics updated | ✅ | Via selector |
+
+### Revenue / Profit Calculation Truth Table
+
+| What flows | `getTotalRevenue` | `getTotalProfit` | Analytics revenue | Analytics profit |
+|---|---|---|---|---|
+| Invoice created | ✅ +amountPaid | ✅ +margin | ✅ | ✅ |
+| Invoice voided | ✅ -amountPaid | ❌ Not adjusted | ✅ (filtered) | ✅ (filtered) |
+| Sales return (cash refund) | ❌ NOT subtracted | ❌ NOT adjusted | ❌ NOT subtracted | ❌ NOT adjusted |
+| Supplier price change | N/A | ❌ Breaks all history | N/A | ❌ Breaks all history |
+
+---
+
+## UX AUDIT FINDINGS
+
+### Can the user get stuck?
+
+1. **Yes — Customer edit**: A customer created with a wrong phone number is stuck. There is no edit button on the customer anywhere. You can edit from the customer detail page only if there's an edit action wired — but the store has `UPDATE_CUSTOMER` and the inventory page has an update pattern, so it is wired... Let me confirm.
+
+Actually, after reading `customers/page.tsx` carefully: there is **no Edit Customer button** anywhere in the customer list or detail page. `updateCustomer` helper exists in the store but is never called from any UI. **Customer edit is missing entirely from the UI.** This is confirmed.
+
+2. **Yes — Billing form tab order**: The billing panel does not use native tab index management. Tabbing through the checkout panel can land on unexpected elements.
+
+3. **No — Modals close on Escape**: Escape key handled correctly everywhere.
+
+4. **Yes — Finance data is invisible**: The finance engine exists. Transactions are logged. But there is no `/finance` page. The owner has no way to see their cash account balance, see income vs expense, or verify that accounting is correct. This is a critical visibility gap.
+
+5. **Print is basic**: The printed invoice has hardcoded shop address and phone. If the owner runs this at a different store or changes contact info in Settings, the invoice still prints the old hardcoded info.
+
+---
+
+## AUTOVAULT DESKTOP ERP — VERSION 1.0 MASTER CHECKLIST
+
+**Rules:** Only genuine blockers. Nothing optional. Nothing backend/GST/cloud.
+
+---
+
+### BILLING
+☐ **Filter Discontinued/Inactive products out of POS catalog** — Discontinued SKUs must not appear in billing
+☐ **Per-line price override** — Allow operator to change price per cart item at billing time
+☐ **Capture `costPrice` snapshot on InvoiceItem** — Store `currentCost` at time of billing so historical profit is accurate
+
+### INVOICES
+☐ **Date range filter on invoice list** — Filter by From/To date; 500+ invoices are unmanageable without this
+☐ **Fix voided invoice KPI count** — Exclude voided invoices from Debt/Partial/Paid status counts in chips
+
+### CUSTOMERS
+☐ **Customer edit UI** — Add Edit button to customer list and customer detail page (store action already exists)
+☐ **Auto-apply debt payment to oldest invoice** — Allow entering a total amount without selecting a specific invoice; apply FIFO
+
+### SUPPLIERS
+☐ **Supplier lump-sum payment** — Record a single payment amount distributed across all outstanding purchases (FIFO)
+☐ **Guard: Block DELETE_PURCHASE_ORDER for Completed POs** — Add status check in reducer; Completed POs must not be deletable
+☐ **Fix: Purchase Return must reduce supplier outstanding** — `ADD_PURCHASE_RETURN` must reduce `purchase.dueAmount` on the linked purchase
+
+### FINANCE
+☐ **Finance Ledger page** — A `/finance` page showing: account balances (Cash, UPI, Card), income vs expense summary, and a scrollable transaction log with date + category + amount + reference
+
+### INVENTORY
+☐ **Margin % column in inventory list table** — Display calculated margin next to sell price; it is already a sort option but not visible as a column
+
+### SETTINGS / BACKUP
+☐ **Fix backup export** — Add `salesReturns`, `salesReturnCounter`, `purchaseReturns`, `purchaseOrders`, `purchaseOrderCounter` to `exportStoreAsJSON`
+☐ **Fix backup import** — Restore the above collections in the import handler in `settings/page.tsx`
+
+### DATA INTEGRITY (Store / Reducers)
+☐ **Fix: VOID_INVOICE stock restoration** — Restore only `item.quantity - item.returnedQuantity` per item (net unreturn quantity), not the full sold quantity
+☐ **Fix: Sales return must update `customer.debt` cache** — `ADD_SALES_RETURN` reducer must recalculate and update `customer.debt` the same way `RECORD_DEBT_PAYMENT` does
+☐ **Fix: Dashboard useMemo — add `state.salesReturns` to dependency array** — `highDebtCustomers` in `dashboard/page.tsx` line 154 is stale after a return
+
+### REVENUE / PROFIT ACCURACY
+☐ **Fix `getTotalRevenue`** — Subtract active (non-cancelled) sales return `totalRefund` values from the result
+☐ **Fix `getTotalProfit`** — Use `item.costPrice` (snapshotted at billing) instead of `product.currentCost` (live). Requires billing page costPrice capture above.
+
+### PRINTING
+☐ **Read shop info from Settings in PrintableInvoice** — Replace hardcoded address/phone/shop name with values from `localStorage.getItem("autovault_settings")`
+
+### GLOBAL SEARCH
+☐ **Global search bar** — Single search input in the sidebar/header that finds customers, invoices, products, and suppliers by name/number. This is the #1 Vyapar feature users rely on daily.
+
+---
+
+**TOTAL REMAINING CHECKLIST ITEMS: 19**
+
+---
+
+## DO NOT BUILD — TOP 10 THINGS TO SKIP FOR V1.0
+
+These are tempting but belong in V2 or are already solved adequately:
+
+1. **Barcode scanning** — Out of scope, requires hardware integration
+2. **GST calculation and GSTR export** — Explicitly deferred to backend version
+3. **Customer statement PDF download** — Customer detail + print CSS is sufficient for V1
+4. **PO partial delivery progress bars** — Visual nicety, not a blocker
+5. **Supplier WhatsApp click-to-chat** — Store has the phone number; `wa.me` link is 10 minutes work but not a V1 blocker
+6. **Multi-currency** — Single-store India shop uses ₹ only
+7. **Product batch/lot tracking** — Enterprise feature, out of scope
+8. **Automatic scheduled backup** — localStorage has no background task capability; manual export is sufficient for V1
+9. **Dashboard profit trend chart** — Revenue chart exists; adding profit trend before fixing the profit calculation itself would show wrong data anyway
+10. **Advanced analytics filters** — Time range is already solid (Today/Week/Month/Quarter/Year/Custom); more filters add complexity without proportional value
+
+---
+
+## FINAL VERDICT
+
+### Scorecard
+
+| Dimension | Score |
+|---|---|
+| **Architecture Quality** | 7.5 / 10 |
+| **UI Quality** | 9 / 10 |
+| **Business Logic Quality** | 6 / 10 |
+| **Data Integrity** | 5.5 / 10 |
+| **Overall Completion** | 78% |
+| **Commercial Readiness** | 55% |
+
+### Commentary
+
+**Architecture Quality — 7.5/10**
+The reducer pattern is clean. Append-only ledger is correct. Migration system is real engineering. `getInvoiceOutstanding` as a derived selector instead of a mutated field is architecturally sound. Deductions: the 2,669-line monolithic store, `dispatch` exposed publicly on context (bypasses all guards), and several useMemo dependency omissions.
+
+**UI Quality — 9/10**
+Genuinely excellent. Better than Vyapar. Better than Marg. The 3-panel POS, expandable rows, skeleton loaders, toast system, and role-based visibility are production-quality. One point off for hardcoded print content and the Finance module having no visible page.
+
+**Business Logic Quality — 6/10**
+The core invoice/payment/return flows are correct. But: profit uses live cost (broken), revenue ignores returns (wrong), supplier outstanding doesn't reflect purchase returns (wrong), void invoice over-restores stock when returns exist (wrong). These are not edge cases — they happen in daily operation.
+
+**Data Integrity — 5.5/10**
+The backup silently omits 5 critical collections. The `customer.debt` cache has multiple paths to go stale. One dashboard useMemo dependency is wrong. The void+return stock bug is a ghost inventory generator.
+
+---
+
+### Would I personally deploy this to a real business after the checklist reaches zero?
+
+**Yes — with one condition.**
+
+After all 19 items are complete:
+- Business logic is correct
+- Profit and revenue are accurate  
+- The backup is complete
+- The owner can see their finance ledger
+- Customers can be edited
+- Stock integrity holds under all scenarios
+
+The remaining known risks (localStorage as database, no authentication) are acceptable for a **single-person desktop deployment** where the owner runs it on one dedicated PC. They must be informed that:
+1. Manual daily backup is **non-negotiable**
+2. Never clear browser data on that PC
+3. The system runs on that machine only
+
+For a multi-staff, multi-device, or commercial deployment — backend is mandatory first.
+
+---
+
+### Top 10 Things to Fix Before Giving This to the Owner
+
+1. **Fix backup export** (5 missing collections) — Data loss risk
+2. **Fix VOID_INVOICE stock restoration** — Ghost inventory
+3. **Fix Sales Return → customer.debt cache** — Stale debt display
+4. **Fix getTotalRevenue** — Revenue overstated
+5. **Fix getTotalProfit / add costPrice snapshot at billing** — All profit numbers are historically inaccurate
+6. **Fix Purchase Return → supplier outstanding** — Supplier balance wrong
+7. **Build the Finance Ledger page** — Owner is blind to their own cash flow
+8. **Add Customer Edit** — Basic CRUD that is missing
+9. **Fix dashboard useMemo dependency** — Stale KPIs after returns
+10. **Fix backup import** — Restore missing collections on import
+
+That is 8 reducers/selectors + 1 new page + 1 UI addition. Achievable in one focused sprint.
+
+After that sprint, run the checklist. 11 items remain. Two more focused sprints to reach zero. Then AutoVault Desktop v1.0 is done.

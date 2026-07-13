@@ -28,7 +28,8 @@ import {
   RotateCcw,
 } from "lucide-react";
 import type { PaymentStatus } from "@/types";
-import { todayLocalStr, formatInvoiceDate } from "@/lib/dateUtils";
+import { todayLocalStr, formatInvoiceDate, toLocalDateStr } from "@/lib/dateUtils";
+import { calculateRevenue } from "@/lib/revenueUtils";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  STATUS BADGE COLORS
@@ -72,9 +73,12 @@ export default function DashboardPage() {
   } = useMemo(() => {
     const invoices = state.invoices.filter((inv) => !inv.voided);
 
-    // Today's invoices
+    // Today's invoices and returns
     const todaysInvoices = invoices.filter((inv) => inv.date === today);
-    const todaysRevenue = todaysInvoices.reduce((sum, inv) => sum + inv.amountPaid, 0);
+    const todaysSalesReturns = (state.salesReturns || []).filter(
+      (r) => toLocalDateStr(r.createdAt) === today
+    );
+    const todaysRevenue = calculateRevenue(todaysInvoices, todaysSalesReturns);
 
     // Recent invoices (last 5, newest first)
     const recentInvoices = [...invoices]
@@ -89,9 +93,22 @@ export default function DashboardPage() {
           soldMap[item.productId] = { name: item.name, qty: 0, revenue: 0 };
         }
         soldMap[item.productId].qty += item.quantity;
-        soldMap[item.productId].revenue += item.price * item.quantity;
       });
     });
+
+    const activeSRs = (state.salesReturns || []).filter((r) => r.status !== "Cancelled");
+    activeSRs.forEach((r) => {
+      r.items.forEach((ri) => {
+        if (soldMap[ri.productId]) {
+          soldMap[ri.productId].qty -= ri.quantity;
+        }
+      });
+    });
+
+    Object.keys(soldMap).forEach((productId) => {
+      soldMap[productId].revenue = calculateRevenue(state.invoices, state.salesReturns, productId);
+    });
+
     const topProducts = Object.values(soldMap)
       .sort((a, b) => b.qty - a.qty)
       .slice(0, 5);
@@ -134,10 +151,12 @@ export default function DashboardPage() {
       return { label, dateStr, total: 0 };
     });
 
-    invoices.forEach((inv) => {
-      last7DaysTrend.forEach((pt) => {
-        if (inv.date === pt.dateStr) pt.total += inv.total;
-      });
+    last7DaysTrend.forEach((pt) => {
+      const dayInvoices = invoices.filter((inv) => inv.date === pt.dateStr);
+      const daySalesReturns = (state.salesReturns || []).filter(
+        (r) => toLocalDateStr(r.createdAt) === pt.dateStr
+      );
+      pt.total = calculateRevenue(dayInvoices, daySalesReturns);
     });
 
     return {
@@ -151,7 +170,7 @@ export default function DashboardPage() {
       paymentMethodTotals,
       last7DaysTrend,
     };
-  }, [state.invoices, state.customers, state.products, today]);
+  }, [state.invoices, state.customers, state.products, state.salesReturns, today]);
 
   // ── Quick Stock Lookup ────────────────────────────────────────────────────
   const matchedLookupProducts = useMemo(() => {

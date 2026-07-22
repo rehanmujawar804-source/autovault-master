@@ -1200,15 +1200,24 @@ function reducer(state: AppState, action: Action): AppState {
       const product = (state.products || []).find((p) => p.id === origPurchase.productId);
       if (!product || returnRecord.quantity > product.stock) return state;
 
-      // 1. Update purchase: increment returnedQuantity ONLY (keep totals immutable)
+      // 1. Update purchase: increment returnedQuantity and update dueAmount & paymentStatus
       const returnedTotal = roundMoney(returnRecord.quantity * origPurchase.buyPrice);
       const refund = Math.min(returnRecord.refundAmount, returnedTotal); // clamp refund
       const newPurchases = (state.purchases || []).map((p) => {
         if (p.id !== origPurchase.id) return p;
         const newReturnedQty = (p.returnedQuantity ?? 0) + returnRecord.quantity;
+        const totalP = p.totalAmount ?? (p.buyPrice * p.quantity);
+        const returnsForP = [...(state.purchaseReturns || []), returnRecord].filter((r) => r.purchaseId === p.id);
+        const returnedValue = returnsForP.reduce((s, r) => s + r.totalAmount, 0);
+        const paymentsForP = (state.supplierPayments || []).filter((sp) => sp.purchaseId === p.id);
+        const paidForP = paymentsForP.reduce((s, pay) => s + pay.amount, 0);
+        const newDueAmount = Math.max(0, roundMoney(totalP - returnedValue - paidForP));
+        const newStatus = (newDueAmount <= 0 ? "Paid" : (paidForP > 0 ? "Partial" : "Credit")) as "Paid" | "Partial" | "Credit";
         return {
           ...p,
           returnedQuantity: newReturnedQty,
+          dueAmount: newDueAmount,
+          paymentStatus: newStatus,
         };
       });
 
@@ -2178,6 +2187,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         supplierPayments: state.supplierPayments ?? [],
         financeAccounts: state.financeAccounts ?? DEFAULT_FINANCE_ACCOUNTS,
         financeTransactions: state.financeTransactions ?? [],
+        salesReturns: state.salesReturns ?? [],
+        salesReturnCounter: state.salesReturnCounter ?? 0,
+        purchaseReturns: state.purchaseReturns ?? [],
+        purchaseOrders: state.purchaseOrders ?? [],
+        purchaseOrderCounter: state.purchaseOrderCounter ?? 0,
         holdBills: state.holdBills ?? [],
         holdBillsCounter: state.holdBillsCounter ?? 0,
         settings,

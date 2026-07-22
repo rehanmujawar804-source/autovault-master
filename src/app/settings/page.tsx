@@ -141,7 +141,7 @@ export default function SettingsPage() {
           showToast("Invalid backup file — missing required data collections.", "error");
           return;
         }
-        // Safely normalize debtPayments — older backups may not have this field
+        // Safely normalize all collections — older backups may not have return/PO fields
         const normalizedState: AppState = {
           products: parsed.products ?? [],
           customers: parsed.customers ?? [],
@@ -159,6 +159,11 @@ export default function SettingsPage() {
           supplierPayments: Array.isArray(parsed.supplierPayments) ? parsed.supplierPayments : [],
           financeAccounts: Array.isArray(parsed.financeAccounts) ? parsed.financeAccounts : [],
           financeTransactions: Array.isArray(parsed.financeTransactions) ? parsed.financeTransactions : [],
+          salesReturns: Array.isArray(parsed.salesReturns) ? parsed.salesReturns : [],
+          salesReturnCounter: typeof parsed.salesReturnCounter === "number" ? parsed.salesReturnCounter : (Array.isArray(parsed.salesReturns) ? parsed.salesReturns.length : 0),
+          purchaseReturns: Array.isArray(parsed.purchaseReturns) ? parsed.purchaseReturns : [],
+          purchaseOrders: Array.isArray(parsed.purchaseOrders) ? parsed.purchaseOrders : [],
+          purchaseOrderCounter: typeof parsed.purchaseOrderCounter === "number" ? parsed.purchaseOrderCounter : (Array.isArray(parsed.purchaseOrders) ? parsed.purchaseOrders.length : 0),
           holdBills: Array.isArray(parsed.holdBills) ? parsed.holdBills : [],
           holdBillsCounter: typeof parsed.holdBillsCounter === "number" ? parsed.holdBillsCounter : (Array.isArray(parsed.holdBills) ? parsed.holdBills.length : 0),
         };

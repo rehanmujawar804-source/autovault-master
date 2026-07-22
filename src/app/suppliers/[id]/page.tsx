@@ -1883,10 +1883,12 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                       const product = products.find((p) => p.id === pur.productId);
                       const total = pur.totalAmount ?? (pur.buyPrice * pur.quantity);
                       
-                      // Derive paid, due and status dynamically from actual payments
+                      // Derive paid, due and status dynamically from actual payments and returns
                       const paymentsForP = getSupplierPaymentsBySupplier(id).filter(sp => sp.purchaseId === pur.id);
                       const paid = paymentsForP.reduce((s, pay) => s + pay.amount, 0);
-                      const due = Math.max(0, total - paid);
+                      const returnsForP = getPurchaseReturnsBySupplier(id).filter(r => r.purchaseId === pur.id);
+                      const returnedValue = returnsForP.reduce((s, r) => s + r.totalAmount, 0);
+                      const due = Math.max(0, total - returnedValue - paid);
                       const computedStatus = due <= 0 ? "Paid" : (paid > 0 ? "Partial" : "Credit");
 
                       const statusColors = computedStatus === "Paid"
@@ -2586,11 +2588,14 @@ function RecordSupplierPaymentModal({
   onClose,
   recordSupplierPayment,
 }: RecordSupplierPaymentModalProps) {
-  const { showToast } = useStore();
+  const { getSupplierPaymentsBySupplier, getPurchaseReturnsBySupplier, showToast } = useStore();
 
   const total = purchase.totalAmount ?? (purchase.buyPrice * purchase.quantity);
-  const paid = purchase.amountPaid ?? (purchase.paymentStatus === "Paid" ? total : 0);
-  const due = purchase.dueAmount ?? (total - paid);
+  const paymentsForP = getSupplierPaymentsBySupplier(supplierId).filter((sp) => sp.purchaseId === purchase.id);
+  const paid = paymentsForP.reduce((s, pay) => s + pay.amount, 0);
+  const returnsForP = getPurchaseReturnsBySupplier(supplierId).filter((r) => r.purchaseId === purchase.id);
+  const returnedValue = returnsForP.reduce((s, r) => s + r.totalAmount, 0);
+  const due = Math.max(0, total - returnedValue - paid);
   const product = products.find((p) => p.id === purchase.productId);
 
   const [amount, setAmount] = useState(String(due));

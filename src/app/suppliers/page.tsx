@@ -242,7 +242,7 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
 // ─────────────────────────────────────────────
 
 export default function SuppliersPage() {
-  const { state, getTotalSupplierOutstanding } = useStore();
+  const { state, getTotalSupplierOutstanding, getSupplierOutstandingBalance } = useStore();
   const { isOwner, loading } = useRole();
   const router = useRouter();
 
@@ -279,7 +279,7 @@ export default function SuppliersPage() {
       const sp = purchases.filter((p) => p.supplierId === s.id);
       const productIds = new Set(sp.map((p) => p.productId));
       const sorted = [...sp].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      const outstanding = sp.reduce((sum, p) => sum + (p.dueAmount ?? 0), 0);
+      const outstanding = getSupplierOutstandingBalance(s.id);
       map[s.id] = {
         productCount: productIds.size,
         lastPurchaseDate: sorted[0]?.date ?? null,
@@ -287,7 +287,7 @@ export default function SuppliersPage() {
       };
     }
     return map;
-  }, [suppliers, purchases]);
+  }, [suppliers, purchases, state.purchaseReturns, state.supplierPayments, getSupplierOutstandingBalance]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();

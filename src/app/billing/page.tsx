@@ -129,7 +129,26 @@ export default function BillingPage() {
   }
 
   function handleRecallHoldBill(bill: HoldBill) {
-    setCart(bill.items);
+    let hasStockAdjustment = false;
+    const validatedItems = bill.items
+      .map((item) => {
+        const liveProd = state.products.find((p) => p.id === item.product.id);
+        if (!liveProd || (liveProd.status || "Active") !== "Active" || liveProd.stock <= 0) {
+          hasStockAdjustment = true;
+          return null;
+        }
+        const cappedQty = Math.min(item.quantity, liveProd.stock);
+        if (cappedQty !== item.quantity) {
+          hasStockAdjustment = true;
+        }
+        return {
+          product: liveProd,
+          quantity: cappedQty,
+        };
+      })
+      .filter((item): item is CartItem => item !== null);
+
+    setCart(validatedItems);
     setCustomerMode(bill.customerMode);
     setSelectedCustomerId(bill.selectedCustomerId);
     setCustomerName(bill.customerName === "Walk-in Customer" ? "" : bill.customerName);
@@ -146,7 +165,12 @@ export default function BillingPage() {
     setBilledBy(bill.billedBy);
     setActiveHoldBillId(bill.id);
     setHeldBillsDrawerOpen(false);
-    showToast(`Recalled ${bill.holdNumber} successfully.`, "success");
+
+    if (hasStockAdjustment) {
+      showToast(`Recalled ${bill.holdNumber} — items adjusted for current inventory stock/status.`, "info");
+    } else {
+      showToast(`Recalled ${bill.holdNumber} successfully.`, "success");
+    }
   }
 
   function handleDeleteHoldBill(id: string) {
@@ -225,7 +249,7 @@ export default function BillingPage() {
 
   // ── Filtered products ─────────────────────────────────────────────────────
   const filteredProducts = useMemo(() => {
-    let list = state.products;
+    let list = state.products.filter((p) => (p.status || "Active") === "Active");
     if (selectedCategory !== "All") list = list.filter((p) => p.category === selectedCategory);
     const q = search.trim().toLowerCase();
     if (!q) return list;
@@ -249,7 +273,7 @@ export default function BillingPage() {
   // ── Cart helpers ──────────────────────────────────────────────────────────
   function addToCart(productId: string) {
     const product = state.products.find((p) => p.id === productId);
-    if (!product || product.stock === 0) return;
+    if (!product || product.stock === 0 || (product.status || "Active") !== "Active") return;
     setCart((prev) => {
       const existing = prev.find((i) => i.product.id === productId);
       if (existing) {
@@ -281,6 +305,27 @@ export default function BillingPage() {
       showToast("Add at least one product to the cart.", "error");
       return;
     }
+
+    // Live inventory stock & status validation check
+    for (const item of cart) {
+      const liveProduct = state.products.find((p) => p.id === item.product.id);
+      if (!liveProduct) {
+        setValidationError(`Product "${item.product.name}" is no longer available in inventory.`);
+        showToast(`Product "${item.product.name}" was removed from inventory.`, "error");
+        return;
+      }
+      if ((liveProduct.status || "Active") !== "Active") {
+        setValidationError(`Product "${liveProduct.name}" is ${liveProduct.status || "Inactive"} and cannot be sold.`);
+        showToast(`Product "${liveProduct.name}" is not active.`, "error");
+        return;
+      }
+      if (item.quantity > liveProduct.stock) {
+        setValidationError(`Insufficient stock for "${liveProduct.name}". Available: ${liveProduct.stock}, Cart: ${item.quantity}.`);
+        showToast(`Insufficient stock for "${liveProduct.name}".`, "error");
+        return;
+      }
+    }
+
     if (!billedBy) {
       setValidationError("Billed By is required. Please select Owner or Staff.");
       showToast("Please select who is billing this invoice.", "error");

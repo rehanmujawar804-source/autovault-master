@@ -1613,6 +1613,10 @@ function reducer(state: AppState, action: Action): AppState {
     }
 
     case "DELETE_PURCHASE_ORDER": {
+      const targetPO = (state.purchaseOrders || []).find((po) => po.id === action.poId);
+      if (!targetPO || targetPO.status !== "Draft") {
+        return state;
+      }
       return {
         ...state,
         purchaseOrders: (state.purchaseOrders || []).filter((po) => po.id !== action.poId),
@@ -2825,6 +2829,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   function deletePurchaseOrder(poId: string) {
     if (!isProcurementAllowed()) return;
+    const targetPO = (state.purchaseOrders || []).find((po) => po.id === poId);
+    if (!targetPO || targetPO.status !== "Draft") return;
     dispatch({ type: "DELETE_PURCHASE_ORDER", poId });
   }
 

@@ -132,6 +132,15 @@ type Action =
 
   // Debt Repayment — core new action
   | { type: "RECORD_DEBT_PAYMENT"; payment: DebtPayment }
+  | {
+      type: "RECORD_CUSTOMER_DEBT_PAYMENT_FIFO";
+      customerId: string;
+      totalAmount: number;
+      method: PaymentMethod;
+      date: string;
+      note?: string;
+      collectedBy?: "Owner" | "Staff";
+    }
   | { type: "VOID_DEBT_PAYMENT"; paymentId: string; reason: string; voidedBy: string }
 
   // Suppliers Sprint 1 & 2
@@ -140,6 +149,15 @@ type Action =
   | { type: "ADD_PURCHASE"; purchase: Purchase; paymentMethod?: PaymentMethod }
   | { type: "UPDATE_PURCHASE"; purchaseId: string; invoiceNumber: string; date: string; notes: string }
   | { type: "RECORD_SUPPLIER_PAYMENT"; payment: SupplierPayment }
+  | {
+      type: "RECORD_SUPPLIER_PAYMENT_FIFO";
+      supplierId: string;
+      totalAmount: number;
+      method: PaymentMethod;
+      date: string;
+      note?: string;
+      paidBy?: "Owner" | "Staff";
+    }
   | { type: "ADD_PURCHASE_RETURN"; returnRecord: PurchaseReturn; refundMethod: PaymentMethod | "Adjustment" }
 
   // Reset / Hydrate
@@ -694,6 +712,133 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    // ── Atomic Lump-Sum FIFO Debt Repayment ─────────────────────────────────
+    case "RECORD_CUSTOMER_DEBT_PAYMENT_FIFO": {
+      const { customerId, totalAmount, method, date, note, collectedBy } = action;
+      const roundedTotal = roundMoney(totalAmount);
+      if (roundedTotal <= 0) return state;
+
+      // 1. Retrieve all open unpaid invoices for this customer
+      // Authoritative FIFO ordering: createdAt ISO timestamp, falling back to invoice date
+      const customerInvoices = state.invoices.filter(
+        (inv) => inv.customerId === customerId && !inv.voided && inv.dueAmount > 0
+      ).sort((a, b) => {
+        const timeA = new Date(a.createdAt || a.date).getTime();
+        const timeB = new Date(b.createdAt || b.date).getTime();
+        return timeA - timeB;
+      });
+
+      let remaining = roundedTotal;
+      const createdPayments: DebtPayment[] = [];
+      const invoiceUpdates: Record<string, { newAmountPaid: number; newDueAmount: number; newStatus: PaymentStatus }> = {};
+      const newFinanceTxs = [...(state.financeTransactions || [])];
+
+      for (const inv of customerInvoices) {
+        if (remaining <= 0) break;
+
+        // Subtract active returns for effective outstanding
+        const returnsTotal = (state.salesReturns || [])
+          .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
+          .reduce((s, r) => s + r.totalRefund, 0);
+        const effectiveDue = Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
+        if (effectiveDue <= 0) continue;
+
+        const alloc = Math.min(remaining, effectiveDue);
+        if (alloc <= 0) continue;
+
+        const newPayment: DebtPayment = {
+          id: `dp-${crypto.randomUUID()}`,
+          customerId,
+          invoiceId: inv.id,
+          amount: alloc,
+          date,
+          method,
+          note: note ? `FIFO Payment for ${inv.invoiceNumber} — ${note}` : `FIFO Payment for ${inv.invoiceNumber}`,
+          collectedBy: collectedBy || "Owner",
+        };
+        createdPayments.push(newPayment);
+
+        const currentPaid = inv.amountPaid;
+        const currentDue = inv.dueAmount;
+        const newAmountPaid = currentPaid + alloc;
+        const newDueAmount = Math.max(0, currentDue - alloc);
+        const newStatus = calcPaymentStatus(newDueAmount, inv.total);
+
+        invoiceUpdates[inv.id] = {
+          newAmountPaid,
+          newDueAmount,
+          newStatus,
+        };
+
+        // Finance entry for allocated payment amount only
+        newFinanceTxs.push({
+          id: `ft-${crypto.randomUUID()}`,
+          accountId: methodToAccountId(method),
+          type: "Income",
+          category: "Customer Payment",
+          referenceId: inv.id,
+          customerId,
+          amount: alloc,
+          date: new Date().toISOString(),
+          method,
+          notes: note ? `FIFO Payment for ${inv.invoiceNumber} — ${note}` : `FIFO Payment for ${inv.invoiceNumber}`,
+        });
+
+        remaining = roundMoney(remaining - alloc);
+      }
+
+      if (createdPayments.length === 0) return state;
+
+      // Update invoices in state
+      const updatedInvoices = state.invoices.map((inv) => {
+        const update = invoiceUpdates[inv.id];
+        if (!update) return inv;
+        return {
+          ...inv,
+          amountPaid: update.newAmountPaid,
+          dueAmount: update.newDueAmount,
+          paymentStatus: update.newStatus,
+        };
+      });
+
+      // Recalculate customer debt
+      const updatedCustomers = state.customers.map((c) => {
+        if (c.id !== customerId) return c;
+        const remainingInvoices = updatedInvoices.filter(
+          (inv) => inv.customerId === c.id && !inv.voided
+        );
+        const totalDue = remainingInvoices.reduce((s, inv) => {
+          const returnsTotal = (state.salesReturns || [])
+            .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
+            .reduce((sum, r) => sum + r.totalRefund, 0);
+          return s + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
+        }, 0);
+        const allocatedTotal = roundMoney(roundedTotal - remaining);
+        return {
+          ...c,
+          debt: roundMoney(totalDue),
+          activities: [
+            ...(c.activities || []),
+            {
+              id: `ca-${crypto.randomUUID()}`,
+              type: "Repayment" as const,
+              description: `Lump-Sum Debt Repayment (${createdPayments.length} inv)`,
+              reference: `₹${allocatedTotal.toLocaleString()} FIFO`,
+              date,
+            },
+          ],
+        };
+      });
+
+      return {
+        ...state,
+        invoices: updatedInvoices,
+        debtPayments: [...(state.debtPayments || []), ...createdPayments],
+        customers: updatedCustomers,
+        financeTransactions: newFinanceTxs,
+      };
+    }
+
     // ── Void Debt Payment (Void a single repayment) ────────────────────────
     //
     // Reverses ONE repayment without touching the invoice void status.
@@ -821,28 +966,33 @@ function reducer(state: AppState, action: Action): AppState {
         };
       });
 
-      // 2. Restore stock levels
+      // 2. Restore stock levels (only unreturned quantities)
       const newProducts = state.products.map((p) => {
         const item = invoice.items.find((it) => it.productId === p.id);
         if (!item) return p;
+        const unreturnedQty = Math.max(0, item.quantity - (item.returnedQuantity || 0));
+        if (unreturnedQty === 0) return p;
         return {
           ...p,
-          stock: p.stock + item.quantity,
+          stock: p.stock + unreturnedQty,
         };
       });
 
-      // 3. Append stock movements
+      // 3. Append stock movements (only if unreturnedQty > 0)
       const movements = [...(state.stockMovements || [])];
       invoice.items.forEach((item) => {
-        movements.push({
-          id: generateUniqueId("sm"),
-          productId: item.productId,
-          type: "Adjustment" as const,
-          delta: item.quantity,
-          date: voidedAt,
-          desc: "Invoice Voided",
-          reference: invoice.invoiceNumber,
-        });
+        const unreturnedQty = Math.max(0, item.quantity - (item.returnedQuantity || 0));
+        if (unreturnedQty > 0) {
+          movements.push({
+            id: generateUniqueId("sm"),
+            productId: item.productId,
+            type: "Adjustment" as const,
+            delta: unreturnedQty,
+            date: voidedAt,
+            desc: "Invoice Voided",
+            reference: invoice.invoiceNumber,
+          });
+        }
       });
 
       const newCustomers = state.customers.map((c) => {
@@ -1181,6 +1331,111 @@ function reducer(state: AppState, action: Action): AppState {
         supplierPayments: newPayments,
         purchases: newPurchases,
         financeTransactions: newFinanceTransactions,
+      };
+    }
+
+    // ── Atomic Lump-Sum Supplier Payment (FIFO) ───────────────────────────────
+    case "RECORD_SUPPLIER_PAYMENT_FIFO": {
+      const { supplierId, totalAmount, method, date, note, paidBy = "Owner" } = action;
+      const roundedTotal = roundMoney(totalAmount);
+      if (roundedTotal <= 0) return state;
+
+      // Helper to compute canonical return-aware effective due for a purchase (Bug #4 integrity)
+      const getEffectiveDue = (pur: Purchase): number => {
+        const total = pur.totalAmount ?? (pur.buyPrice * pur.quantity);
+        const returns = (state.purchaseReturns || []).filter((r) => r.purchaseId === pur.id);
+        const returnedValue = returns.reduce((s, r) => s + r.totalAmount, 0);
+        const payments = (state.supplierPayments || []).filter((sp) => sp.purchaseId === pur.id);
+        const paid = payments.reduce((s, pay) => s + pay.amount, 0);
+        return Math.max(0, roundMoney(total - returnedValue - paid));
+      };
+
+      // 1. Find all open unpaid purchases for this supplier with effective due > 0
+      // Authoritative FIFO ordering: createdAt ISO timestamp, falling back to purchase date
+      const openPurchases = (state.purchases || [])
+        .filter((pur) => pur.supplierId === supplierId && getEffectiveDue(pur) > 0)
+        .sort((a, b) => {
+          const timeA = new Date(a.createdAt || a.date).getTime();
+          const timeB = new Date(b.createdAt || b.date).getTime();
+          return timeA - timeB;
+        });
+
+      let remaining = roundedTotal;
+      const createdPayments: SupplierPayment[] = [];
+      const purchaseUpdates: Record<string, { newAmountPaid: number; newDueAmount: number; newStatus: "Paid" | "Partial" | "Credit" }> = {};
+      const newFinanceTxs = [...(state.financeTransactions || [])];
+      const txDate = date ? (new Date(date).toISOString()) : new Date().toISOString();
+
+      for (const pur of openPurchases) {
+        if (remaining <= 0) break;
+        const due = getEffectiveDue(pur);
+        if (due <= 0) continue;
+
+        const alloc = Math.min(remaining, due);
+        if (alloc <= 0) continue;
+
+        const newPayment: SupplierPayment = {
+          id: `sp-${crypto.randomUUID()}`,
+          supplierId,
+          purchaseId: pur.id,
+          amount: alloc,
+          date: date || new Date().toISOString(),
+          method,
+          note: note ? `FIFO Payment for ${pur.invoiceNumber} — ${note}` : `FIFO Payment for ${pur.invoiceNumber}`,
+          paidBy,
+        };
+        createdPayments.push(newPayment);
+
+        const currentPaid = (state.supplierPayments || [])
+          .filter((sp) => sp.purchaseId === pur.id)
+          .reduce((sum, sp) => sum + sp.amount, 0);
+        const newAmountPaid = roundMoney(currentPaid + alloc);
+        const newDueAmount = Math.max(0, roundMoney(due - alloc));
+        const newStatus = (newDueAmount <= 0 ? "Paid" : (newAmountPaid > 0 ? "Partial" : "Credit")) as "Paid" | "Partial" | "Credit";
+
+        purchaseUpdates[pur.id] = {
+          newAmountPaid,
+          newDueAmount,
+          newStatus,
+        };
+
+        // Finance entry (Expense) for allocated payment amount only (skip Credit method)
+        if (method !== "Credit") {
+          newFinanceTxs.push({
+            id: `ft-${crypto.randomUUID()}`,
+            accountId: methodToAccountId(method),
+            type: "Expense",
+            category: "Supplier Payment",
+            referenceId: pur.id,
+            supplierId,
+            amount: alloc,
+            date: txDate,
+            method,
+            notes: note ? `FIFO Payment for ${pur.invoiceNumber} — ${note}` : `FIFO Payment for ${pur.invoiceNumber}`,
+          });
+        }
+
+        remaining = roundMoney(remaining - alloc);
+      }
+
+      if (createdPayments.length === 0) return state;
+
+      const updatedPurchases = (state.purchases || []).map((pur) => {
+        const update = purchaseUpdates[pur.id];
+        if (!update) return pur;
+        return {
+          ...pur,
+          amountPaid: update.newAmountPaid,
+          dueAmount: update.newDueAmount,
+          paymentStatus: update.newStatus,
+        };
+      });
+
+      return {
+        ...state,
+        supplierPayments: [...(state.supplierPayments || []), ...createdPayments],
+        purchases: updatedPurchases,
+        financeTransactions: newFinanceTxs,
       };
     }
 
@@ -1900,6 +2155,14 @@ interface StoreContextValue {
   addCustomer: (customer: Omit<Customer, "id">) => void;
   updateCustomer: (customer: Customer) => void;
   recordDebtPayment: (payment: Omit<DebtPayment, "id">) => void;
+  recordCustomerDebtPaymentFIFO: (params: {
+    customerId: string;
+    totalAmount: number;
+    method: PaymentMethod;
+    date?: string;
+    note?: string;
+    collectedBy?: "Owner" | "Staff";
+  }) => void;
   voidDebtPayment: (paymentId: string, reason: string, voidedBy: string) => void;
   reconcileDebtCache: () => void;
   exportStoreAsJSON: () => void;
@@ -1926,6 +2189,14 @@ interface StoreContextValue {
   }) => void;
   updatePurchase: (purchaseId: string, invoiceNumber: string, date: string, notes: string) => void;
   recordSupplierPayment: (payment: Omit<SupplierPayment, "id">) => void;
+  recordSupplierPaymentFIFO: (params: {
+    supplierId: string;
+    totalAmount: number;
+    method: PaymentMethod;
+    date?: string;
+    note?: string;
+    paidBy?: "Owner" | "Staff";
+  }) => void;
   addPurchaseReturn: (record: Omit<PurchaseReturn, "id" | "createdAt" | "originalPurchaseQuantity" | "originalPurchaseValue">, refundMethod: PaymentMethod | "Adjustment") => void;
   getSupplierPaymentsBySupplier: (supplierId: string) => SupplierPayment[];
   getSupplierPaymentsByPurchase: (purchaseId: string) => SupplierPayment[];
@@ -2149,6 +2420,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({
       type: "RECORD_DEBT_PAYMENT",
       payment: { ...payment, id: `dp-${crypto.randomUUID()}` },
+    });
+  }
+
+  function recordCustomerDebtPaymentFIFO(params: {
+    customerId: string;
+    totalAmount: number;
+    method: PaymentMethod;
+    date?: string;
+    note?: string;
+    collectedBy?: "Owner" | "Staff";
+  }) {
+    dispatch({
+      type: "RECORD_CUSTOMER_DEBT_PAYMENT_FIFO",
+      customerId: params.customerId,
+      totalAmount: params.totalAmount,
+      method: params.method,
+      date: params.date || new Date().toISOString(),
+      note: params.note,
+      collectedBy: params.collectedBy,
     });
   }
 
@@ -2439,6 +2729,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({
       type: "RECORD_SUPPLIER_PAYMENT",
       payment: { ...payment, id: `sp-${crypto.randomUUID()}` },
+    });
+  }
+
+  function recordSupplierPaymentFIFO(params: {
+    supplierId: string;
+    totalAmount: number;
+    method: PaymentMethod;
+    date?: string;
+    note?: string;
+    paidBy?: "Owner" | "Staff";
+  }) {
+    if (!isProcurementAllowed()) return;
+    dispatch({
+      type: "RECORD_SUPPLIER_PAYMENT_FIFO",
+      supplierId: params.supplierId,
+      totalAmount: params.totalAmount,
+      method: params.method,
+      date: params.date || new Date().toISOString(),
+      note: params.note,
+      paidBy: params.paidBy || "Owner",
     });
   }
 
@@ -2735,6 +3045,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         addCustomer,
         updateCustomer,
         recordDebtPayment,
+        recordCustomerDebtPaymentFIFO,
         voidDebtPayment,
         createHoldBill,
         updateHoldBill,
@@ -2747,6 +3058,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         addPurchaseBatch,
         updatePurchase,
         recordSupplierPayment,
+        recordSupplierPaymentFIFO,
         addPurchaseReturn,
         getSupplierPaymentsBySupplier,
         getSupplierPaymentsByPurchase,

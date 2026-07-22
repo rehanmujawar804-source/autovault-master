@@ -57,6 +57,7 @@ export default function CustomerProfilePage({
     getCustomerOutstandingInvoices,
     getDebtPaymentsByInvoice,
     recordDebtPayment,
+    recordCustomerDebtPaymentFIFO,
     showToast,
     getSalesReturnsByCustomer,
     getInvoiceOutstanding,
@@ -71,6 +72,13 @@ export default function CustomerProfilePage({
   const [collectSuccess, setCollectSuccess] = useState(false);
   const [collectCollectedBy, setCollectCollectedBy] = useState<"Owner" | "Staff" | "">("");
 
+  // ── Lump-Sum FIFO Collect Modal State ─────────────────────────────────────
+  const [showLumpSumModal, setShowLumpSumModal] = useState(false);
+  const [lumpSumAmountInput, setLumpSumAmountInput] = useState("");
+  const [lumpSumMethod, setLumpSumMethod] = useState<PaymentMethod>("Cash");
+  const [lumpSumNote, setLumpSumNote] = useState("");
+  const [lumpSumCollectedBy, setLumpSumCollectedBy] = useState<"Owner" | "Staff" | "">("");
+
   // ── Edit Customer Modal State ────────────────────────────────────────────────
   const [showEditModal, setShowEditModal] = useState(false);
   const [editName, setEditName] = useState("");
@@ -78,6 +86,73 @@ export default function CustomerProfilePage({
   const [editError, setEditError] = useState("");
 
   const customer = getCustomerById(id);
+
+  function openLumpSumModal(currentDebt: number) {
+    setLumpSumAmountInput(String(currentDebt));
+    setLumpSumMethod("Cash");
+    setLumpSumNote("");
+    setLumpSumCollectedBy("");
+    setShowLumpSumModal(true);
+  }
+
+  function closeLumpSumModal() {
+    setShowLumpSumModal(false);
+    setLumpSumAmountInput("");
+    setLumpSumNote("");
+    setLumpSumCollectedBy("");
+  }
+
+  function handleLumpSumSubmit() {
+    if (!customer) return;
+    if (!lumpSumCollectedBy) {
+      alert("Please select who collected this payment (Owner or Staff).");
+      return;
+    }
+    const numAmount = Math.max(0, Number(lumpSumAmountInput) || 0);
+    if (numAmount <= 0) return;
+
+    const outstandingInvoices = getCustomerOutstandingInvoices(customer.id)
+      .sort((a, b) => new Date(a.createdAt || a.date).getTime() - new Date(b.createdAt || b.date).getTime());
+
+    let rem = numAmount;
+    let totalAllocated = 0;
+    let affectedCount = 0;
+
+    for (const inv of outstandingInvoices) {
+      if (rem <= 0) break;
+      const invDue = getInvoiceOutstanding(inv);
+      const alloc = Math.min(rem, invDue);
+      if (alloc > 0) {
+        totalAllocated += alloc;
+        affectedCount++;
+        rem -= alloc;
+      }
+    }
+
+    const unallocated = Math.max(0, numAmount - totalAllocated);
+
+    recordCustomerDebtPaymentFIFO({
+      customerId: customer.id,
+      totalAmount: numAmount,
+      method: lumpSumMethod,
+      note: lumpSumNote.trim() || undefined,
+      collectedBy: lumpSumCollectedBy || undefined,
+    });
+
+    if (unallocated > 0) {
+      showToast(
+        `₹${numAmount.toLocaleString()} received. ₹${totalAllocated.toLocaleString()} applied across ${affectedCount} invoice(s) (₹${unallocated.toLocaleString()} unallocated excess).`,
+        "info"
+      );
+    } else {
+      showToast(
+        `₹${totalAllocated.toLocaleString()} collected and applied across ${affectedCount} invoice(s) using FIFO.`,
+        "success"
+      );
+    }
+
+    closeLumpSumModal();
+  }
 
   function openEditModal() {
     if (!customer) return;
@@ -235,6 +310,15 @@ export default function CustomerProfilePage({
         </Link>
 
         <div className="flex items-center gap-2">
+          {derivedDebt > 0 && (
+            <button
+              onClick={() => openLumpSumModal(derivedDebt)}
+              className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-4 py-2 rounded-lg transition-colors font-bold shadow-xs cursor-pointer"
+            >
+              <Wallet size={14} />
+              Collect Customer Debt
+            </button>
+          )}
           <button
             onClick={openEditModal}
             className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm px-3.5 py-2 rounded-lg transition-colors font-semibold cursor-pointer"
@@ -245,7 +329,7 @@ export default function CustomerProfilePage({
           {customer.phone && (
             <button
               onClick={handleWhatsApp}
-              className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white text-sm px-4 py-2 rounded-lg transition-colors"
+              className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white text-sm px-4 py-2 rounded-lg transition-colors cursor-pointer font-semibold"
             >
               <MessageCircle size={14} />
               WhatsApp
@@ -285,16 +369,26 @@ export default function CustomerProfilePage({
 
             {/* Debt badge — derived from invoice dues */}
             {derivedDebt > 0 ? (
-              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl">
-                <p className="text-xs text-red-600 font-medium mb-0.5">
-                  Outstanding Debt
-                </p>
-                <p className="text-2xl font-bold text-red-700">
-                  ₹{derivedDebt.toLocaleString()}
-                </p>
-                <p className="text-[10px] text-red-500 mt-0.5">
-                  Across {outstandingInvoices.length} invoice{outstandingInvoices.length !== 1 ? "s" : ""}
-                </p>
+              <div className="mt-4 p-3.5 bg-red-50 border border-red-200 rounded-xl flex items-start justify-between">
+                <div>
+                  <p className="text-xs text-red-600 font-semibold uppercase tracking-wider mb-0.5">
+                    Outstanding Debt
+                  </p>
+                  <p className="text-2xl font-bold text-red-700 font-mono">
+                    ₹{derivedDebt.toLocaleString()}
+                  </p>
+                  <p className="text-[10px] text-red-500 mt-0.5">
+                    Across {outstandingInvoices.length} invoice{outstandingInvoices.length !== 1 ? "s" : ""}
+                  </p>
+                </div>
+                <button
+                  onClick={() => openLumpSumModal(derivedDebt)}
+                  className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-2.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer shadow-xs"
+                  title="Collect Customer Debt (FIFO Auto-Apply)"
+                >
+                  <Wallet size={12} />
+                  Collect Debt
+                </button>
               </div>
             ) : (
               <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-xl">
@@ -806,6 +900,209 @@ export default function CustomerProfilePage({
           </div>
         </div>
       )}
+
+      {/* ── Lump-Sum FIFO Collect Modal ──────────────────────────────────────── */}
+      {showLumpSumModal && customer && (() => {
+        const numAmount = Math.max(0, Number(lumpSumAmountInput) || 0);
+        const outstandingInvoices = getCustomerOutstandingInvoices(customer.id)
+          .sort((a, b) => new Date(a.createdAt || a.date).getTime() - new Date(b.createdAt || b.date).getTime());
+
+        let rem = numAmount;
+        let totalAllocated = 0;
+        let affectedCount = 0;
+
+        const previewList = outstandingInvoices.map((inv) => {
+          const invDue = getInvoiceOutstanding(inv);
+          const alloc = Math.min(rem, invDue);
+          if (alloc > 0) {
+            totalAllocated += alloc;
+            affectedCount++;
+            rem = Math.max(0, rem - alloc);
+          }
+          return { inv, due: invDue, alloc };
+        });
+
+        const unallocatedExcess = Math.max(0, numAmount - totalAllocated);
+
+        return (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-slate-50/50">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white">
+                    <Wallet size={16} />
+                  </div>
+                  <div>
+                    <h2 className="font-bold text-slate-800 text-base">Collect Customer Debt (FIFO)</h2>
+                    <p className="text-xs text-slate-500">{customer.name}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={closeLumpSumModal}
+                  className="text-slate-400 hover:text-slate-700 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+                {/* Outstanding Debt Info */}
+                <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 flex justify-between items-center">
+                  <div>
+                    <p className="text-xs text-red-600 font-semibold uppercase tracking-wider">Total Outstanding Debt</p>
+                    <p className="text-xl font-bold text-red-700 font-mono mt-0.5">₹{derivedDebt.toLocaleString()}</p>
+                  </div>
+                  <span className="bg-red-100 text-red-700 text-xs font-bold px-2.5 py-1 rounded-lg border border-red-200">
+                    {outstandingInvoices.length} Unpaid Invoice{outstandingInvoices.length !== 1 ? "s" : ""}
+                  </span>
+                </div>
+
+                {/* Amount Input */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                    Payment Amount Received (₹) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    value={lumpSumAmountInput}
+                    onChange={(e) => setLumpSumAmountInput(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-base font-mono font-bold bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 transition"
+                    placeholder="Enter lump-sum payment amount..."
+                  />
+                </div>
+
+                {/* Live FIFO Preview breakdown */}
+                {numAmount > 0 && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
+                    <div className="flex justify-between items-center text-xs border-b border-slate-200 pb-2">
+                      <span className="font-bold text-slate-700 uppercase tracking-wider text-[11px]">FIFO Auto-Allocation Preview</span>
+                      <span className="text-emerald-700 font-bold font-mono">₹{totalAllocated.toLocaleString()} Applied</span>
+                    </div>
+                    {unallocatedExcess > 0 && (
+                      <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs p-2.5 rounded-lg flex items-start gap-2">
+                        <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                        <span>
+                          ₹{unallocatedExcess.toLocaleString()} payment exceeds total debt. ₹{totalAllocated.toLocaleString()} will settle all outstanding invoices; ₹{unallocatedExcess.toLocaleString()} remains unallocated.
+                        </span>
+                      </div>
+                    )}
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                      {previewList.map(({ inv, due, alloc }) => (
+                        <div
+                          key={inv.id}
+                          className={`flex justify-between items-center text-xs p-2 rounded-lg border ${
+                            alloc > 0
+                              ? alloc >= due
+                                ? "bg-emerald-50/70 border-emerald-200 text-emerald-900"
+                                : "bg-blue-50/70 border-blue-200 text-blue-900"
+                              : "bg-white border-slate-200 text-slate-400 opacity-60"
+                          }`}
+                        >
+                          <div>
+                            <span className="font-mono font-bold">{inv.invoiceNumber}</span>
+                            <span className="text-[10px] text-slate-500 ml-2">Due: ₹{due.toLocaleString()}</span>
+                          </div>
+                          <div className="font-mono font-bold">
+                            {alloc > 0 ? (
+                              <span className={alloc >= due ? "text-emerald-700" : "text-blue-700"}>
+                                +₹{alloc.toLocaleString()} {alloc >= due ? "(Settled)" : "(Partial)"}
+                              </span>
+                            ) : (
+                              <span>₹0</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Collected By */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                    Payment Collected By <span className="text-red-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {(["Owner", "Staff"] as const).map((who) => (
+                      <button
+                        key={who}
+                        type="button"
+                        onClick={() => setLumpSumCollectedBy(who)}
+                        className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                          lumpSumCollectedBy === who
+                            ? "bg-slate-900 text-white border-slate-900 shadow-xs"
+                            : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                        }`}
+                      >
+                        {who}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Method */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                    Payment Method
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["Cash", "UPI", "Card"] as PaymentMethod[]).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setLumpSumMethod(m)}
+                        className={`py-2 px-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                          lumpSumMethod === m
+                            ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+                            : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Notes */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                    Notes / Payment Reference
+                  </label>
+                  <input
+                    type="text"
+                    value={lumpSumNote}
+                    onChange={(e) => setLumpSumNote(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 transition"
+                    placeholder="e.g. Bank Ref / Cheque # / Cash payment..."
+                  />
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="flex gap-3 px-5 py-4 bg-slate-50 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={closeLumpSumModal}
+                  className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-xs font-semibold hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLumpSumSubmit}
+                  disabled={!numAmount || numAmount <= 0 || !lumpSumCollectedBy}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                >
+                  <Wallet size={14} />
+                  Record Lump-Sum Payment
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

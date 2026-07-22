@@ -18,8 +18,9 @@ import {
   ChevronRight,
   Pencil,
   Coins,
+  Wallet,
 } from "lucide-react";
-import type { Supplier } from "@/types";
+import type { Supplier, PaymentMethod } from "@/types";
 
 // ─────────────────────────────────────────────
 //  HELPERS
@@ -242,7 +243,7 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
 // ─────────────────────────────────────────────
 
 export default function SuppliersPage() {
-  const { state, getTotalSupplierOutstanding, getSupplierOutstandingBalance } = useStore();
+  const { state, getTotalSupplierOutstanding, getSupplierOutstandingBalance, recordSupplierPaymentFIFO, showToast } = useStore();
   const { isOwner, loading } = useRole();
   const router = useRouter();
 
@@ -255,6 +256,124 @@ export default function SuppliersPage() {
   const [statusFilter, setStatusFilter] = useState<"All" | "Active" | "Inactive">("All");
   const [showModal, setShowModal] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+
+  // ── Lump-Sum FIFO Supplier Payment Modal State ─────────────────────────────
+  const [lumpSumSupplier, setLumpSumSupplier] = useState<Supplier | null>(null);
+  const [lumpSumAmountInput, setLumpSumAmountInput] = useState("");
+  const [lumpSumMethod, setLumpSumMethod] = useState<PaymentMethod>("Cash");
+  const [lumpSumNote, setLumpSumNote] = useState("");
+  const [lumpSumDerivedPayable, setLumpSumDerivedPayable] = useState(0);
+
+  function openLumpSumModal(supplier: Supplier, currentPayable: number) {
+    setLumpSumSupplier(supplier);
+    setLumpSumDerivedPayable(currentPayable);
+    setLumpSumAmountInput(String(currentPayable));
+    setLumpSumMethod("Cash");
+    setLumpSumNote("");
+  }
+
+  function closeLumpSumModal() {
+    setLumpSumSupplier(null);
+    setLumpSumAmountInput("");
+    setLumpSumNote("");
+  }
+
+  function handleLumpSumSubmit() {
+    if (!lumpSumSupplier) return;
+    const numAmount = Math.max(0, Number(lumpSumAmountInput) || 0);
+    if (numAmount <= 0) return;
+
+    const getEffectiveDue = (pur: any) => {
+      const total = pur.totalAmount ?? (pur.buyPrice * pur.quantity);
+      const returns = (state.purchaseReturns || []).filter((r) => r.purchaseId === pur.id);
+      const returnedValue = returns.reduce((s, r) => s + r.totalAmount, 0);
+      const payments = (state.supplierPayments || []).filter((sp) => sp.purchaseId === pur.id);
+      const paid = payments.reduce((s, pay) => s + pay.amount, 0);
+      return Math.max(0, total - returnedValue - paid);
+    };
+
+    const openPurchases = (state.purchases || [])
+      .filter((pur) => pur.supplierId === lumpSumSupplier.id && getEffectiveDue(pur) > 0)
+      .sort((a, b) => new Date(a.createdAt || a.date).getTime() - new Date(b.createdAt || b.date).getTime());
+
+    let rem = numAmount;
+    let totalAllocated = 0;
+    let affectedCount = 0;
+
+    for (const pur of openPurchases) {
+      if (rem <= 0) break;
+      const due = getEffectiveDue(pur);
+      const alloc = Math.min(rem, due);
+      if (alloc > 0) {
+        totalAllocated += alloc;
+        affectedCount++;
+        rem -= alloc;
+      }
+    }
+
+    const unallocated = Math.max(0, numAmount - totalAllocated);
+
+    recordSupplierPaymentFIFO({
+      supplierId: lumpSumSupplier.id,
+      totalAmount: numAmount,
+      method: lumpSumMethod,
+      note: lumpSumNote.trim() || undefined,
+      paidBy: isOwner ? "Owner" : "Staff",
+    });
+
+    if (unallocated > 0) {
+      showToast(
+        `₹${numAmount.toLocaleString()} paid. ₹${totalAllocated.toLocaleString()} applied across ${affectedCount} purchase(s) (₹${unallocated.toLocaleString()} unallocated excess).`,
+        "info"
+      );
+    } else {
+      showToast(
+        `₹${totalAllocated.toLocaleString()} paid to supplier "${lumpSumSupplier.name}" and applied across ${affectedCount} purchase(s) using FIFO.`,
+        "success"
+      );
+    }
+
+    closeLumpSumModal();
+  }
+
+  const lumpSumPreview = useMemo(() => {
+    if (!lumpSumSupplier) return { allocations: [], totalAllocated: 0, unallocated: 0 };
+    const numAmount = Math.max(0, Number(lumpSumAmountInput) || 0);
+
+    const getEffectiveDue = (pur: any) => {
+      const total = pur.totalAmount ?? (pur.buyPrice * pur.quantity);
+      const returns = (state.purchaseReturns || []).filter((r) => r.purchaseId === pur.id);
+      const returnedValue = returns.reduce((s, r) => s + r.totalAmount, 0);
+      const payments = (state.supplierPayments || []).filter((sp) => sp.purchaseId === pur.id);
+      const paid = payments.reduce((s, pay) => s + pay.amount, 0);
+      return Math.max(0, total - returnedValue - paid);
+    };
+
+    const openPurchases = (state.purchases || [])
+      .filter((pur) => pur.supplierId === lumpSumSupplier.id && getEffectiveDue(pur) > 0)
+      .sort((a, b) => new Date(a.createdAt || a.date).getTime() - new Date(b.createdAt || b.date).getTime());
+
+    let rem = numAmount;
+    let totalAllocated = 0;
+
+    const allocations = openPurchases.map((pur) => {
+      const due = getEffectiveDue(pur);
+      const alloc = rem > 0 ? Math.min(rem, due) : 0;
+      if (alloc > 0) {
+        totalAllocated += alloc;
+        rem -= alloc;
+      }
+      return {
+        purchase: pur,
+        effectiveDue: due,
+        allocated: alloc,
+        remainingDue: Math.max(0, due - alloc),
+      };
+    });
+
+    const unallocated = Math.max(0, numAmount - totalAllocated);
+    return { allocations, totalAllocated, unallocated };
+  }, [lumpSumSupplier, lumpSumAmountInput, state.purchases, state.purchaseReturns, state.supplierPayments]);
 
   // Block render until guard has resolved
   if (loading || !isOwner) return null;
@@ -468,7 +587,20 @@ export default function SuppliersPage() {
                         </span>
                       </td>
                       <td className="px-5 py-4 text-center">
-                        <div className="flex items-center justify-center gap-1">
+                        <div className="flex items-center justify-center gap-1.5">
+                          {isOwner && stats.outstandingBalance > 0 && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openLumpSumModal(supplier, stats.outstandingBalance);
+                              }}
+                              title="Pay Supplier (FIFO)"
+                              className="inline-flex items-center gap-1 bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg transition-all shadow-sm cursor-pointer"
+                            >
+                              <Coins size={12} />
+                              Pay
+                            </button>
+                          )}
                           <button onClick={(e) => openEdit(supplier, e)} title="Edit Supplier" className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors cursor-pointer">
                             <Pencil size={13} />
                           </button>
@@ -487,6 +619,158 @@ export default function SuppliersPage() {
       </div>
 
       <SupplierFormModal isOpen={showModal} onClose={() => setShowModal(false)} editingSupplier={editingSupplier} />
+
+      {/* Lump-Sum Supplier Payment Modal */}
+      {lumpSumSupplier && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy-950/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-xl w-full p-6 space-y-5 relative max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-green-50 border border-green-200 flex items-center justify-center">
+                  <Coins className="text-green-600" size={18} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-navy-950">Record Supplier Payment</h3>
+                  <p className="text-xs text-slate-500">Lump-Sum Payment via FIFO — {lumpSumSupplier.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={closeLumpSumModal}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Current Supplier Payable</p>
+                <p className="text-2xl font-black text-red-600 mt-0.5">₹{lumpSumDerivedPayable.toLocaleString()}</p>
+              </div>
+              <span className="text-xs font-medium text-slate-500 bg-white border border-slate-200 px-3 py-1.5 rounded-lg">
+                Return-Aware Outstanding
+              </span>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                  Payment Amount (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={lumpSumAmountInput}
+                  onChange={(e) => setLumpSumAmountInput(e.target.value)}
+                  placeholder="Enter payment amount"
+                  className={INPUT}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                  Payment Method
+                </label>
+                <select
+                  value={lumpSumMethod}
+                  onChange={(e) => setLumpSumMethod(e.target.value as PaymentMethod)}
+                  className={INPUT}
+                >
+                  <option value="Cash">Cash</option>
+                  <option value="Card">Card</option>
+                  <option value="Bank Transfer">Bank Transfer</option>
+                  <option value="UPI">UPI</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                  Notes (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={lumpSumNote}
+                  onChange={(e) => setLumpSumNote(e.target.value)}
+                  placeholder="e.g. Cheque #1042 or Vendor settlement"
+                  className={INPUT}
+                />
+              </div>
+
+              {/* FIFO Allocation Preview */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">
+                  FIFO Allocation Preview (Oldest First)
+                </label>
+                {lumpSumPreview.allocations.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic bg-slate-50 p-3 rounded-xl text-center border border-slate-200">
+                    No outstanding purchases to allocate.
+                  </p>
+                ) : (
+                  <div className="border border-slate-200 rounded-xl overflow-hidden text-xs">
+                    <table className="w-full text-left border-collapse">
+                      <thead className="bg-slate-100 border-b border-slate-200">
+                        <tr>
+                          <th className="p-2 font-bold text-slate-600">Invoice</th>
+                          <th className="p-2 font-bold text-slate-600 text-right">Due</th>
+                          <th className="p-2 font-bold text-slate-600 text-right">Allocated</th>
+                          <th className="p-2 font-bold text-slate-600 text-right">Post Due</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {lumpSumPreview.allocations.map((item) => (
+                          <tr key={item.purchase.id} className={item.allocated > 0 ? "bg-green-50/40" : ""}>
+                            <td className="p-2 font-medium text-slate-800">
+                              {item.purchase.invoiceNumber}
+                              <span className="block text-[10px] text-slate-400">{formatDate(item.purchase.date)}</span>
+                            </td>
+                            <td className="p-2 text-right font-medium text-slate-700">₹{item.effectiveDue.toLocaleString()}</td>
+                            <td className="p-2 text-right font-bold text-green-600">
+                              {item.allocated > 0 ? `₹${item.allocated.toLocaleString()}` : "—"}
+                            </td>
+                            <td className="p-2 text-right font-medium text-slate-700">₹{item.remainingDue.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Overpayment Warning */}
+              {lumpSumPreview.unallocated > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex items-start gap-2.5">
+                  <AlertCircle className="text-amber-600 shrink-0 mt-0.5" size={16} />
+                  <div className="text-xs text-amber-800">
+                    <p className="font-bold">Overpayment Detected</p>
+                    <p className="mt-0.5 leading-relaxed">
+                      ₹{lumpSumPreview.unallocated.toLocaleString()} exceeds total supplier payable (₹{lumpSumDerivedPayable.toLocaleString()}). Only ₹{lumpSumPreview.totalAllocated.toLocaleString()} will be applied across purchases; no excess expense or ledger record will be created.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={closeLumpSumModal}
+                className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleLumpSumSubmit}
+                disabled={Number(lumpSumAmountInput) <= 0 || lumpSumPreview.allocations.length === 0}
+                className="px-5 py-2.5 text-xs font-bold bg-green-600 hover:bg-green-700 text-white rounded-xl transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                Confirm & Apply Payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

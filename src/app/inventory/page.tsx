@@ -356,7 +356,7 @@ export default function InventoryPage() {
 
   if (!isMounted) {
     return (
-      <div>
+      <div className="w-full max-w-full min-w-0 space-y-6">
         {/* Header Skeleton */}
         <div className="flex items-center justify-between mb-6">
           <div className="h-8 w-32 bg-slate-200 rounded-lg animate-pulse" />
@@ -368,7 +368,7 @@ export default function InventoryPage() {
         </div>
 
         {/* KPI Cards Skeletons */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6 min-w-0">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-32 bg-slate-100 rounded-2xl border border-slate-200 p-5 flex flex-col justify-between animate-pulse">
               <div className="w-9 h-9 rounded-xl bg-slate-200" />
@@ -738,7 +738,7 @@ export default function InventoryPage() {
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div>
+    <div className="w-full max-w-full min-w-0 space-y-6">
       {/* Hidden file input for CSV Import */}
       <input
         type="file"
@@ -750,7 +750,7 @@ export default function InventoryPage() {
       <h1 className="text-2xl font-black text-navy-950 mb-4">Inventory</h1>
 
       {/* ── KPI Cards ──────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6 min-w-0">
 
         {/* Total Products */}
         <KpiCard
@@ -826,7 +826,7 @@ export default function InventoryPage() {
       </div>
 
       {/* ── Operations Control Room ─────────────────────────────────────────── */}
-      <div className="bg-white rounded-2xl border border-slate-200 mb-6 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200 mb-6 shadow-sm overflow-hidden min-w-0 w-full">
         {/* Panel header */}
         <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
           <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-navy-950 to-navy-700 flex items-center justify-center shrink-0">
@@ -845,10 +845,10 @@ export default function InventoryPage() {
         </div>
 
         {/* 6-section grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 divide-y sm:divide-y-0 sm:divide-x divide-slate-100">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 divide-y sm:divide-y-0 divide-slate-100 border-t border-slate-100">
 
           {/* 1 — Inventory Health */}
-          <div className="px-5 py-4 flex flex-col gap-2">
+          <div className="px-5 py-4 flex flex-col gap-2 min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Inventory Health</p>
             <div className="flex items-center gap-3">
               {/* Circular gauge */}
@@ -868,14 +868,14 @@ export default function InventoryPage() {
                   {insights.healthScore}%
                 </span>
               </div>
-              <div>
+              <div className="min-w-0">
                 <p className={`text-sm font-bold ${
                   insights.healthScore >= 90 ? 'text-emerald-600' :
                   insights.healthScore >= 70 ? 'text-amber-600' : 'text-red-600'
                 }`}>
                   {insights.healthScore >= 90 ? 'Excellent' : insights.healthScore >= 70 ? 'Fair' : 'Critical'}
                 </p>
-                <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">
+                <p className="text-[10px] text-slate-400 mt-0.5 leading-snug truncate">
                   {insights.healthScore >= 90
                     ? 'Full availability'
                     : insights.healthScore >= 70
@@ -887,7 +887,7 @@ export default function InventoryPage() {
           </div>
 
           {/* 2 — Primary Capital Focus */}
-          <div className="px-5 py-4 flex flex-col gap-2">
+          <div className="px-5 py-4 flex flex-col gap-2 min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Capital Focus</p>
             <div className="flex items-start gap-2">
               <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
@@ -896,18 +896,18 @@ export default function InventoryPage() {
               <div className="min-w-0">
                 <p className="text-sm font-bold text-slate-800 truncate">{insights.topCategory}</p>
                 {isOwner ? (
-                  <p className="text-[10px] text-slate-400 mt-0.5">
+                  <p className="text-[10px] text-slate-400 mt-0.5 truncate">
                     ₹{insights.topCategoryValue.toLocaleString()} tied up
                   </p>
                 ) : (
-                  <p className="text-[10px] text-slate-400 mt-0.5">Top category by stock</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5 truncate">Top category by stock</p>
                 )}
               </div>
             </div>
           </div>
 
           {/* 3 — Restock Priority */}
-          <div className="px-5 py-4 flex flex-col gap-2">
+          <div className="px-5 py-4 flex flex-col gap-2 min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Restock Priority</p>
             <div className="flex items-start gap-2">
               <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
@@ -919,7 +919,7 @@ export default function InventoryPage() {
                   ? <AlertTriangle size={15} />
                   : <CheckCircle2 size={15} />}
               </div>
-              <div>
+              <div className="min-w-0">
                 {insights.criticalCount === 0 ? (
                   <>
                     <p className="text-sm font-bold text-emerald-600">All Clear</p>
@@ -930,7 +930,7 @@ export default function InventoryPage() {
                     <p className="text-sm font-bold text-orange-600">{insights.criticalCount} item{insights.criticalCount > 1 ? 's' : ''}</p>
                     <button
                       onClick={() => setStockFilter("Low Stock")}
-                      className="text-[10px] text-navy-600 font-bold hover:underline cursor-pointer mt-0.5 text-left"
+                      className="text-[10px] text-navy-600 font-bold hover:underline cursor-pointer mt-0.5 text-left block truncate"
                     >
                       Filter low stock →
                     </button>
@@ -942,7 +942,7 @@ export default function InventoryPage() {
 
           {/* 4 — Average Margin (owner only) */}
           {isOwner ? (
-            <div className="px-5 py-4 flex flex-col gap-2">
+            <div className="px-5 py-4 flex flex-col gap-2 min-w-0">
               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Avg. Margin</p>
               <div className="flex items-start gap-2">
                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
@@ -952,20 +952,20 @@ export default function InventoryPage() {
                 }`}>
                   <DollarSign size={15} />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <p className={`text-sm font-black ${
                     insights.avgMargin >= 30 ? 'text-green-600'
                     : insights.avgMargin >= 15 ? 'text-amber-600'
                     : 'text-red-600'
                   }`}>{insights.avgMargin}%</p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
+                  <p className="text-[10px] text-slate-400 mt-0.5 truncate">
                     {insights.avgMargin >= 30 ? 'Healthy margin' : insights.avgMargin >= 15 ? 'Moderate margin' : 'Low margin'}
                   </p>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="px-5 py-4 flex flex-col gap-2">
+            <div className="px-5 py-4 flex flex-col gap-2 min-w-0">
               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Avg. Margin</p>
               <div className="flex items-center gap-2 h-8">
                 <span className="text-xs text-slate-400 italic">Owner only</span>
@@ -974,7 +974,7 @@ export default function InventoryPage() {
           )}
 
           {/* 5 — Top Category */}
-          <div className="px-5 py-4 flex flex-col gap-2">
+          <div className="px-5 py-4 flex flex-col gap-2 min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Top Category</p>
             <div className="flex items-start gap-2">
               <div className="w-8 h-8 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center shrink-0 mt-0.5">
@@ -988,7 +988,7 @@ export default function InventoryPage() {
           </div>
 
           {/* 6 — Top Product */}
-          <div className="px-5 py-4 flex flex-col gap-2">
+          <div className="px-5 py-4 flex flex-col gap-2 min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Top Product</p>
             <div className="flex items-start gap-2">
               <div className="w-8 h-8 rounded-lg bg-yellow-50 text-yellow-600 flex items-center justify-center shrink-0 mt-0.5">
@@ -998,11 +998,9 @@ export default function InventoryPage() {
                 {insights.topProduct ? (
                   <>
                     <p className="text-sm font-bold text-slate-800 truncate" title={insights.topProduct.name}>
-                      {insights.topProduct.name.length > 18
-                        ? insights.topProduct.name.slice(0, 18) + '…'
-                        : insights.topProduct.name}
+                      {insights.topProduct.name}
                     </p>
-                    <p className="text-[10px] text-slate-400 mt-0.5 font-mono">{insights.topProduct.sku}</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5 font-mono truncate">{insights.topProduct.sku}</p>
                   </>
                 ) : (
                   <p className="text-sm font-bold text-slate-400">—</p>
@@ -1015,85 +1013,85 @@ export default function InventoryPage() {
       </div>
 
       {/* ── Professional Sticky Filter Toolbar ──────────────────────────────── */}
-      <div className="sticky top-4 z-20 bg-white/95 backdrop-blur-sm rounded-2xl border border-slate-200 shadow-md mb-3">
-        <div className="flex items-center gap-2 px-4 h-14 overflow-x-auto">
+      <div className="sticky top-4 z-20 bg-white/95 backdrop-blur-sm rounded-2xl border border-slate-200 shadow-md mb-3 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2.5 min-w-0">
 
-          {/* Search */}
-          <div className="relative shrink-0">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-            <input
-              id="inv-search"
-              ref={searchRef}
-              type="text"
-              placeholder="Search…  Ctrl+F"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="border border-slate-200 rounded-lg pl-8 pr-3 h-9 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-amber-400 bg-slate-50 focus:bg-white transition-all placeholder:text-slate-400 placeholder:text-xs"
-            />
+          {/* Filters group */}
+          <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
+            {/* Search */}
+            <div className="relative min-w-0">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <input
+                id="inv-search"
+                ref={searchRef}
+                type="text"
+                placeholder="Search…  Ctrl+F"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="border border-slate-200 rounded-lg pl-8 pr-3 h-9 text-sm w-44 sm:w-52 md:w-56 focus:outline-none focus:ring-2 focus:ring-amber-400 bg-slate-50 focus:bg-white transition-all placeholder:text-slate-400 placeholder:text-xs"
+              />
+            </div>
+
+            {/* Category */}
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 max-w-[130px] transition-colors"
+            >
+              {categories.map((c) => (
+                <option key={c} value={c}>{c === "All" ? "All Categories" : c}</option>
+              ))}
+            </select>
+
+            {/* Brand */}
+            <select
+              value={brandFilter}
+              onChange={(e) => setBrandFilter(e.target.value)}
+              className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 max-w-[130px] transition-colors"
+            >
+              {brands.map((b) => (
+                <option key={b} value={b}>{b === "All" ? "All Brands" : b}</option>
+              ))}
+            </select>
+
+            {/* Status */}
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 transition-colors"
+            >
+              <option value="All">All Status</option>
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+              <option value="Discontinued">Discontinued</option>
+            </select>
+
+            {/* Stock */}
+            <select
+              value={stockFilter}
+              onChange={(e) => setStockFilter(e.target.value as StockFilter)}
+              className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 transition-colors"
+            >
+              <option value="All">All Stock</option>
+              <option value="Healthy">Healthy</option>
+              <option value="Low Stock">Low Stock</option>
+              <option value="Out of Stock">Out of Stock</option>
+            </select>
+
+            {/* Sort */}
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 max-w-[160px] transition-colors"
+            >
+              {SORT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
           </div>
 
-          {/* Category */}
-          <select
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-            className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 max-w-[130px] transition-colors"
-          >
-            {categories.map((c) => (
-              <option key={c} value={c}>{c === "All" ? "All Categories" : c}</option>
-            ))}
-          </select>
-
-          {/* Brand */}
-          <select
-            value={brandFilter}
-            onChange={(e) => setBrandFilter(e.target.value)}
-            className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 max-w-[130px] transition-colors"
-          >
-            {brands.map((b) => (
-              <option key={b} value={b}>{b === "All" ? "All Brands" : b}</option>
-            ))}
-          </select>
-
-          {/* Status */}
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 transition-colors"
-          >
-            <option value="All">All Status</option>
-            <option value="Active">Active</option>
-            <option value="Inactive">Inactive</option>
-            <option value="Discontinued">Discontinued</option>
-          </select>
-
-          {/* Stock */}
-          <select
-            value={stockFilter}
-            onChange={(e) => setStockFilter(e.target.value as StockFilter)}
-            className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 transition-colors"
-          >
-            <option value="All">All Stock</option>
-            <option value="Healthy">Healthy</option>
-            <option value="Low Stock">Low Stock</option>
-            <option value="Out of Stock">Out of Stock</option>
-          </select>
-
-          {/* Sort */}
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
-            className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 max-w-[160px] transition-colors"
-          >
-            {SORT_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-
-          {/* Divider */}
-          <div className="h-6 w-px bg-slate-200 mx-1 shrink-0" />
-
           {/* Action buttons */}
-          <div className="flex items-center gap-1.5 ml-auto shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0 ml-auto flex-wrap">
             {hasActiveFilters && (
               <button
                 onClick={resetFilters}
@@ -1134,7 +1132,7 @@ export default function InventoryPage() {
       </div>
 
       {/* ── Quick Filter Chips ──────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2 mb-3 flex-wrap">
+      <div className="flex items-center gap-2 mb-3 flex-wrap min-w-0">
         {([
           { key: "all",          label: "All",          count: chipCounts.all,          stock: "All" as StockFilter,            status: "All" },
           { key: "healthy",      label: "Healthy",      count: chipCounts.healthy,      stock: "Healthy" as StockFilter,        status: "All" },
@@ -1168,7 +1166,7 @@ export default function InventoryPage() {
       </div>
 
       {/* ── Table Card ──────────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-2xl border border-slate-200 mb-1 shadow-sm">
+      <div className="bg-white rounded-2xl border border-slate-200 mb-1 shadow-sm overflow-hidden min-w-0 w-full">
 
         {/* ── Table ──────────────────────────────────────────────────────── */}
         {filtered.length === 0 ? (
@@ -1215,7 +1213,7 @@ export default function InventoryPage() {
             </div>
           )
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto min-w-0 w-full">
             <table className="w-full text-sm border-collapse">
               {/* ── Sticky professional header ── */}
               <thead className="sticky top-0 z-10">

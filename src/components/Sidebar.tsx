@@ -16,6 +16,7 @@ import {
   LogOut,
   Coins,
   Star,
+  Wallet,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -28,6 +29,7 @@ const NAV_ITEMS = [
 
 const OWNER_ONLY_ITEMS = [
   { href: "/suppliers",  label: "Suppliers",  icon: Truck },
+  { href: "/finance",    label: "Finance",    icon: Wallet },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
 ];
 

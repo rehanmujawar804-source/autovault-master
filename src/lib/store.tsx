@@ -48,6 +48,7 @@ import type {
   StockMovement,
   SupplierPayment,
   FinanceAccount,
+  FinanceCategory,
   FinanceTransaction,
   HoldBill,
   PurchaseReturn,
@@ -184,7 +185,18 @@ type Action =
   // Sales Returns (Sprint 5.0)
   | { type: "ADD_SALES_RETURN"; salesReturn: SalesReturn }
   | { type: "CANCEL_SALES_RETURN"; returnId: string; reason: string; voidedBy: string }
-  | { type: "MODIFY_SALES_RETURN"; returnId: string; refundAmount: number; notes: string };
+  | { type: "MODIFY_SALES_RETURN"; returnId: string; refundAmount: number; notes: string }
+
+  // Operating Business Expenses
+  | {
+      type: "RECORD_BUSINESS_EXPENSE";
+      category: FinanceCategory;
+      amount: number;
+      paymentMethod: PaymentMethod;
+      date?: string;
+      notes?: string;
+      referenceId?: string;
+    };
 
 // ─────────────────────────────────────────────
 //  HELPERS (pure, used inside reducer)
@@ -2133,6 +2145,36 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    case "RECORD_BUSINESS_EXPENSE": {
+      const { category, amount, paymentMethod, date, notes, referenceId } = action;
+      if (amount <= 0 || paymentMethod === "Credit") {
+        return state;
+      }
+
+      const accountId = methodToAccountId(paymentMethod);
+      const txDate = date || new Date().toISOString();
+      const refId =
+        referenceId ||
+        `EXP-${txDate.slice(0, 10).replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      const newFinanceTx: FinanceTransaction = {
+        id: generateUniqueId("ftx"),
+        accountId,
+        type: "Expense",
+        category,
+        referenceId: refId,
+        amount: roundMoney(amount),
+        date: txDate,
+        method: paymentMethod,
+        notes: notes || `Operating Expense: ${category}`,
+      };
+
+      return {
+        ...state,
+        financeTransactions: [newFinanceTx, ...(state.financeTransactions || [])],
+      };
+    }
+
     default:
       return state;
   }
@@ -2275,6 +2317,14 @@ interface StoreContextValue {
   getSalesReturnsByCustomer: (customerId: string) => SalesReturn[];
   getInvoiceOutstanding: (invoice: Invoice) => number;
   getReturnableQuantity: (invoiceItemId: string, invoiceId: string) => number;
+  recordBusinessExpense: (params: {
+    category: FinanceCategory;
+    amount: number;
+    paymentMethod: PaymentMethod;
+    date?: string;
+    notes?: string;
+    referenceId?: string;
+  }) => void;
 }
 
 const StoreContext = createContext<StoreContextValue | null>(null);
@@ -3036,6 +3086,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "MODIFY_SALES_RETURN", returnId, refundAmount, notes });
   }
 
+  function recordBusinessExpense(params: {
+    category: FinanceCategory;
+    amount: number;
+    paymentMethod: PaymentMethod;
+    date?: string;
+    notes?: string;
+    referenceId?: string;
+  }): void {
+    dispatch({ type: "RECORD_BUSINESS_EXPENSE", ...params });
+    showToast(`Recorded ${params.category} expense of ₹${params.amount.toLocaleString()}`, "success");
+  }
+
   return (
     <StoreContext.Provider
       value={{
@@ -3043,6 +3105,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch,
         toast,
         showToast,
+        recordBusinessExpense,
         addInvoice,
         voidInvoice,
         addProduct,

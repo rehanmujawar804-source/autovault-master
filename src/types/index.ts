@@ -278,7 +278,15 @@ export type FinanceCategory =
   | "Payment Void"
   | "Purchase Return"
   | "Adjustment"
-  | "Sales Return";
+  | "Sales Return"
+  | "Utilities"
+  | "Rent"
+  | "Salaries & Wages"
+  | "Transport & Fuel"
+  | "Maintenance & Repair"
+  | "Marketing"
+  | "Office & Shop Expense"
+  | "Other Operating Expense";
 
 export interface FinanceTransaction {
   id: string;

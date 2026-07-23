@@ -35,7 +35,11 @@ import {
   Clock,
   ChevronRight,
   HelpCircle,
-  BarChart3,
+  PlusCircle,
+  X,
+  Plus,
+  AlertCircle,
+  Check,
 } from "lucide-react";
 
 function formatDisplayDate(dateStr?: string) {
@@ -43,15 +47,19 @@ function formatDisplayDate(dateStr?: string) {
   try {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return dateStr;
-    return d.toLocaleDateString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    }) + " " + d.toLocaleTimeString("en-IN", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-    });
+    return (
+      d.toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      }) +
+      " " +
+      d.toLocaleTimeString("en-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      })
+    );
   } catch {
     return dateStr;
   }
@@ -79,12 +87,25 @@ function currentYearMonthString() {
   return `${year}-${month}`;
 }
 
+const OPERATING_EXPENSE_CATEGORIES: FinanceCategory[] = [
+  "Utilities",
+  "Rent",
+  "Salaries & Wages",
+  "Transport & Fuel",
+  "Maintenance & Repair",
+  "Marketing",
+  "Office & Shop Expense",
+  "Other Operating Expense",
+  "Adjustment",
+];
+
 export default function FinancePage() {
   const router = useRouter();
   const { isOwner, loading } = useRole();
 
   const {
     state,
+    recordBusinessExpense,
     getTotalCashAvailable,
     getCashBalance,
     getBankBalance,
@@ -121,6 +142,16 @@ export default function FinancePage() {
   // Informational Guide Toggle
   const [showConceptGuide, setShowConceptGuide] = useState(true);
 
+  // ── Record Expense Modal State ─────────────────────────────────────────────
+  const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  const [expenseCategory, setExpenseCategory] = useState<FinanceCategory>("Utilities");
+  const [expenseAmountInput, setExpenseAmountInput] = useState("");
+  const [expenseMethod, setExpenseMethod] = useState<PaymentMethod>("Cash");
+  const [expenseDate, setExpenseDate] = useState(() => todayISOString());
+  const [expenseNotes, setExpenseNotes] = useState("");
+  const [expenseFormError, setExpenseFormError] = useState("");
+  const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
+
   // ── Canonical Account Balances ──────────────────────────────────────────────
   const totalAvailable = useMemo(() => getTotalCashAvailable(), [state.financeTransactions, state.financeAccounts]);
   const cashBalance = useMemo(() => getCashBalance(), [state.financeTransactions, state.financeAccounts]);
@@ -144,26 +175,47 @@ export default function FinancePage() {
 
   // ── Business Metrics (Contextual Comparison) ────────────────────────────────
   const totalRevenue = useMemo(() => calculateRevenue(state.invoices, state.salesReturns), [state.invoices, state.salesReturns]);
-  const totalProfit = useMemo(() => calculateProfit(state.invoices, state.salesReturns), [state.invoices, state.salesReturns]);
+  const totalGrossProfit = useMemo(() => calculateProfit(state.invoices, state.salesReturns), [state.invoices, state.salesReturns]);
   const totalCustomerReceivables = useMemo(() => getTotalOutstandingDebt(), [state.invoices, state.salesReturns]);
   const totalSupplierPayables = useMemo(() => getTotalSupplierOutstanding(), [state.purchases, state.purchaseReturns, state.supplierPayments]);
 
+  // Operating Expenses Total & Net Profit (Gross Profit - Operating Expenses)
+  const totalOperatingExpenses = useMemo(() => {
+    return (state.financeTransactions || [])
+      .filter((t) => t.type === "Expense" && OPERATING_EXPENSE_CATEGORIES.includes(t.category))
+      .reduce((sum, t) => sum + t.amount, 0);
+  }, [state.financeTransactions]);
+
+  const netProfit = totalGrossProfit - totalOperatingExpenses;
+
   // ── Category Summaries ─────────────────────────────────────────────────────
   const incomeCategories: FinanceCategory[] = ["Sale", "Customer Payment", "Purchase Return", "Adjustment"];
-  const expenseCategories: FinanceCategory[] = ["Inventory Purchase", "Supplier Payment", "Sales Return", "Invoice Void", "Payment Void", "Adjustment"];
+  const expenseCategories: FinanceCategory[] = [
+    "Inventory Purchase",
+    "Supplier Payment",
+    "Sales Return",
+    "Invoice Void",
+    "Payment Void",
+    ...OPERATING_EXPENSE_CATEGORIES,
+  ];
 
   const incomeByCategoryData = useMemo(() => {
-    return incomeCategories.map((cat) => ({
-      category: cat,
-      amount: getIncomeByCategory(cat),
-    })).filter((item) => item.amount > 0 || state.financeTransactions?.some((t) => t.category === item.category));
+    return incomeCategories
+      .map((cat) => ({
+        category: cat,
+        amount: getIncomeByCategory(cat),
+      }))
+      .filter((item) => item.amount > 0 || state.financeTransactions?.some((t) => t.category === item.category));
   }, [state.financeTransactions, getIncomeByCategory]);
 
   const expenseByCategoryData = useMemo(() => {
-    return expenseCategories.map((cat) => ({
-      category: cat,
-      amount: getExpenseByCategory(cat),
-    })).filter((item) => item.amount > 0 || state.financeTransactions?.some((t) => t.category === item.category));
+    const uniqueExpenseCategories = Array.from(new Set(expenseCategories));
+    return uniqueExpenseCategories
+      .map((cat) => ({
+        category: cat,
+        amount: getExpenseByCategory(cat),
+      }))
+      .filter((item) => item.amount > 0 || state.financeTransactions?.some((t) => t.category === item.category));
   }, [state.financeTransactions, getExpenseByCategory]);
 
   // ── All Dynamic Categories for Filter Dropdown ──────────────────────────────
@@ -249,6 +301,45 @@ export default function FinancePage() {
     };
   }, [filteredLedger]);
 
+  // ── Handle Expense Form Submission ──────────────────────────────────────────
+  function handleRecordExpenseSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setExpenseFormError("");
+
+    const parsedAmount = parseFloat(expenseAmountInput);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      setExpenseFormError("Please enter a valid expense amount greater than 0.");
+      return;
+    }
+
+    if (expenseMethod === "Credit") {
+      setExpenseFormError("Operating expenses must be paid via Cash, UPI, or Card/Bank.");
+      return;
+    }
+
+    setIsSubmittingExpense(true);
+
+    try {
+      recordBusinessExpense({
+        category: expenseCategory,
+        amount: parsedAmount,
+        paymentMethod: expenseMethod,
+        date: expenseDate ? new Date(expenseDate).toISOString() : new Date().toISOString(),
+        notes: expenseNotes.trim() || `Operating Expense: ${expenseCategory}`,
+      });
+
+      // Reset Form & Close Modal
+      setExpenseAmountInput("");
+      setExpenseNotes("");
+      setExpenseFormError("");
+      setIsExpenseModalOpen(false);
+    } catch (err: any) {
+      setExpenseFormError(err?.message || "Failed to record expense. Please try again.");
+    } finally {
+      setIsSubmittingExpense(false);
+    }
+  }
+
   if (loading || !isOwner) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -276,16 +367,26 @@ export default function FinancePage() {
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Track business cash, bank, UPI balances, income, expenses, and net cash flow.
+              Track business cash, bank, UPI balances, operating expenses, and cash flow.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          {/* Record Expense Button */}
+          <button
+            type="button"
+            onClick={() => setIsExpenseModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer active:scale-95"
+          >
+            <PlusCircle size={16} />
+            + Record Expense
+          </button>
+
           <button
             type="button"
             onClick={() => setShowConceptGuide((prev) => !prev)}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
           >
             <HelpCircle size={14} className="text-slate-500" />
             {showConceptGuide ? "Hide Guide" : "Accounting Guide"}
@@ -299,10 +400,10 @@ export default function FinancePage() {
           <div>
             <h2 className="text-sm font-black uppercase tracking-wider text-yellow-400 flex items-center gap-2">
               <ShieldAlert size={16} />
-              Owner Financial Overview
+              Owner Financial Overview & Net Position
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Separation of Available Cash Funds, Receivables, Payables, Revenue, and Profit.
+              Separation of Available Cash Funds, Receivables, Payables, Revenue, Gross Profit, and Operating Expenses.
             </p>
           </div>
           <span className="text-[11px] font-mono text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded-lg">
@@ -310,7 +411,7 @@ export default function FinancePage() {
           </span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
           {/* Available Funds */}
           <div className="bg-slate-800/80 border border-emerald-500/30 rounded-xl p-3.5 space-y-1">
             <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block">Available Funds</span>
@@ -348,23 +449,30 @@ export default function FinancePage() {
             <span className="text-[10px] text-slate-400 block">Sales Value</span>
           </Link>
 
-          {/* Profit */}
+          {/* Gross Profit */}
           <Link href="/analytics" className="bg-slate-800/80 border border-indigo-500/30 rounded-xl p-3.5 space-y-1 hover:border-indigo-400 transition-colors block group">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400 block">Gross Profit</span>
               <ChevronRight size={12} className="text-slate-500 group-hover:text-indigo-400 transition-colors" />
             </div>
-            <p className="text-lg font-black text-white">₹{totalProfit.toLocaleString()}</p>
+            <p className="text-lg font-black text-white">₹{totalGrossProfit.toLocaleString()}</p>
             <span className="text-[10px] text-slate-400 block">Revenue − COGS</span>
           </Link>
 
-          {/* Monthly Net Cash Flow */}
-          <div className="bg-slate-800/80 border border-teal-500/30 rounded-xl p-3.5 space-y-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-teal-400 block">Monthly Net Cash</span>
-            <p className={`text-lg font-black ${monthlyNetCashFlow >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-              ₹{monthlyNetCashFlow.toLocaleString()}
+          {/* Total Operating Expenses */}
+          <div className="bg-slate-800/80 border border-pink-500/30 rounded-xl p-3.5 space-y-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-pink-400 block">Op Expenses</span>
+            <p className="text-lg font-black text-rose-400">₹{totalOperatingExpenses.toLocaleString()}</p>
+            <span className="text-[10px] text-slate-400 block">Utilities, Rent, etc.</span>
+          </div>
+
+          {/* Net Profit */}
+          <div className="bg-slate-800/80 border border-teal-500/40 rounded-xl p-3.5 space-y-1 bg-gradient-to-b from-slate-800 to-slate-900">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-teal-300 block">Net Profit</span>
+            <p className={`text-lg font-black ${netProfit >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+              ₹{netProfit.toLocaleString()}
             </p>
-            <span className="text-[10px] text-slate-400 block">This Month's In − Out</span>
+            <span className="text-[10px] text-slate-400 block">Gross Profit − OpEx</span>
           </div>
         </div>
       </div>
@@ -393,15 +501,15 @@ export default function FinancePage() {
               </p>
             </div>
             <div className="bg-white/80 p-2.5 rounded-xl border border-amber-200/50">
-              <span className="font-bold text-amber-950 block mb-0.5">2. Profit ≠ Cash Flow</span>
+              <span className="font-bold text-amber-950 block mb-0.5">2. Gross Profit vs Net Profit</span>
               <p className="text-[11px] text-amber-800">
-                Gross Profit measures sales revenue minus item cost (COGS). Net Cash Flow measures actual physical money received minus money paid out.
+                Gross Profit = Revenue − Cost of Goods Sold (COGS). Net Profit = Gross Profit − Operating Expenses (Utilities, Rent, Salaries).
               </p>
             </div>
             <div className="bg-white/80 p-2.5 rounded-xl border border-amber-200/50">
-              <span className="font-bold text-amber-950 block mb-0.5">3. Debt & Payables ≠ Cash</span>
+              <span className="font-bold text-amber-950 block mb-0.5">3. Operating Expenses</span>
               <p className="text-[11px] text-amber-800">
-                Customer Receivables and Supplier Payables are unpaid balance obligations. They do not enter the Finance Ledger until real money moves.
+                Recording an operating expense immediately deducts money from Cash/Bank/UPI without affecting inventory stock or sales revenue.
               </p>
             </div>
           </div>
@@ -606,26 +714,36 @@ export default function FinancePage() {
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <h3 className="text-xs font-extrabold uppercase tracking-wider text-rose-800 flex items-center gap-2">
               <TrendingDown size={16} className="text-rose-600" />
-              Expense Breakdown by Category (Canonical Selector)
+              Expense Breakdown by Category (Operating + Inventory)
             </h3>
             <span className="text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full">
               Total Out
             </span>
           </div>
 
-          <div className="space-y-3">
+          <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
             {expenseByCategoryData.map((item) => {
               const maxExpense = Math.max(...expenseByCategoryData.map((i) => i.amount), 1);
               const pct = Math.round((item.amount / maxExpense) * 100);
+              const isOperating = OPERATING_EXPENSE_CATEGORIES.includes(item.category);
               return (
                 <div key={item.category} className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-slate-800">{item.category}</span>
+                    <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                      {item.category}
+                      {isOperating && (
+                        <span className="text-[9px] bg-purple-50 text-purple-700 px-1.5 py-0.2 rounded border border-purple-200">
+                          OpEx
+                        </span>
+                      )}
+                    </span>
                     <span className="font-bold text-rose-700">₹{item.amount.toLocaleString()}</span>
                   </div>
                   <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-rose-500 rounded-full transition-all duration-300"
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        isOperating ? "bg-purple-500" : "bg-rose-500"
+                      }`}
                       style={{ width: `${pct}%` }}
                     />
                   </div>
@@ -793,6 +911,7 @@ export default function FinancePage() {
               ) : (
                 filteredLedger.map((tx) => {
                   const isIncome = tx.type === "Income";
+                  const isOpEx = OPERATING_EXPENSE_CATEGORIES.includes(tx.category);
                   return (
                     <tr key={tx.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="p-3 font-mono text-slate-600 whitespace-nowrap">
@@ -802,7 +921,11 @@ export default function FinancePage() {
                         <div className="flex items-center gap-1.5">
                           <span
                             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              isIncome ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-rose-50 text-rose-700 border border-rose-200"
+                              isIncome
+                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                : isOpEx
+                                ? "bg-purple-50 text-purple-700 border border-purple-200"
+                                : "bg-rose-50 text-rose-700 border border-rose-200"
                             }`}
                           >
                             {isIncome ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
@@ -838,6 +961,167 @@ export default function FinancePage() {
           </table>
         </div>
       </div>
+
+      {/* ── RECORD OPERATING EXPENSE MODAL ─────────────────────────────────────── */}
+      {isExpenseModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden space-y-0">
+            {/* Modal Header */}
+            <div className="bg-navy-950 text-white p-5 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/30">
+                  <TrendingDown size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black tracking-tight">Record Operating Expense</h3>
+                  <p className="text-[11px] text-slate-400">Out-of-pocket business cost</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsExpenseModalOpen(false);
+                  setExpenseFormError("");
+                }}
+                className="text-slate-400 hover:text-white transition-colors cursor-pointer p-1"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleRecordExpenseSubmit} className="p-5 space-y-4 text-xs">
+              {expenseFormError && (
+                <div className="bg-rose-50 text-rose-700 border border-rose-200 p-3 rounded-xl flex items-center gap-2 font-medium">
+                  <AlertCircle size={16} className="shrink-0 text-rose-600" />
+                  <span>{expenseFormError}</span>
+                </div>
+              )}
+
+              {/* Expense Category */}
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Expense Category <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={expenseCategory}
+                  onChange={(e) => setExpenseCategory(e.target.value as FinanceCategory)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  required
+                >
+                  {OPERATING_EXPENSE_CATEGORIES.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Amount */}
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Amount (₹) <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-bold text-slate-400 text-sm">₹</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    placeholder="e.g. 5000"
+                    value={expenseAmountInput}
+                    onChange={(e) => setExpenseAmountInput(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Payment Method */}
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Payment Method <span className="text-rose-500">*</span>
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(["Cash", "UPI", "Card"] as PaymentMethod[]).map((method) => (
+                    <button
+                      key={method}
+                      type="button"
+                      onClick={() => setExpenseMethod(method)}
+                      className={`py-2 px-3 rounded-xl font-bold border text-center transition-all cursor-pointer ${
+                        expenseMethod === method
+                          ? "bg-navy-950 text-yellow-400 border-navy-950 shadow-xs"
+                          : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                      }`}
+                    >
+                      {method === "Card" ? "Bank / Card" : method}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Account: {expenseMethod === "Cash" ? "acc-cash" : expenseMethod === "UPI" ? "acc-upi" : "acc-bank"}
+                </p>
+              </div>
+
+              {/* Date */}
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Transaction Date <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  value={expenseDate}
+                  onChange={(e) => setExpenseDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  required
+                />
+              </div>
+
+              {/* Description / Notes */}
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Description / Notes
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Shop electricity bill for July 2026"
+                  value={expenseNotes}
+                  onChange={(e) => setExpenseNotes(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900 resize-none text-xs"
+                />
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsExpenseModalOpen(false)}
+                  className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingExpense}
+                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSubmittingExpense ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Check size={16} />
+                      Save Expense
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

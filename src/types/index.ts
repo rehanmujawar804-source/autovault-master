@@ -286,7 +286,10 @@ export type FinanceCategory =
   | "Maintenance & Repair"
   | "Marketing"
   | "Office & Shop Expense"
-  | "Other Operating Expense";
+  | "Other Operating Expense"
+  | "Owner Capital"
+  | "Expense Refund"
+  | "Other Business Receipt";
 
 export interface FinanceTransaction {
   id: string;

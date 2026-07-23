@@ -196,6 +196,23 @@ type Action =
       date?: string;
       notes?: string;
       referenceId?: string;
+    }
+
+  // Finance Opening Balances & Money In
+  | {
+      type: "SET_OPENING_BALANCES";
+      cash: number;
+      bank: number;
+      upi: number;
+    }
+  | {
+      type: "RECORD_BUSINESS_MONEY_IN";
+      category: "Owner Capital" | "Expense Refund" | "Other Business Receipt";
+      amount: number;
+      paymentMethod: PaymentMethod;
+      date?: string;
+      notes?: string;
+      referenceId?: string;
     };
 
 // ─────────────────────────────────────────────
@@ -2175,6 +2192,65 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    case "SET_OPENING_BALANCES": {
+      const { cash, bank, upi } = action;
+      const safeCash = isNaN(Number(cash)) ? 0 : Math.max(0, Number(cash));
+      const safeBank = isNaN(Number(bank)) ? 0 : Math.max(0, Number(bank));
+      const safeUpi = isNaN(Number(upi)) ? 0 : Math.max(0, Number(upi));
+
+      const currentAccounts = state.financeAccounts ?? DEFAULT_FINANCE_ACCOUNTS;
+      const updatedAccounts = currentAccounts.map((acc) => {
+        if (acc.id === "acc-cash" || acc.type === "Cash") {
+          return { ...acc, openingBalance: roundMoney(safeCash) };
+        }
+        if (acc.id === "acc-bank" || acc.type === "Bank") {
+          return { ...acc, openingBalance: roundMoney(safeBank) };
+        }
+        if (acc.id === "acc-upi" || acc.type === "UPI") {
+          return { ...acc, openingBalance: roundMoney(safeUpi) };
+        }
+        return acc;
+      });
+
+      return {
+        ...state,
+        financeAccounts: updatedAccounts,
+      };
+    }
+
+    case "RECORD_BUSINESS_MONEY_IN": {
+      const { category, amount, paymentMethod, date, notes, referenceId } = action;
+      if (amount <= 0 || paymentMethod === "Credit") {
+        return state;
+      }
+      if (!["Owner Capital", "Expense Refund", "Other Business Receipt"].includes(category)) {
+        return state;
+      }
+
+      const accountId = methodToAccountId(paymentMethod);
+      const txDate = date || new Date().toISOString();
+      const refId =
+        referenceId ||
+        `INC-${txDate.slice(0, 10).replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      const newFinanceTx: FinanceTransaction = {
+        id: generateUniqueId("ftx"),
+        accountId,
+        type: "Income",
+        category,
+        referenceId: refId,
+        amount: roundMoney(amount),
+        date: txDate,
+        method: paymentMethod,
+        notes: notes || `${category}: Receipt`,
+      };
+
+      return {
+        ...state,
+        financeTransactions: [newFinanceTx, ...(state.financeTransactions || [])],
+      };
+    }
+
     default:
       return state;
   }
@@ -2319,6 +2395,15 @@ interface StoreContextValue {
   getReturnableQuantity: (invoiceItemId: string, invoiceId: string) => number;
   recordBusinessExpense: (params: {
     category: FinanceCategory;
+    amount: number;
+    paymentMethod: PaymentMethod;
+    date?: string;
+    notes?: string;
+    referenceId?: string;
+  }) => void;
+  setOpeningBalances: (params: { cash: number; bank: number; upi: number }) => void;
+  recordBusinessMoneyIn: (params: {
+    category: "Owner Capital" | "Expense Refund" | "Other Business Receipt";
     amount: number;
     paymentMethod: PaymentMethod;
     date?: string;
@@ -3098,6 +3183,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     showToast(`Recorded ${params.category} expense of ₹${params.amount.toLocaleString()}`, "success");
   }
 
+  function setOpeningBalances(params: { cash: number; bank: number; upi: number }): void {
+    if (!isProcurementAllowed()) return;
+    if (params.cash < 0 || params.bank < 0 || params.upi < 0) {
+      showToast("Opening balances cannot be negative", "error");
+      return;
+    }
+    dispatch({ type: "SET_OPENING_BALANCES", ...params });
+    showToast("Updated opening financial balances successfully", "success");
+  }
+
+  function recordBusinessMoneyIn(params: {
+    category: "Owner Capital" | "Expense Refund" | "Other Business Receipt";
+    amount: number;
+    paymentMethod: PaymentMethod;
+    date?: string;
+    notes?: string;
+    referenceId?: string;
+  }): void {
+    if (!isProcurementAllowed()) return;
+    if (params.paymentMethod === "Credit") {
+      showToast("Money In cannot be recorded with Credit method", "error");
+      return;
+    }
+    if (params.amount <= 0) {
+      showToast("Amount must be greater than 0", "error");
+      return;
+    }
+    if (!["Owner Capital", "Expense Refund", "Other Business Receipt"].includes(params.category)) {
+      showToast("Invalid Money In category", "error");
+      return;
+    }
+    dispatch({ type: "RECORD_BUSINESS_MONEY_IN", ...params });
+    showToast(`Recorded ${params.category} of ₹${params.amount.toLocaleString()}`, "success");
+  }
+
   return (
     <StoreContext.Provider
       value={{
@@ -3106,6 +3226,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         toast,
         showToast,
         recordBusinessExpense,
+        setOpeningBalances,
+        recordBusinessMoneyIn,
         addInvoice,
         voidInvoice,
         addProduct,

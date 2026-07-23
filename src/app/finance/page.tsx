@@ -106,6 +106,8 @@ export default function FinancePage() {
   const {
     state,
     recordBusinessExpense,
+    recordBusinessMoneyIn,
+    setOpeningBalances,
     getTotalCashAvailable,
     getCashBalance,
     getBankBalance,
@@ -152,6 +154,55 @@ export default function FinancePage() {
   const [expenseFormError, setExpenseFormError] = useState("");
   const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
 
+  // ── Record Money In Modal State ────────────────────────────────────────────
+  const [isMoneyInModalOpen, setIsMoneyInModalOpen] = useState(false);
+  const [moneyInCategory, setMoneyInCategory] = useState<
+    "Owner Capital" | "Expense Refund" | "Other Business Receipt"
+  >("Owner Capital");
+  const [moneyInAmountInput, setMoneyInAmountInput] = useState("");
+  const [moneyInMethod, setMoneyInMethod] = useState<PaymentMethod>("Cash");
+  const [moneyInDate, setMoneyInDate] = useState(() => todayISOString());
+  const [moneyInNotes, setMoneyInNotes] = useState("");
+  const [moneyInRefId, setMoneyInRefId] = useState("");
+  const [moneyInFormError, setMoneyInFormError] = useState("");
+  const [isSubmittingMoneyIn, setIsSubmittingMoneyIn] = useState(false);
+
+  // ── Canonical Opening Balances ─────────────────────────────────────────────
+  const openingCash = useMemo(() => {
+    const acc = (state.financeAccounts || []).find((a) => a.id === "acc-cash" || a.type === "Cash");
+    return acc?.openingBalance ?? 0;
+  }, [state.financeAccounts]);
+
+  const openingBank = useMemo(() => {
+    const acc = (state.financeAccounts || []).find((a) => a.id === "acc-bank" || a.type === "Bank");
+    return acc?.openingBalance ?? 0;
+  }, [state.financeAccounts]);
+
+  const openingUPI = useMemo(() => {
+    const acc = (state.financeAccounts || []).find((a) => a.id === "acc-upi" || a.type === "UPI");
+    return acc?.openingBalance ?? 0;
+  }, [state.financeAccounts]);
+
+  const totalOpeningFunds = useMemo(() => {
+    return Math.round((openingCash + openingBank + openingUPI + Number.EPSILON) * 100) / 100;
+  }, [openingCash, openingBank, openingUPI]);
+
+  const isOpeningConfigured = useMemo(() => {
+    return totalOpeningFunds > 0 || (state.financeAccounts || []).some((a) => a.openingBalance > 0);
+  }, [totalOpeningFunds, state.financeAccounts]);
+
+  // Opening Setup / Edit Form Modal State
+  const [isOpeningModalOpen, setIsOpeningModalOpen] = useState(false);
+  const [openingCashInput, setOpeningCashInput] = useState("");
+  const [openingBankInput, setOpeningBankInput] = useState("");
+  const [openingUPIInput, setOpeningUPIInput] = useState("");
+  const [openingFormError, setOpeningFormError] = useState("");
+  const [isSubmittingOpening, setIsSubmittingOpening] = useState(false);
+
+  // Edit Warning Confirmation Modal State
+  const [showOpeningEditWarning, setShowOpeningEditWarning] = useState(false);
+  const [pendingOpeningValues, setPendingOpeningValues] = useState<{ cash: number; bank: number; upi: number } | null>(null);
+
   // ── Canonical Account Balances ──────────────────────────────────────────────
   const totalAvailable = useMemo(() => getTotalCashAvailable(), [state.financeTransactions, state.financeAccounts]);
   const cashBalance = useMemo(() => getCashBalance(), [state.financeTransactions, state.financeAccounts]);
@@ -189,7 +240,15 @@ export default function FinancePage() {
   const netProfit = totalGrossProfit - totalOperatingExpenses;
 
   // ── Category Summaries ─────────────────────────────────────────────────────
-  const incomeCategories: FinanceCategory[] = ["Sale", "Customer Payment", "Purchase Return", "Adjustment"];
+  const incomeCategories: FinanceCategory[] = [
+    "Sale",
+    "Customer Payment",
+    "Purchase Return",
+    "Owner Capital",
+    "Expense Refund",
+    "Other Business Receipt",
+    "Adjustment",
+  ];
   const expenseCategories: FinanceCategory[] = [
     "Inventory Purchase",
     "Supplier Payment",
@@ -340,6 +399,111 @@ export default function FinancePage() {
     }
   }
 
+  // ── Handle Money In Form Submission ─────────────────────────────────────────
+  function handleRecordMoneyInSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setMoneyInFormError("");
+
+    const parsedAmount = parseFloat(moneyInAmountInput);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      setMoneyInFormError("Please enter a valid amount greater than 0.");
+      return;
+    }
+
+    if (moneyInMethod === "Credit") {
+      setMoneyInFormError("Money In cannot be recorded with Credit payment method.");
+      return;
+    }
+
+    if (!["Owner Capital", "Expense Refund", "Other Business Receipt"].includes(moneyInCategory)) {
+      setMoneyInFormError("Invalid Money In category.");
+      return;
+    }
+
+    if (!moneyInDate) {
+      setMoneyInFormError("Please select a valid date.");
+      return;
+    }
+
+    setIsSubmittingMoneyIn(true);
+
+    try {
+      recordBusinessMoneyIn({
+        category: moneyInCategory,
+        amount: parsedAmount,
+        paymentMethod: moneyInMethod,
+        date: new Date(moneyInDate).toISOString(),
+        notes: moneyInNotes.trim() || `${moneyInCategory}: Receipt`,
+        referenceId: moneyInRefId.trim() || undefined,
+      });
+
+      // Reset Form & Close Modal
+      setMoneyInAmountInput("");
+      setMoneyInNotes("");
+      setMoneyInRefId("");
+      setMoneyInFormError("");
+      setIsMoneyInModalOpen(false);
+    } catch (err: any) {
+      setMoneyInFormError(err?.message || "Failed to record money in. Please try again.");
+    } finally {
+      setIsSubmittingMoneyIn(false);
+    }
+  }
+
+  // ── Handle Opening Position Form Submission ──────────────────────────────────
+  function handleOpenOpeningModal() {
+    setOpeningCashInput(openingCash > 0 ? String(openingCash) : "");
+    setOpeningBankInput(openingBank > 0 ? String(openingBank) : "");
+    setOpeningUPIInput(openingUPI > 0 ? String(openingUPI) : "");
+    setOpeningFormError("");
+    setIsOpeningModalOpen(true);
+  }
+
+  function handleOpeningFormSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setOpeningFormError("");
+
+    const parsedCash = openingCashInput.trim() === "" ? 0 : parseFloat(openingCashInput);
+    const parsedBank = openingBankInput.trim() === "" ? 0 : parseFloat(openingBankInput);
+    const parsedUPI  = openingUPIInput.trim() === "" ? 0 : parseFloat(openingUPIInput);
+
+    if (isNaN(parsedCash) || parsedCash < 0) {
+      setOpeningFormError("Opening Cash must be a valid non-negative number.");
+      return;
+    }
+    if (isNaN(parsedBank) || parsedBank < 0) {
+      setOpeningFormError("Opening Bank must be a valid non-negative number.");
+      return;
+    }
+    if (isNaN(parsedUPI) || parsedUPI < 0) {
+      setOpeningFormError("Opening UPI must be a valid non-negative number.");
+      return;
+    }
+
+    const payload = { cash: parsedCash, bank: parsedBank, upi: parsedUPI };
+
+    if (isOpeningConfigured) {
+      setPendingOpeningValues(payload);
+      setShowOpeningEditWarning(true);
+    } else {
+      executeSaveOpening(payload);
+    }
+  }
+
+  function executeSaveOpening(values: { cash: number; bank: number; upi: number }) {
+    setIsSubmittingOpening(true);
+    try {
+      setOpeningBalances(values);
+      setIsOpeningModalOpen(false);
+      setShowOpeningEditWarning(false);
+      setPendingOpeningValues(null);
+    } catch (err: any) {
+      setOpeningFormError(err?.message || "Failed to update opening balances.");
+    } finally {
+      setIsSubmittingOpening(false);
+    }
+  }
+
   if (loading || !isOwner) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -373,6 +537,25 @@ export default function FinancePage() {
         </div>
 
         <div className="flex items-center gap-2.5">
+          {/* Record Money In Button */}
+          <button
+            type="button"
+            onClick={() => {
+              setMoneyInCategory("Owner Capital");
+              setMoneyInAmountInput("");
+              setMoneyInMethod("Cash");
+              setMoneyInDate(todayISOString());
+              setMoneyInNotes("");
+              setMoneyInRefId("");
+              setMoneyInFormError("");
+              setIsMoneyInModalOpen(true);
+            }}
+            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer active:scale-95"
+          >
+            <PlusCircle size={16} />
+            + Record Money In
+          </button>
+
           {/* Record Expense Button */}
           <button
             type="button"
@@ -477,7 +660,69 @@ export default function FinancePage() {
         </div>
       </div>
 
-      {/* ── CONCEPT SEPARATION GUIDE BANNER (TOGGLEABLE) ───────────────────────── */}
+      {/* ── OPENING FINANCIAL POSITION CARD ──────────────────────────────────── */}
+      <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 border border-amber-200/60">
+              <Landmark size={20} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-black text-slate-900 uppercase tracking-tight">Opening Financial Position</h2>
+                {isOpeningConfigured ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    Configured
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 animate-pulse">
+                    Unconfigured Initial Balances
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Opening balances represent the financial position of the business when AutoVault ERP was initialized. They are starting balances, not sales revenue or business income.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleOpenOpeningModal}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+              !isOpeningConfigured
+                ? "bg-amber-600 hover:bg-amber-700 text-white shadow-md active:scale-95"
+                : "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
+            }`}
+          >
+            <Coins size={15} />
+            {!isOpeningConfigured ? "Set Up Opening Financial Position" : "Edit Opening Balances"}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80">
+            <span className="text-[10px] font-bold uppercase text-slate-500 block">Opening Cash</span>
+            <p className="text-base font-black text-slate-900 mt-0.5">₹{openingCash.toLocaleString()}</p>
+            <span className="text-[10px] text-slate-400 font-mono block">(acc-cash)</span>
+          </div>
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80">
+            <span className="text-[10px] font-bold uppercase text-slate-500 block">Opening Bank</span>
+            <p className="text-base font-black text-slate-900 mt-0.5">₹{openingBank.toLocaleString()}</p>
+            <span className="text-[10px] text-slate-400 font-mono block">(acc-bank)</span>
+          </div>
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80">
+            <span className="text-[10px] font-bold uppercase text-slate-500 block">Opening UPI</span>
+            <p className="text-base font-black text-slate-900 mt-0.5">₹{openingUPI.toLocaleString()}</p>
+            <span className="text-[10px] text-slate-400 font-mono block">(acc-upi)</span>
+          </div>
+          <div className="bg-amber-500/10 p-3 rounded-xl border border-amber-500/20">
+            <span className="text-[10px] font-bold uppercase text-amber-800 block">Total Opening Funds</span>
+            <p className="text-base font-black text-amber-900 mt-0.5">₹{totalOpeningFunds.toLocaleString()}</p>
+            <span className="text-[10px] text-amber-700 block">Cash + Bank + UPI</span>
+          </div>
+        </div>
+      </div>
       {showConceptGuide && (
         <div className="bg-amber-50/90 border border-amber-200 rounded-2xl p-4 space-y-3 relative text-amber-900 text-xs">
           <div className="flex items-center justify-between border-b border-amber-200/60 pb-2">
@@ -1119,6 +1364,372 @@ export default function FinancePage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* ── RECORD MONEY IN MODAL ────────────────────────────────────────────────── */}
+      {isMoneyInModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden space-y-0">
+            <div className="bg-navy-950 text-white p-5 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+                  <TrendingUp size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black tracking-tight">Record Money In</h3>
+                  <p className="text-[11px] text-slate-400">Non-sales business receipt / capital</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMoneyInModalOpen(false);
+                  setMoneyInFormError("");
+                }}
+                className="text-slate-400 hover:text-white transition-colors cursor-pointer p-1"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleRecordMoneyInSubmit} className="p-5 space-y-4 text-xs">
+              {moneyInFormError && (
+                <div className="bg-rose-50 text-rose-700 border border-rose-200 p-3 rounded-xl flex items-center gap-2 font-medium">
+                  <AlertCircle size={16} className="shrink-0 text-rose-600" />
+                  <span>{moneyInFormError}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Receipt Category <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={moneyInCategory}
+                  onChange={(e) => setMoneyInCategory(e.target.value as any)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  required
+                >
+                  <option value="Owner Capital">Owner Capital (Owner investment)</option>
+                  <option value="Expense Refund">Expense Refund (Refund for previous expense)</option>
+                  <option value="Other Business Receipt">Other Business Receipt (Non-sales income)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Amount (₹) <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-bold text-slate-400 text-sm">₹</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    placeholder="e.g. 50000"
+                    value={moneyInAmountInput}
+                    onChange={(e) => setMoneyInAmountInput(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Payment Method <span className="text-rose-500">*</span>
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(["Cash", "UPI", "Card"] as PaymentMethod[]).map((method) => (
+                    <button
+                      key={method}
+                      type="button"
+                      onClick={() => setMoneyInMethod(method)}
+                      className={`py-2 px-3 rounded-xl font-bold border text-center transition-all cursor-pointer ${
+                        moneyInMethod === method
+                          ? "bg-navy-950 text-yellow-400 border-navy-950 shadow-xs"
+                          : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                      }`}
+                    >
+                      {method === "Card" ? "Bank / Card" : method}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Target Account: {moneyInMethod === "Cash" ? "acc-cash" : moneyInMethod === "UPI" ? "acc-upi" : "acc-bank"} (Credit blocked)
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Transaction Date <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  value={moneyInDate}
+                  onChange={(e) => setMoneyInDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Reference ID (Optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. TXN-99481 or Cheque #1234"
+                  value={moneyInRefId}
+                  onChange={(e) => setMoneyInRefId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900 text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Description / Notes
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Additional capital invested by owner"
+                  value={moneyInNotes}
+                  onChange={(e) => setMoneyInNotes(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900 resize-none text-xs"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsMoneyInModalOpen(false)}
+                  className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingMoneyIn}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSubmittingMoneyIn ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Check size={16} />
+                      Save Money In
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── OPENING FINANCIAL POSITION SETUP / EDIT MODAL ───────────────────────── */}
+      {isOpeningModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden space-y-0">
+            <div className="bg-navy-950 text-white p-5 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30">
+                  <Landmark size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black tracking-tight">
+                    {isOpeningConfigured ? "Edit Opening Financial Position" : "Set Up Opening Financial Position"}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">Starting balances at initialization</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOpeningModalOpen(false);
+                  setOpeningFormError("");
+                }}
+                className="text-slate-400 hover:text-white transition-colors cursor-pointer p-1"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleOpeningFormSubmit} className="p-5 space-y-4 text-xs">
+              {openingFormError && (
+                <div className="bg-rose-50 text-rose-700 border border-rose-200 p-3 rounded-xl flex items-center gap-2 font-medium">
+                  <AlertCircle size={16} className="shrink-0 text-rose-600" />
+                  <span>{openingFormError}</span>
+                </div>
+              )}
+
+              <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3 text-[11px] text-amber-900 leading-relaxed">
+                Opening balances represent the business&apos;s financial position before AutoVault ERP began tracking transactions. They do not generate ledger entries or affect Sales Revenue/Profit.
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Opening Cash (₹)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="0.00"
+                  value={openingCashInput}
+                  onChange={(e) => setOpeningCashInput(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Opening Bank (₹)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="0.00"
+                  value={openingBankInput}
+                  onChange={(e) => setOpeningBankInput(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1.5">
+                  Opening UPI (₹)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="0.00"
+                  value={openingUPIInput}
+                  onChange={(e) => setOpeningUPIInput(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                />
+              </div>
+
+              {/* Real-time Preview */}
+              <div className="bg-slate-900 text-white p-3.5 rounded-xl flex items-center justify-between">
+                <span className="text-xs text-slate-300 font-bold uppercase">Total Opening Funds Preview</span>
+                <span className="text-base font-black text-yellow-400">
+                  ₹
+                  {(
+                    (parseFloat(openingCashInput) || 0) +
+                    (parseFloat(openingBankInput) || 0) +
+                    (parseFloat(openingUPIInput) || 0)
+                  ).toLocaleString()}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsOpeningModalOpen(false)}
+                  className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingOpening}
+                  className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSubmittingOpening ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Check size={16} />
+                      Save Opening Balances
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── EDIT OPENING BALANCES WARNING CONFIRMATION MODAL ────────────────────── */}
+      {showOpeningEditWarning && pendingOpeningValues && (
+        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-[60] animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden space-y-0">
+            <div className="bg-amber-600 text-white p-5 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <AlertCircle size={22} className="shrink-0" />
+                <h3 className="text-base font-black tracking-tight">Confirm Opening Balance Change</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowOpeningEditWarning(false);
+                  setPendingOpeningValues(null);
+                }}
+                className="text-amber-100 hover:text-white transition-colors cursor-pointer p-1"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs leading-relaxed">
+              <div className="bg-amber-50 text-amber-900 border border-amber-200 p-4 rounded-xl space-y-2">
+                <p className="font-semibold">
+                  Opening balances represent the financial position of the business when AutoVault ERP was initialized. Changing these values will affect account balances and historical financial reporting. If you are adding new money to the business, use &apos;Record Money In → Owner Capital&apos; instead.
+                </p>
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1 font-mono text-[11px]">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">New Opening Cash:</span>
+                  <span className="font-bold text-slate-800">₹{pendingOpeningValues.cash.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">New Opening Bank:</span>
+                  <span className="font-bold text-slate-800">₹{pendingOpeningValues.bank.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">New Opening UPI:</span>
+                  <span className="font-bold text-slate-800">₹{pendingOpeningValues.upi.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-slate-200">
+                  <span className="text-amber-800 font-bold">New Total Opening:</span>
+                  <span className="font-extrabold text-amber-900">
+                    ₹{(pendingOpeningValues.cash + pendingOpeningValues.bank + pendingOpeningValues.upi).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowOpeningEditWarning(false);
+                    setPendingOpeningValues(null);
+                  }}
+                  className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer text-center"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => executeSaveOpening(pendingOpeningValues)}
+                  className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer text-center flex items-center justify-center gap-1.5"
+                >
+                  <Check size={16} />
+                  Yes, Change Balances
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

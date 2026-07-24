@@ -33,29 +33,29 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STATUS_BADGE: Record<PaymentStatus, string> = {
-  Paid:    "bg-green-100 text-green-700 border-green-200",
+  Paid: "bg-green-100 text-green-700 border-green-200",
   Partial: "bg-orange-100 text-orange-700 border-orange-200",
-  Debt:    "bg-red-100 text-red-600 border-red-200",
+  Debt: "bg-red-100 text-red-600 border-red-200",
 };
 
 const METHOD_BADGE: Record<string, string> = {
-  Cash:   "bg-emerald-50 text-emerald-700",
-  UPI:    "bg-blue-50 text-blue-700",
-  Card:   "bg-purple-50 text-purple-700",
+  Cash: "bg-emerald-50 text-emerald-700",
+  UPI: "bg-blue-50 text-blue-700",
+  Card: "bg-purple-50 text-purple-700",
   Credit: "bg-red-50 text-red-600",
 };
 
 const METHOD_COLORS: Record<PaymentMethod, string> = {
-  Cash:   "bg-emerald-50 text-emerald-700 border-emerald-200",
-  UPI:    "bg-blue-50 text-blue-700 border-blue-200",
-  Card:   "bg-purple-50 text-purple-700 border-purple-200",
+  Cash: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  UPI: "bg-blue-50 text-blue-700 border-blue-200",
+  Card: "bg-purple-50 text-purple-700 border-purple-200",
   Credit: "bg-red-50 text-red-600 border-red-200",
 };
 
 const METHOD_DOT: Record<string, string> = {
-  Cash:   "bg-emerald-500",
-  UPI:    "bg-blue-500",
-  Card:   "bg-purple-500",
+  Cash: "bg-emerald-500",
+  UPI: "bg-blue-500",
+  Card: "bg-purple-500",
   Credit: "bg-red-500",
 };
 
@@ -96,10 +96,10 @@ export default function InvoicesPage() {
   const counts = useMemo(() => {
     const all = state.invoices;
     return {
-      total:   all.length,
-      paid:    all.filter((i) => i.paymentStatus === "Paid").length,
+      total: all.length,
+      paid: all.filter((i) => i.paymentStatus === "Paid").length,
       partial: all.filter((i) => i.paymentStatus === "Partial").length,
-      debt:    all.filter((i) => i.paymentStatus === "Debt").length,
+      debt: all.filter((i) => i.paymentStatus === "Debt").length,
     };
   }, [state.invoices]);
 
@@ -230,11 +230,10 @@ export default function InvoicesPage() {
         <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
           <button
             onClick={() => setActiveTab("invoices")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === "invoices"
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${activeTab === "invoices"
                 ? "bg-white text-slate-900 shadow-sm"
                 : "text-slate-500 hover:text-slate-700"
-            }`}
+              }`}
           >
             <FileText size={14} />
             Invoices
@@ -244,11 +243,10 @@ export default function InvoicesPage() {
           </button>
           <button
             onClick={() => setActiveTab("repayments")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === "repayments"
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${activeTab === "repayments"
                 ? "bg-white text-slate-900 shadow-sm"
                 : "text-slate-500 hover:text-slate-700"
-            }`}
+              }`}
           >
             <Coins size={14} />
             Repayments
@@ -315,9 +313,8 @@ export default function InvoicesPage() {
                   <button
                     key={f}
                     onClick={() => setFilter(f)}
-                    className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 cursor-pointer text-xs ${
-                      filter === f ? "bg-navy-950 text-white shadow-sm" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                    }`}
+                    className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 cursor-pointer text-xs ${filter === f ? "bg-navy-950 text-white shadow-sm" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
                   >
                     {f === "Debt" ? "Debt / Unpaid" : f}
                     <span className={`px-1.5 py-0.5 rounded text-[10px] ${filter === f ? "bg-slate-700 text-slate-200" : "bg-slate-200 text-slate-600"}`}>
@@ -514,11 +511,10 @@ export default function InvoicesPage() {
                                           {payments.map((p) => (
                                             <div
                                               key={p.id}
-                                              className={`flex flex-col rounded-lg px-2.5 py-1 text-[10px] border ${
-                                                p.voided
+                                              className={`flex flex-col rounded-lg px-2.5 py-1 text-[10px] border ${p.voided
                                                   ? "bg-red-50 border-red-200 opacity-70"
                                                   : "bg-green-50 border-green-100"
-                                              }`}
+                                                }`}
                                             >
                                               <div className="flex justify-between items-center">
                                                 <span className={`font-bold ${p.voided ? "text-red-600 line-through" : "text-green-700"}`}>
@@ -673,9 +669,8 @@ export default function InvoicesPage() {
                   <button
                     key={m}
                     onClick={() => setRepayMethodFilter(m)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                      repayMethodFilter === m ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                    }`}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${repayMethodFilter === m ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
                   >
                     {m}
                   </button>
@@ -834,11 +829,10 @@ export default function InvoicesPage() {
                             key={role}
                             type="button"
                             onClick={() => setCollectCollectedBy(role)}
-                            className={`flex-1 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                              active
+                            className={`flex-1 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${active
                                 ? "bg-slate-900 border-slate-900 text-white"
                                 : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                            }`}
+                              }`}
                           >
                             {role}
                           </button>

@@ -465,7 +465,7 @@ export default function FinancePage() {
 
     const parsedCash = openingCashInput.trim() === "" ? 0 : parseFloat(openingCashInput);
     const parsedBank = openingBankInput.trim() === "" ? 0 : parseFloat(openingBankInput);
-    const parsedUPI  = openingUPIInput.trim() === "" ? 0 : parseFloat(openingUPIInput);
+    const parsedUPI = openingUPIInput.trim() === "" ? 0 : parseFloat(openingUPIInput);
 
     if (isNaN(parsedCash) || parsedCash < 0) {
       setOpeningFormError("Opening Cash must be a valid non-negative number.");
@@ -689,11 +689,10 @@ export default function FinancePage() {
           <button
             type="button"
             onClick={handleOpenOpeningModal}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
-              !isOpeningConfigured
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${!isOpeningConfigured
                 ? "bg-amber-600 hover:bg-amber-700 text-white shadow-md active:scale-95"
                 : "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
-            }`}
+              }`}
           >
             <Coins size={15} />
             {!isOpeningConfigured ? "Set Up Opening Financial Position" : "Edit Opening Balances"}
@@ -986,9 +985,8 @@ export default function FinancePage() {
                   </div>
                   <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                     <div
-                      className={`h-full rounded-full transition-all duration-300 ${
-                        isOperating ? "bg-purple-500" : "bg-rose-500"
-                      }`}
+                      className={`h-full rounded-full transition-all duration-300 ${isOperating ? "bg-purple-500" : "bg-rose-500"
+                        }`}
                       style={{ width: `${pct}%` }}
                     />
                   </div>
@@ -1165,13 +1163,12 @@ export default function FinancePage() {
                       <td className="p-3">
                         <div className="flex items-center gap-1.5">
                           <span
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              isIncome
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${isIncome
                                 ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                                 : isOpEx
-                                ? "bg-purple-50 text-purple-700 border border-purple-200"
-                                : "bg-rose-50 text-rose-700 border border-rose-200"
-                            }`}
+                                  ? "bg-purple-50 text-purple-700 border border-purple-200"
+                                  : "bg-rose-50 text-rose-700 border border-rose-200"
+                              }`}
                           >
                             {isIncome ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
                             {tx.type}
@@ -1293,11 +1290,10 @@ export default function FinancePage() {
                       key={method}
                       type="button"
                       onClick={() => setExpenseMethod(method)}
-                      className={`py-2 px-3 rounded-xl font-bold border text-center transition-all cursor-pointer ${
-                        expenseMethod === method
+                      className={`py-2 px-3 rounded-xl font-bold border text-center transition-all cursor-pointer ${expenseMethod === method
                           ? "bg-navy-950 text-yellow-400 border-navy-950 shadow-xs"
                           : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
-                      }`}
+                        }`}
                     >
                       {method === "Card" ? "Bank / Card" : method}
                     </button>
@@ -1446,11 +1442,10 @@ export default function FinancePage() {
                       key={method}
                       type="button"
                       onClick={() => setMoneyInMethod(method)}
-                      className={`py-2 px-3 rounded-xl font-bold border text-center transition-all cursor-pointer ${
-                        moneyInMethod === method
+                      className={`py-2 px-3 rounded-xl font-bold border text-center transition-all cursor-pointer ${moneyInMethod === method
                           ? "bg-navy-950 text-yellow-400 border-navy-950 shadow-xs"
                           : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
-                      }`}
+                        }`}
                     >
                       {method === "Card" ? "Bank / Card" : method}
                     </button>

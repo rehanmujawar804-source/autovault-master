@@ -52,6 +52,16 @@ table {
   box-shadow: 0 0 0 2px #f5c518;
 }
 
+/* Scrollbar hide utility for clean sidebar navigation */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+
 /* ─────────────────────────────────────────────────────────────────────────────
    GLOBAL DARK MODE STYLING (ERP UI ONLY — PRINTABLE INVOICE STAYS LIGHT PAPER)
    ───────────────────────────────────────────────────────────────────────────── */

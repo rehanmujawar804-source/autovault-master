@@ -282,10 +282,10 @@ export default function AnalyticsPage() {
     Object.keys(categoryMap).forEach((cat) => {
       const catProducts = products.filter((p) => p.category === cat);
       const catProductIds = new Set(catProducts.map((p) => p.id));
-      
+
       const catInvs = filteredInvoices.filter((inv) => inv.items.some((item) => catProductIds.has(item.productId)));
       const catReturns = filteredSalesReturns.filter((r) => r.items.some((item) => catProductIds.has(item.productId)));
-      
+
       let catRevenue = 0;
       catProducts.forEach((p) => {
         catRevenue += calculateRevenue(
@@ -641,10 +641,11 @@ export default function AnalyticsPage() {
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6 pb-12 print-hidden">
-      
+
       {/* Dynamic Styling block to format printable container on trigger */}
       {showReport && (
-        <style dangerouslySetInnerHTML={{ __html: `
+        <style dangerouslySetInnerHTML={{
+          __html: `
           @media print {
             aside, .print-hidden, header, nav, button, .aside-class {
               display: none !important;
@@ -694,11 +695,10 @@ export default function AnalyticsPage() {
                   setTimeRange(r.id);
                   setShowCustomDates(false);
                 }}
-                className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  timeRange === r.id && !showCustomDates
+                className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${timeRange === r.id && !showCustomDates
                     ? "bg-white text-navy-950 shadow-sm"
                     : "text-slate-500 hover:text-slate-800"
-                }`}
+                  }`}
               >
                 {r.label}
               </button>
@@ -712,11 +712,10 @@ export default function AnalyticsPage() {
               setTimeRange("Custom");
               setShowCustomDates(!showCustomDates);
             }}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition cursor-pointer shadow-sm ${
-              timeRange === "Custom"
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition cursor-pointer shadow-sm ${timeRange === "Custom"
                 ? "bg-navy-950 text-white border-navy-950"
                 : "bg-white hover:bg-slate-50 border-slate-200 text-slate-600"
-            }`}
+              }`}
           >
             <Calendar size={13} />
             Custom
@@ -831,7 +830,7 @@ export default function AnalyticsPage() {
 
       {/* ── Section: Trend Analysis & Categories ────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-        
+
         {/* Sales & Profit Area Chart Container */}
         <SectionCard
           title="Sales & Profit Trend"
@@ -1089,7 +1088,7 @@ export default function AnalyticsPage() {
 
       {/* ── Section: Cash flow, payment mix & statuses ──────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-        
+
         {/* Payment mix donut chart + status segments */}
         <SectionCard
           title="Payment Channels & Statuses"
@@ -1213,7 +1212,7 @@ export default function AnalyticsPage() {
 
       {/* ── Section: Outstanding Debts & Stock Health ────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        
+
         {/* Outstanding Receivables */}
         <SectionCard
           title="Outstanding Receivables"
@@ -1264,18 +1263,16 @@ export default function AnalyticsPage() {
             <button
               type="button"
               onClick={() => setInventoryAlertTab("out")}
-              className={`flex-1 py-1.5 text-center rounded-lg transition-all cursor-pointer ${
-                inventoryAlertTab === "out" ? "bg-white text-red-600 shadow-sm" : "text-slate-500"
-              }`}
+              className={`flex-1 py-1.5 text-center rounded-lg transition-all cursor-pointer ${inventoryAlertTab === "out" ? "bg-white text-red-600 shadow-sm" : "text-slate-500"
+                }`}
             >
               Out of Stock ({data.outOfStock.length})
             </button>
             <button
               type="button"
               onClick={() => setInventoryAlertTab("low")}
-              className={`flex-1 py-1.5 text-center rounded-lg transition-all cursor-pointer ${
-                inventoryAlertTab === "low" ? "bg-white text-orange-600 shadow-sm" : "text-slate-500"
-              }`}
+              className={`flex-1 py-1.5 text-center rounded-lg transition-all cursor-pointer ${inventoryAlertTab === "low" ? "bg-white text-orange-600 shadow-sm" : "text-slate-500"
+                }`}
             >
               Low Stock ({data.lowStock.length})
             </button>
@@ -1442,9 +1439,8 @@ export default function AnalyticsPage() {
                   <td className="px-5 py-2.5 text-right font-mono text-slate-500 text-xs">₹{p.currentCost.toLocaleString()}</td>
                   <td className="px-5 py-2.5 text-right font-mono font-bold text-slate-800 text-xs">₹{p.sellPrice.toLocaleString()}</td>
                   <td className="px-5 py-2.5 text-right">
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      p.margin >= 30 ? "bg-green-100 text-green-700" : p.margin >= 15 ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-600"
-                    }`}>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${p.margin >= 30 ? "bg-green-100 text-green-700" : p.margin >= 15 ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-600"
+                      }`}>
                       {p.margin}%
                     </span>
                   </td>
@@ -1462,7 +1458,7 @@ export default function AnalyticsPage() {
       {showReport && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 overflow-y-auto px-4 py-8 print:p-0 print:bg-white print:static report-print-container">
           <div className="max-w-4xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden print:border-none print:shadow-none print:rounded-none">
-            
+
             {/* Print action header (hidden on physical print output) */}
             <div className="flex justify-between items-center px-6 py-4 bg-slate-50 border-b border-slate-150 print-hidden">
               <button
@@ -1485,7 +1481,7 @@ export default function AnalyticsPage() {
 
             {/* Document body (Scales to standard A4 printing sizes) */}
             <div className="p-8 sm:p-12 space-y-8 print:p-0">
-              
+
               {/* Report Document Title and Date stamps */}
               <div className="flex justify-between items-start border-b border-slate-200 pb-6">
                 <div>
@@ -1499,8 +1495,8 @@ export default function AnalyticsPage() {
                     Period: {timeRange === "Custom"
                       ? `${new Date(startDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} - ${new Date(endDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`
                       : timeRange === "All"
-                      ? "All-Time Business Summary"
-                      : `${timeRange} Auditing`}
+                        ? "All-Time Business Summary"
+                        : `${timeRange} Auditing`}
                   </p>
                   <p className="text-[10px] text-slate-400 mt-0.5">Generated: {new Date().toLocaleString("en-IN")}</p>
                 </div>
@@ -1658,11 +1654,11 @@ export default function AnalyticsPage() {
 
               {/* Print Footer */}
               <div className="pt-8 border-t border-dashed border-slate-200 text-center text-[10px] text-slate-400 font-medium">
-                This document represents an official business summary generated directly from AutoVault POS databases. 
+                This document represents an official business summary generated directly from AutoVault POS databases.
                 Printed on {new Date().toLocaleDateString("en-IN")} at {new Date().toLocaleTimeString("en-IN")}.
               </div>
             </div>
-            
+
           </div>
         </div>
       )}

@@ -240,13 +240,12 @@ export default function VehicleFitmentPage() {
         {/* Coverage Index */}
         <div className="bg-white border border-slate-200 rounded-2xl px-5 py-4 flex items-start gap-3">
           <div
-            className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
-              coverageStats.coverageIndex >= 70
+            className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${coverageStats.coverageIndex >= 70
                 ? "bg-green-50"
                 : coverageStats.coverageIndex >= 40
-                ? "bg-amber-50"
-                : "bg-red-50"
-            }`}
+                  ? "bg-amber-50"
+                  : "bg-red-50"
+              }`}
           >
             <ShieldCheck
               size={17}
@@ -254,8 +253,8 @@ export default function VehicleFitmentPage() {
                 coverageStats.coverageIndex >= 70
                   ? "text-green-500"
                   : coverageStats.coverageIndex >= 40
-                  ? "text-amber-500"
-                  : "text-red-400"
+                    ? "text-amber-500"
+                    : "text-red-400"
               }
             />
           </div>
@@ -264,13 +263,12 @@ export default function VehicleFitmentPage() {
               Coverage Index
             </p>
             <p
-              className={`text-2xl font-bold leading-tight ${
-                coverageStats.coverageIndex >= 70
+              className={`text-2xl font-bold leading-tight ${coverageStats.coverageIndex >= 70
                   ? "text-green-600"
                   : coverageStats.coverageIndex >= 40
-                  ? "text-amber-600"
-                  : "text-red-500"
-              }`}
+                    ? "text-amber-600"
+                    : "text-red-500"
+                }`}
             >
               {coverageStats.coverageIndex}%
             </p>
@@ -448,11 +446,10 @@ export default function VehicleFitmentPage() {
                         onClick={() =>
                           setExpandedFitmentId(isExpanded ? null : fitment.id)
                         }
-                        className={`border-b border-slate-100 cursor-pointer transition-colors ${
-                          isExpanded
+                        className={`border-b border-slate-100 cursor-pointer transition-colors ${isExpanded
                             ? "bg-amber-50 border-amber-100"
                             : "hover:bg-slate-50"
-                        }`}
+                          }`}
                       >
                         {/* Expand toggle */}
                         <td className="px-4 py-3.5 text-slate-400">

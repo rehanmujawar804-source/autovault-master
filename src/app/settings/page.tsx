@@ -465,13 +465,12 @@ export default function SettingsPage() {
           <button
             onClick={handleSave}
             disabled={saveStatus === "saving"}
-            className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm cursor-pointer ${
-              saveStatus === "saved"
+            className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm cursor-pointer ${saveStatus === "saved"
                 ? "bg-emerald-600 text-white"
                 : saveStatus === "unsaved"
-                ? "bg-navy-950 hover:bg-navy-800 text-white ring-2 ring-yellow-400/50"
-                : "bg-navy-950 hover:bg-navy-800 text-white"
-            }`}
+                  ? "bg-navy-950 hover:bg-navy-800 text-white ring-2 ring-yellow-400/50"
+                  : "bg-navy-950 hover:bg-navy-800 text-white"
+              }`}
           >
             {saveStatus === "saved" ? (
               <Check size={16} />
@@ -483,8 +482,8 @@ export default function SettingsPage() {
             {saveStatus === "saved"
               ? "Saved!"
               : saveStatus === "saving"
-              ? "Saving..."
-              : "Save Settings"}
+                ? "Saving..."
+                : "Save Settings"}
           </button>
         </div>
       </div>
@@ -646,11 +645,10 @@ export default function SettingsPage() {
               <button
                 type="button"
                 onClick={() => setField("theme", "light")}
-                className={`flex flex-col items-center justify-center p-3.5 rounded-xl border transition-all cursor-pointer ${
-                  settings.theme === "light"
+                className={`flex flex-col items-center justify-center p-3.5 rounded-xl border transition-all cursor-pointer ${settings.theme === "light"
                     ? "bg-amber-50 border-amber-400 text-amber-900 font-bold ring-2 ring-amber-400/40 shadow-xs"
                     : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
-                }`}
+                  }`}
               >
                 <Sun size={20} className={settings.theme === "light" ? "text-amber-600 mb-1" : "text-slate-400 mb-1"} />
                 <span className="text-xs">Light</span>
@@ -659,11 +657,10 @@ export default function SettingsPage() {
               <button
                 type="button"
                 onClick={() => setField("theme", "dark")}
-                className={`flex flex-col items-center justify-center p-3.5 rounded-xl border transition-all cursor-pointer ${
-                  settings.theme === "dark"
+                className={`flex flex-col items-center justify-center p-3.5 rounded-xl border transition-all cursor-pointer ${settings.theme === "dark"
                     ? "bg-navy-950 border-navy-900 text-white font-bold ring-2 ring-yellow-400/50 shadow-xs"
                     : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
-                }`}
+                  }`}
               >
                 <Moon size={20} className={settings.theme === "dark" ? "text-yellow-400 mb-1" : "text-slate-400 mb-1"} />
                 <span className="text-xs">Dark</span>
@@ -672,11 +669,10 @@ export default function SettingsPage() {
               <button
                 type="button"
                 onClick={() => setField("theme", "system")}
-                className={`flex flex-col items-center justify-center p-3.5 rounded-xl border transition-all cursor-pointer ${
-                  settings.theme === "system"
+                className={`flex flex-col items-center justify-center p-3.5 rounded-xl border transition-all cursor-pointer ${settings.theme === "system"
                     ? "bg-blue-50 border-blue-400 text-blue-900 font-bold ring-2 ring-blue-400/40 shadow-xs"
                     : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
-                }`}
+                  }`}
               >
                 <Monitor size={20} className={settings.theme === "system" ? "text-blue-600 mb-1" : "text-slate-400 mb-1"} />
                 <span className="text-xs">System</span>
@@ -856,11 +852,10 @@ export default function SettingsPage() {
               <button
                 type="submit"
                 disabled={ownerLockoutSeconds > 0}
-                className={`w-full font-bold text-xs py-2.5 rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5 ${
-                  ownerLockoutSeconds > 0
+                className={`w-full font-bold text-xs py-2.5 rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5 ${ownerLockoutSeconds > 0
                     ? "bg-slate-300 text-slate-500 cursor-not-allowed"
                     : "bg-navy-950 hover:bg-navy-900 text-white cursor-pointer"
-                }`}
+                  }`}
               >
                 <Save size={14} className="text-yellow-400" />
                 {ownerLockoutSeconds > 0 ? `Locked (${ownerLockoutSeconds}s)` : "Save Owner Credentials"}
@@ -1022,11 +1017,10 @@ export default function SettingsPage() {
               <button
                 type="submit"
                 disabled={staffLockoutSeconds > 0}
-                className={`w-full font-bold text-xs py-2.5 rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5 ${
-                  staffLockoutSeconds > 0
+                className={`w-full font-bold text-xs py-2.5 rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5 ${staffLockoutSeconds > 0
                     ? "bg-slate-300 text-slate-500 cursor-not-allowed"
                     : "bg-slate-900 hover:bg-slate-800 text-white cursor-pointer"
-                }`}
+                  }`}
               >
                 <Save size={14} className="text-emerald-400" />
                 {staffLockoutSeconds > 0 ? `Locked (${staffLockoutSeconds}s)` : "Save Staff Credentials"}
@@ -1370,11 +1364,10 @@ export default function SettingsPage() {
                   <button
                     onClick={handleResetStore}
                     disabled={resetInputText.trim() !== "RESET"}
-                    className={`flex-1 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
-                      resetInputText.trim() === "RESET"
+                    className={`flex-1 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${resetInputText.trim() === "RESET"
                         ? "bg-red-600 hover:bg-red-700 text-white shadow-sm"
                         : "bg-slate-200 text-slate-400 cursor-not-allowed"
-                    }`}
+                      }`}
                   >
                     Confirm Reset
                   </button>
@@ -1529,11 +1522,10 @@ function ToggleItem({ id, label, checked, onChange }: ToggleItemProps) {
   return (
     <label
       htmlFor={id}
-      className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer select-none ${
-        checked
+      className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer select-none ${checked
           ? "bg-navy-950/5 border-navy-900/30 text-navy-950 font-bold"
           : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-      }`}
+        }`}
     >
       <span className="text-xs">{label}</span>
       <input

@@ -379,23 +379,21 @@ export default function CustomersPage() {
               <button
                 key={f}
                 onClick={() => setFilter(f)}
-                className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 cursor-pointer text-xs ${
-                  filter === f
+                className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 cursor-pointer text-xs ${filter === f
                     ? "bg-navy-950 text-white shadow-sm"
                     : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                }`}
+                  }`}
               >
                 {f}
-                <span className={`px-1.5 py-0.5 rounded text-[10px] ${
-                  filter === f ? "bg-slate-700 text-slate-200" : "bg-slate-200 text-slate-600"
-                }`}>
+                <span className={`px-1.5 py-0.5 rounded text-[10px] ${filter === f ? "bg-slate-700 text-slate-200" : "bg-slate-200 text-slate-600"
+                  }`}>
                   {f === "All"
                     ? stats.total
                     : f === "High Debt"
-                    ? stats.highDebtCount
-                    : f === "Partial"
-                    ? stats.partialCount
-                    : stats.noDebtCount}
+                      ? stats.highDebtCount
+                      : f === "Partial"
+                        ? stats.partialCount
+                        : stats.noDebtCount}
                 </span>
               </button>
             ))}
@@ -538,11 +536,10 @@ export default function CustomersPage() {
                         {/* Debt */}
                         <td className="px-5 py-3.5 text-right">
                           <span
-                            className={`inline-block px-2 py-0.5 rounded border text-xs font-bold ${
-                              derivedDebt > 0
+                            className={`inline-block px-2 py-0.5 rounded border text-xs font-bold ${derivedDebt > 0
                                 ? "bg-red-50 text-red-600 border-red-200"
                                 : "bg-emerald-50 text-emerald-700 border-emerald-200"
-                            }`}
+                              }`}
                           >
                             {derivedDebt > 0 ? `₹${derivedDebt.toLocaleString()}` : "Clear"}
                           </span>
@@ -816,11 +813,10 @@ export default function CustomersPage() {
                       autoFocus
                     />
                     {Number(collectAmount) > 0 && (
-                      <p className={`text-xs mt-1.5 font-semibold ${
-                        Number(collectAmount) >= getInvoiceOutstanding(collectInvoice)
+                      <p className={`text-xs mt-1.5 font-semibold ${Number(collectAmount) >= getInvoiceOutstanding(collectInvoice)
                           ? "text-green-600"
                           : "text-orange-600"
-                      }`}>
+                        }`}>
                         {Number(collectAmount) >= getInvoiceOutstanding(collectInvoice)
                           ? "✓ Clears invoice fully (Paid)"
                           : `₹${(getInvoiceOutstanding(collectInvoice) - Number(collectAmount)).toLocaleString()} still remaining`}
@@ -839,11 +835,10 @@ export default function CustomersPage() {
                           key={m}
                           type="button"
                           onClick={() => setCollectMethod(m)}
-                          className={`py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                            collectMethod === m
+                          className={`py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${collectMethod === m
                               ? "bg-slate-900 border-slate-900 text-white"
                               : `${METHOD_COLORS[m]} hover:opacity-80`
-                          }`}
+                            }`}
                         >
                           {m}
                         </button>
@@ -864,11 +859,10 @@ export default function CustomersPage() {
                             key={role}
                             type="button"
                             onClick={() => setCollectCollectedBy(role)}
-                            className={`flex-1 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                              active
+                            className={`flex-1 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${active
                                 ? "bg-slate-900 border-slate-900 text-white"
                                 : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                            }`}
+                              }`}
                           >
                             {role}
                           </button>
@@ -1077,13 +1071,12 @@ export default function CustomersPage() {
                       {previewList.map(({ inv, due, alloc }) => (
                         <div
                           key={inv.id}
-                          className={`flex justify-between items-center text-xs p-2 rounded-lg border ${
-                            alloc > 0
+                          className={`flex justify-between items-center text-xs p-2 rounded-lg border ${alloc > 0
                               ? alloc >= due
                                 ? "bg-emerald-50/70 border-emerald-200 text-emerald-900"
                                 : "bg-blue-50/70 border-blue-200 text-blue-900"
                               : "bg-white border-slate-200 text-slate-400 opacity-60"
-                          }`}
+                            }`}
                         >
                           <div>
                             <span className="font-mono font-bold">{inv.invoiceNumber}</span>
@@ -1115,11 +1108,10 @@ export default function CustomersPage() {
                         key={who}
                         type="button"
                         onClick={() => setLumpSumCollectedBy(who)}
-                        className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                          lumpSumCollectedBy === who
+                        className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${lumpSumCollectedBy === who
                             ? "bg-slate-900 text-white border-slate-900 shadow-xs"
                             : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
-                        }`}
+                          }`}
                       >
                         {who}
                       </button>
@@ -1138,11 +1130,10 @@ export default function CustomersPage() {
                         key={m}
                         type="button"
                         onClick={() => setLumpSumMethod(m)}
-                        className={`py-2 px-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                          lumpSumMethod === m
+                        className={`py-2 px-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${lumpSumMethod === m
                             ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
                             : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
-                        }`}
+                          }`}
                       >
                         {m}
                       </button>

@@ -5,6 +5,8 @@ import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import type { Product, VehicleFitment } from "@/types";
 import { ProductFormModal, AdjustStockModal } from "./components/ProductModals";
+import { BulkFitmentModal } from "./components/BulkFitmentModals";
+import { formatFitmentDisplay } from "@/lib/fitmentUtils";
 import Link from "next/link";
 import {
   Search,
@@ -29,6 +31,8 @@ import {
   Check,
   Layers,
   ArrowUpDown,
+  Sparkles,
+  Trash2,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -357,6 +361,50 @@ export default function InventoryPage() {
     });
     return list;
   }, [state.products, categoryFilter, brandFilter, statusFilter, stockFilter, search, sortBy]);
+
+  // ── Multi-select state & logic (Phase 2C Owner-Only) ──────────────────────
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
+  const [showBulkRemoveModal, setShowBulkRemoveModal] = useState(false);
+  const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const selectedSet = useMemo(() => new Set(selectedProductIds), [selectedProductIds]);
+
+  const visibleIds = useMemo(() => filtered.map((p) => p.id), [filtered]);
+
+  const allVisibleSelected = useMemo(() => {
+    return visibleIds.length > 0 && visibleIds.every((id) => selectedSet.has(id));
+  }, [visibleIds, selectedSet]);
+
+  const someVisibleSelected = useMemo(() => {
+    return visibleIds.some((id) => selectedSet.has(id)) && !allVisibleSelected;
+  }, [visibleIds, selectedSet, allVisibleSelected]);
+
+  useEffect(() => {
+    if (selectAllCheckboxRef.current) {
+      selectAllCheckboxRef.current.indeterminate = someVisibleSelected;
+    }
+  }, [someVisibleSelected]);
+
+  function handleToggleSelectAllVisible() {
+    if (allVisibleSelected) {
+      setSelectedProductIds((prev) => prev.filter((id) => !visibleIds.includes(id)));
+    } else {
+      setSelectedProductIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+    }
+  }
+
+  function handleToggleSelectProduct(productId: string) {
+    setSelectedProductIds((prev) =>
+      prev.includes(productId)
+        ? prev.filter((id) => id !== productId)
+        : [...prev, productId]
+    );
+  }
+
+  const selectedProductsList = useMemo(() => {
+    return state.products.filter((p) => selectedSet.has(p.id));
+  }, [state.products, selectedSet]);
 
   if (!isMounted) {
     return (
@@ -1222,8 +1270,21 @@ export default function InventoryPage() {
               {/* ── Sticky professional header ── */}
               <thead className="sticky top-0 z-10">
                 <tr className="bg-slate-50 border-b-2 border-slate-200">
+                  {/* Select All Checkbox – Owner Only */}
+                  {isOwner && (
+                    <th className="w-10 pl-4 pr-1 py-3 text-center">
+                      <input
+                        type="checkbox"
+                        ref={selectAllCheckboxRef}
+                        checked={allVisibleSelected}
+                        onChange={handleToggleSelectAllVisible}
+                        title={allVisibleSelected ? "Deselect all visible products" : "Select all visible products"}
+                        className="w-4 h-4 text-navy-950 rounded border-slate-300 focus:ring-navy-600/30 cursor-pointer accent-navy-950"
+                      />
+                    </th>
+                  )}
                   {/* Expand toggle column */}
-                  <th className="w-8 pl-4 pr-1 py-3" />
+                  <th className="w-8 pl-3 pr-1 py-3" />
                   {/* Product */}
                   <th className="px-4 py-3 text-left">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Product</span>
@@ -1309,6 +1370,18 @@ export default function InventoryPage() {
                       <tr
                         className={`border-b border-slate-100 border-l-4 ${accentColor} ${rowBg} hover:bg-slate-50 hover:shadow-sm transition-all duration-150 group`}
                       >
+                        {/* Row selection checkbox – Owner Only */}
+                        {isOwner && (
+                          <td className="pl-4 pr-1 py-3.5 w-10 text-center" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={selectedSet.has(product.id)}
+                              onChange={() => handleToggleSelectProduct(product.id)}
+                              className="w-4 h-4 text-navy-950 rounded border-slate-300 focus:ring-navy-600/30 cursor-pointer accent-navy-950"
+                            />
+                          </td>
+                        )}
+
                         {/* Expand toggle */}
                         <td className="pl-3 pr-1 py-3.5 w-8">
                           <button
@@ -1480,18 +1553,35 @@ export default function InventoryPage() {
                                   <h4 className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Vehicle Compatibility</h4>
                                 </div>
                                 <div className="max-h-36 overflow-y-auto">
-                                  {!product.fitments || product.fitments.length === 0 ? (
-                                    <div className="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2 border border-slate-100">
-                                      <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
-                                      <p className="text-xs text-slate-500 italic">Universal Fitment — fits all makes &amp; models</p>
+                                  {product.isUniversalFit || (product.fitments && product.fitments.length > 0) ? (
+                                    <div className="space-y-2">
+                                      {product.isUniversalFit && (
+                                        <div className="flex items-center gap-2 bg-amber-50/90 rounded-lg px-3 py-2 border border-amber-200">
+                                          <Sparkles size={13} className="text-amber-600 shrink-0" />
+                                          <p className="text-xs font-bold text-amber-900">Universal Fit — All Vehicles</p>
+                                        </div>
+                                      )}
+                                      {product.fitments && product.fitments.length > 0 && (
+                                        <div>
+                                          {product.isUniversalFit && (
+                                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                              Explicit Vehicle Fitments
+                                            </p>
+                                          )}
+                                          <div className="flex flex-wrap gap-1.5 pt-0.5">
+                                            {product.fitments.map((fit, idx) => (
+                                              <span key={idx} className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold px-2.5 py-0.5 rounded-lg">
+                                                {formatFitmentDisplay(fit)}
+                                              </span>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
                                     </div>
                                   ) : (
-                                    <div className="flex flex-wrap gap-1.5 pt-0.5">
-                                      {product.fitments.map((fit, idx) => (
-                                        <span key={idx} className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold px-2.5 py-0.5 rounded-lg">
-                                          {fit.brand} {fit.model} ({fit.year})
-                                        </span>
-                                      ))}
+                                    <div className="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200/60">
+                                      <Info size={13} className="text-slate-400 shrink-0" />
+                                      <p className="text-xs text-slate-500 font-medium italic">No Fitment Configured</p>
                                     </div>
                                   )}
                                 </div>
@@ -1624,6 +1714,63 @@ export default function InventoryPage() {
         isOpen={!!stockModal}
         onClose={() => setStockModal(null)}
         product={stockModal}
+      />
+
+      {/* ── Sticky Owner Bulk Action Toolbar (Phase 2C) ───────────────────── */}
+      {isOwner && selectedProductIds.length > 0 && (
+        <div className="sticky bottom-6 z-30 bg-navy-950 text-white rounded-2xl p-4 shadow-2xl border border-navy-800 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="bg-yellow-400 text-navy-950 font-black text-xs px-3 py-1 rounded-full shadow-xs">
+              {selectedProductIds.length} Selected
+            </span>
+            <span className="text-xs text-slate-300 font-semibold">
+              Bulk Vehicle Fitment Management
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <button
+              onClick={() => setShowBulkAssignModal(true)}
+              className="inline-flex items-center gap-1.5 bg-yellow-400 hover:bg-yellow-300 text-navy-950 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
+            >
+              <Plus size={14} />
+              Bulk Assign Fitment
+            </button>
+
+            <button
+              onClick={() => setShowBulkRemoveModal(true)}
+              className="inline-flex items-center gap-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
+            >
+              <Trash2 size={14} />
+              Bulk Remove Fitment
+            </button>
+
+            <button
+              onClick={() => setSelectedProductIds([])}
+              className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-white px-2.5 py-2 rounded-lg transition-colors cursor-pointer"
+            >
+              <X size={14} />
+              Clear Selection
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk Fitment Modals ── */}
+      <BulkFitmentModal
+        isOpen={showBulkAssignModal}
+        mode="assign"
+        onClose={() => setShowBulkAssignModal(false)}
+        selectedProducts={selectedProductsList}
+        onSuccess={() => setSelectedProductIds([])}
+      />
+
+      <BulkFitmentModal
+        isOpen={showBulkRemoveModal}
+        mode="remove"
+        onClose={() => setShowBulkRemoveModal(false)}
+        selectedProducts={selectedProductsList}
+        onSuccess={() => setSelectedProductIds([])}
       />
     </div>
   );

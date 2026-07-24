@@ -6,6 +6,7 @@ import { useRole } from "@/hooks/useRole";
 import type { Invoice, CartItem, PaymentMethod, PaymentStatus, HoldBill } from "@/types";
 import PrintableInvoice from "@/components/PrintableInvoice";
 import { toLocalDateStr, formatInvoiceDate } from "@/lib/dateUtils";
+import { isFitmentMatch } from "@/lib/fitmentUtils";
 import {
   Search,
   Plus,
@@ -28,6 +29,9 @@ import {
   Car,
   FileText,
   ChevronDown,
+  ChevronUp,
+  Sparkles,
+  Info,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,6 +60,100 @@ export default function BillingPage() {
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [cart, setCart] = useState<CartItem[]>([]);
+
+  // ── Optional POS Vehicle Helper State ─────────────────────────────────────
+  const [isPosVehicleHelperExpanded, setIsPosVehicleHelperExpanded] = useState(false);
+  const [posVehicleBrand, setPosVehicleBrand] = useState("");
+  const [posVehicleModel, setPosVehicleModel] = useState("");
+  const [posVehicleYear, setPosVehicleYear] = useState("");
+
+  const posBrands = useMemo(() => {
+    const set = new Set<string>();
+    for (const product of state.products) {
+      for (const fit of product.fitments || []) {
+        if (fit.brand) set.add(fit.brand.trim());
+      }
+    }
+    return [...set].sort();
+  }, [state.products]);
+
+  const posModels = useMemo(() => {
+    const set = new Set<string>();
+    if (!posVehicleBrand) return [];
+    for (const product of state.products) {
+      for (const fit of product.fitments || []) {
+        if (fit.brand && fit.brand.trim().toLowerCase() === posVehicleBrand.trim().toLowerCase() && fit.model) {
+          set.add(fit.model.trim());
+        }
+      }
+    }
+    return [...set].sort();
+  }, [state.products, posVehicleBrand]);
+
+  const posYears = useMemo(() => {
+    const set = new Set<string>();
+    if (!posVehicleBrand || !posVehicleModel) return [];
+    for (const product of state.products) {
+      for (const fit of product.fitments || []) {
+        const sameBrand = fit.brand && fit.brand.trim().toLowerCase() === posVehicleBrand.trim().toLowerCase();
+        const sameModel = fit.model && fit.model.trim().toLowerCase() === posVehicleModel.trim().toLowerCase();
+        if (sameBrand && sameModel) {
+          const rawYear = (fit.year || "").trim();
+          const rawYearTo = (fit.yearTo || "").trim();
+          if (rawYear.includes("-") || rawYear.includes("–")) {
+            const parts = rawYear.split(/[-–]/).map((s) => s.trim());
+            const start = Number(parts[0]);
+            const end = Number(parts[1] || parts[0]);
+            if (!isNaN(start) && !isNaN(end)) {
+              for (let y = start; y <= end; y++) {
+                set.add(String(y));
+              }
+            }
+          } else {
+            const fromYear = Number(rawYear);
+            const toYear = rawYearTo !== "" ? Number(rawYearTo) : fromYear;
+            if (!isNaN(fromYear) && !isNaN(toYear)) {
+              for (let y = fromYear; y <= toYear; y++) {
+                set.add(String(y));
+              }
+            } else if (rawYear) {
+              set.add(rawYear);
+            }
+          }
+        }
+      }
+    }
+    return [...set].sort((a, b) => Number(b) - Number(a));
+  }, [state.products, posVehicleBrand, posVehicleModel]);
+
+  function getPosProductCompatibility(product: (typeof state.products)[0]): "universal" | "compatible" | "unconfigured" | "incompatible" {
+    const selBrand = (posVehicleBrand || "").trim();
+    const selModel = (posVehicleModel || "").trim();
+    const selYearStr = (posVehicleYear || "").trim();
+
+    // If vehicle filter is incomplete, return neutral status
+    if (!selBrand || !selModel || !selYearStr) {
+      return product.isUniversalFit ? "universal" : "unconfigured";
+    }
+
+    // State A — Universal Fit
+    if (product.isUniversalFit === true) {
+      return "universal";
+    }
+
+    // State B — No Fitment Configured
+    const fitments = product.fitments || [];
+    if (fitments.length === 0) {
+      return "unconfigured";
+    }
+
+    // State C & D — Explicit Vehicle-Specific Match Evaluation
+    const isMatch = fitments.some((fit) =>
+      isFitmentMatch(fit, selBrand, selModel, selYearStr)
+    );
+
+    return isMatch ? "compatible" : "incompatible";
+  }
 
   // ── Customer Details State ────────────────────────────────────────────────
   const [customerMode, setCustomerMode] = useState<"existing" | "new">("new");
@@ -569,8 +667,111 @@ export default function BillingPage() {
             PANEL 1 — Products Catalog  (flex: 1.2)
         ══════════════════════════════════════════════════════════════════ */}
         <div className="flex flex-col bg-slate-50 border-r border-slate-200" style={{ width: "42%" }}>
+          {/* POS Vehicle Filter Bar (Collapsible) */}
+          <div className="px-5 py-2.5 bg-gradient-to-r from-slate-900 via-navy-950 to-slate-900 text-white shrink-0 border-b border-navy-800 transition-all">
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setIsPosVehicleHelperExpanded((prev) => !prev)}
+                className="flex items-center gap-2 text-xs font-bold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer select-none text-left flex-1"
+              >
+                <Car size={14} className="shrink-0" />
+                <span className="truncate">Vehicle Compatibility Helper</span>
+                {isPosVehicleHelperExpanded ? (
+                  <ChevronUp size={14} className="text-slate-300 shrink-0" />
+                ) : (
+                  <ChevronDown size={14} className="text-slate-300 shrink-0" />
+                )}
+              </button>
+
+              {(posVehicleBrand || posVehicleModel || posVehicleYear) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPosVehicleBrand("");
+                    setPosVehicleModel("");
+                    setPosVehicleYear("");
+                  }}
+                  className="text-[11px] font-semibold text-slate-300 hover:text-white underline cursor-pointer shrink-0"
+                >
+                  Reset Filter
+                </button>
+              )}
+            </div>
+
+            {!isPosVehicleHelperExpanded ? (
+              /* Collapsed Summary State */
+              <div
+                onClick={() => setIsPosVehicleHelperExpanded(true)}
+                className="mt-1 text-[11px] text-slate-300 flex items-center justify-between cursor-pointer hover:text-white transition-colors"
+              >
+                <span>
+                  {posVehicleBrand && posVehicleModel && posVehicleYear
+                    ? `Selected Vehicle: ${posVehicleBrand} ${posVehicleModel} • ${posVehicleYear}`
+                    : posVehicleBrand && posVehicleModel
+                    ? `Selected Vehicle: ${posVehicleBrand} ${posVehicleModel}`
+                    : posVehicleBrand
+                    ? `Selected Vehicle: ${posVehicleBrand}`
+                    : "No vehicle selected"}
+                </span>
+                <span className="text-[10px] text-slate-400 font-medium">Click to configure</span>
+              </div>
+            ) : (
+              /* Expanded Cascading Selectors */
+              <div className="grid grid-cols-3 gap-2 mt-2.5 pt-2 border-t border-navy-800/80">
+                <select
+                  value={posVehicleBrand}
+                  onChange={(e) => {
+                    setPosVehicleBrand(e.target.value);
+                    setPosVehicleModel("");
+                    setPosVehicleYear("");
+                  }}
+                  className="bg-navy-900 border border-navy-700 text-white rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400 cursor-pointer"
+                >
+                  <option value="">Make (All)</option>
+                  {posBrands.map((b) => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+                <select
+                  disabled={!posVehicleBrand}
+                  value={posVehicleModel}
+                  onChange={(e) => {
+                    setPosVehicleModel(e.target.value);
+                    setPosVehicleYear("");
+                  }}
+                  className={`rounded-lg px-2 py-1 text-xs focus:outline-none transition-all ${
+                    !posVehicleBrand
+                      ? "bg-navy-950/60 border border-navy-800 text-slate-500 cursor-not-allowed"
+                      : "bg-navy-900 border border-navy-700 text-white focus:ring-1 focus:ring-amber-400 cursor-pointer"
+                  }`}
+                >
+                  <option value="">{!posVehicleBrand ? "Select Make" : "Model (All)"}</option>
+                  {posModels.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <select
+                  disabled={!posVehicleModel}
+                  value={posVehicleYear}
+                  onChange={(e) => setPosVehicleYear(e.target.value)}
+                  className={`rounded-lg px-2 py-1 text-xs focus:outline-none transition-all ${
+                    !posVehicleModel
+                      ? "bg-navy-950/60 border border-navy-800 text-slate-500 cursor-not-allowed"
+                      : "bg-navy-900 border border-navy-700 text-white focus:ring-1 focus:ring-amber-400 cursor-pointer"
+                  }`}
+                >
+                  <option value="">{!posVehicleModel ? "Select Model" : "Year (All)"}</option>
+                  {posYears.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
           {/* Search bar */}
-          <div className="px-5 pt-4 pb-3 bg-white border-b border-slate-100 shrink-0">
+          <div className="px-5 pt-3 pb-3 bg-white border-b border-slate-100 shrink-0">
             <div className="relative">
               <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
@@ -643,6 +844,8 @@ export default function BillingPage() {
                   const inCart = cart.find((i) => i.product.id === product.id);
                   const outOfStock = product.stock === 0;
                   const lowStock = !outOfStock && product.stock <= product.lowStockThreshold;
+                  const compatStatus = getPosProductCompatibility(product);
+                  const isVehicleFilterActive = Boolean(posVehicleBrand && posVehicleModel && posVehicleYear);
 
                   return (
                     <div
@@ -676,6 +879,33 @@ export default function BillingPage() {
                         {product.name}
                       </p>
                       <p className="text-[10px] font-mono text-slate-400 mt-1">SKU: {product.sku}</p>
+
+                      {/* Vehicle Compatibility Status Badge */}
+                      {isVehicleFilterActive && (
+                        <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[10px]">
+                          {compatStatus === "universal" ? (
+                            <span className="inline-flex items-center gap-1 font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                              <Sparkles size={11} className="text-amber-600" />
+                              Universal Fit
+                            </span>
+                          ) : compatStatus === "compatible" ? (
+                            <span className="inline-flex items-center gap-1 font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                              <CheckCircle size={11} className="text-emerald-600" />
+                              Compatible
+                            </span>
+                          ) : compatStatus === "unconfigured" ? (
+                            <span className="inline-flex items-center gap-1 font-medium text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
+                              <Info size={11} className="text-slate-400" />
+                              Compatibility not configured
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 font-bold text-amber-900 bg-amber-100/90 border border-amber-300 px-2 py-0.5 rounded-md">
+                              <AlertCircle size={11} className="text-amber-600" />
+                              ⚠️ May Not Fit
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       {/* Bottom: stock + price */}
                       <div className="flex items-center justify-between pt-2.5 mt-2.5 border-t border-slate-100">
@@ -758,23 +988,37 @@ export default function BillingPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                {cart.map((item) => (
-                  <div key={item.product.id} className="bg-slate-50 rounded-xl border border-slate-100 p-3">
-                    <div className="flex items-start justify-between gap-2 mb-2.5">
-                      <div className="min-w-0">
-                        <p className="font-bold text-sm text-slate-800 leading-snug truncate" title={item.product.name}>
-                          {item.product.name}
-                        </p>
-                        <p className="text-[10px] text-slate-400 font-mono mt-0.5">SKU: {item.product.sku}</p>
+                {cart.map((item) => {
+                  const isItemIncompatible = Boolean(
+                    posVehicleBrand &&
+                    posVehicleModel &&
+                    posVehicleYear &&
+                    getPosProductCompatibility(item.product) === "incompatible"
+                  );
+
+                  return (
+                    <div key={item.product.id} className={`rounded-xl border p-3 ${isItemIncompatible ? "bg-amber-50/50 border-amber-200" : "bg-slate-50 border-slate-100"}`}>
+                      <div className="flex items-start justify-between gap-2 mb-2.5">
+                        <div className="min-w-0">
+                          <p className="font-bold text-sm text-slate-800 leading-snug truncate" title={item.product.name}>
+                            {item.product.name}
+                          </p>
+                          <p className="text-[10px] text-slate-400 font-mono mt-0.5">SKU: {item.product.sku}</p>
+                          {isItemIncompatible && (
+                            <p className="text-[10px] text-amber-900 font-bold mt-1 flex items-center gap-1 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-md">
+                              <AlertCircle size={11} className="text-amber-600 shrink-0" />
+                              ⚠️ May not fit selected vehicle
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeFromCart(item.product.id)}
+                          className="text-slate-300 hover:text-red-500 transition-colors cursor-pointer shrink-0 mt-0.5"
+                        >
+                          <X size={14} />
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => removeFromCart(item.product.id)}
-                        className="text-slate-300 hover:text-red-500 transition-colors cursor-pointer shrink-0 mt-0.5"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
 
                     <div className="flex items-center justify-between">
                       {/* Qty controls */}
@@ -809,7 +1053,8 @@ export default function BillingPage() {
                       </div>
                     </div>
                   </div>
-                ))}
+                );
+                })}
               </div>
             )}
           </div>

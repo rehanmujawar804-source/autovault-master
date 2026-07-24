@@ -38,6 +38,7 @@ import { CheckCircle, AlertCircle, Info, X } from "lucide-react";
 import type {
   AppState,
   Product,
+  VehicleFitment,
   Customer,
   Invoice,
   DebtPayment,
@@ -63,6 +64,12 @@ import type {
 } from "@/types";
 import { todayLocalStr } from "@/lib/dateUtils";
 import { calculateRevenue } from "./revenueUtils";
+import {
+  toTitleCase,
+  addOrMergeFitment,
+  removeFitmentFromList,
+  parseFitmentBoundary,
+} from "./fitmentUtils";
 import { calculateProfit } from "./profitUtils";
 
 // ─────────────────────────────────────────────
@@ -122,6 +129,8 @@ type Action =
   | { type: "ADD_PRODUCT"; product: Product }
   | { type: "UPDATE_PRODUCT"; product: Product }
   | { type: "ADJUST_STOCK"; productId: string; delta: number }
+  | { type: "BULK_ASSIGN_FITMENT"; productIds: string[]; fitment: VehicleFitment }
+  | { type: "BULK_REMOVE_FITMENT"; productIds: string[]; fitment: VehicleFitment }
 
   // Customers
   | { type: "ADD_CUSTOMER"; customer: Customer }
@@ -223,6 +232,8 @@ export function roundMoney(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+export { toTitleCase } from "./fitmentUtils";
+
 /** Generate a collision-safe unique ID with a prefix */
 export function generateUniqueId(prefix: string): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -249,6 +260,7 @@ export function normalizeProduct(product: Partial<Product> & { id: string; name:
     lowStockThreshold: product.lowStockThreshold ?? 5,
     status: product.status || "Active",
     fitments: product.fitments || [],
+    isUniversalFit: product.isUniversalFit ?? false,
     createdAt: product.createdAt || fallbackTimestamp,
     updatedAt: product.updatedAt || fallbackTimestamp,
   };
@@ -564,6 +576,54 @@ function reducer(state: AppState, action: Action): AppState {
             : p
         ),
         stockMovements: movements,
+      };
+    }
+
+    case "BULK_ASSIGN_FITMENT": {
+      const { productIds, fitment } = action;
+      const targetIdSet = new Set(productIds);
+      const timestamp = new Date().toISOString();
+
+      const updatedProducts = state.products.map((p) => {
+        if (!targetIdSet.has(p.id)) return p;
+
+        const result = addOrMergeFitment(p.fitments || [], fitment);
+        if (result.isRedundant) return p;
+
+        return {
+          ...p,
+          fitments: result.fitments,
+          updatedAt: timestamp,
+        };
+      });
+
+      return {
+        ...state,
+        products: updatedProducts,
+      };
+    }
+
+    case "BULK_REMOVE_FITMENT": {
+      const { productIds, fitment } = action;
+      const targetIdSet = new Set(productIds);
+      const timestamp = new Date().toISOString();
+
+      const updatedProducts = state.products.map((p) => {
+        if (!targetIdSet.has(p.id)) return p;
+
+        const result = removeFitmentFromList(p.fitments || [], fitment);
+        if (result.removedCount === 0) return p;
+
+        return {
+          ...p,
+          fitments: result.fitments,
+          updatedAt: timestamp,
+        };
+      });
+
+      return {
+        ...state,
+        products: updatedProducts,
       };
     }
 
@@ -2444,6 +2504,16 @@ interface StoreContextValue {
     notes?: string;
     referenceId?: string;
   }) => void;
+
+  // Bulk Fitment Management (Phase 2C)
+  bulkAssignFitment: (
+    productIds: string[],
+    fitment: VehicleFitment
+  ) => { processedCount: number; addedCount: number; skippedCount: number };
+  bulkRemoveFitment: (
+    productIds: string[],
+    fitment: VehicleFitment
+  ) => { processedCount: number; removedCount: number; skippedCount: number };
 }
 
 const StoreContext = createContext<StoreContextValue | null>(null);
@@ -2576,6 +2646,58 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   function adjustStock(productId: string, delta: number) {
     dispatch({ type: "ADJUST_STOCK", productId, delta });
+  }
+
+  function bulkAssignFitment(
+    productIds: string[],
+    fitment: VehicleFitment
+  ): { processedCount: number; addedCount: number; skippedCount: number } {
+    const targetProducts = state.products.filter((p) => productIds.includes(p.id));
+    let addedCount = 0;
+    let skippedCount = 0;
+
+    targetProducts.forEach((p) => {
+      const res = addOrMergeFitment(p.fitments || [], fitment);
+      if (res.isRedundant) {
+        skippedCount++;
+      } else {
+        addedCount++;
+      }
+    });
+
+    dispatch({
+      type: "BULK_ASSIGN_FITMENT",
+      productIds,
+      fitment,
+    });
+
+    return { processedCount: targetProducts.length, addedCount, skippedCount };
+  }
+
+  function bulkRemoveFitment(
+    productIds: string[],
+    fitment: VehicleFitment
+  ): { processedCount: number; removedCount: number; skippedCount: number } {
+    const targetProducts = state.products.filter((p) => productIds.includes(p.id));
+    let removedCount = 0;
+    let skippedCount = 0;
+
+    targetProducts.forEach((p) => {
+      const res = removeFitmentFromList(p.fitments || [], fitment);
+      if (res.removedCount > 0) {
+        removedCount++;
+      } else {
+        skippedCount++;
+      }
+    });
+
+    dispatch({
+      type: "BULK_REMOVE_FITMENT",
+      productIds,
+      fitment,
+    });
+
+    return { processedCount: targetProducts.length, removedCount, skippedCount };
   }
 
   function addCustomer(customer: Omit<Customer, "id">) {
@@ -3277,6 +3399,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         addProduct,
         updateProduct,
         adjustStock,
+        bulkAssignFitment,
+        bulkRemoveFitment,
         addCustomer,
         updateCustomer,
         recordDebtPayment,

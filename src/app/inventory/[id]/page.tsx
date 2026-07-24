@@ -26,6 +26,7 @@ import {
   ExternalLink,
   ChevronRight,
   TrendingDown,
+  Sparkles,
 } from "lucide-react";
 import type { Invoice, InvoiceItem } from "@/types";
 import { ProductFormModal, AdjustStockModal } from "../components/ProductModals";
@@ -899,34 +900,57 @@ export default function ProductDetailsPage({
             {activeTab === "vehicles" && (
               <div className="space-y-4">
                 <h3 className="text-base font-black text-slate-800">Compatible Fitments</h3>
-                {!product.fitments || product.fitments.length === 0 ? (
-                  <div className="py-12 flex flex-col items-center justify-center text-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-slate-55 flex items-center justify-center text-slate-400">
-                      <Car size={20} />
+                {product.isUniversalFit && (
+                  <div className="py-8 flex flex-col items-center justify-center text-center gap-2 bg-amber-50/50 border border-amber-200/80 rounded-2xl p-6">
+                    <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 shadow-2xs">
+                      <Sparkles size={20} />
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-slate-700">Universal Product Fitment</p>
-                      <p className="text-xs text-slate-400 mt-0.5">This product fits all vehicle makes, brands, and models.</p>
+                      <p className="text-sm font-black text-amber-950">Universal Fit — All Vehicles</p>
+                      <p className="text-xs text-amber-700 font-medium mt-0.5">This product is compatible with all vehicle makes, brands, and models.</p>
                     </div>
                   </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {product.fitments.map((fit, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center gap-3 bg-slate-50 border border-slate-200/80 p-3.5 rounded-xl text-xs"
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 font-bold uppercase shrink-0">
-                          {fit.brand.slice(0, 2)}
+                )}
+
+                {product.fitments && product.fitments.length > 0 && (
+                  <div>
+                    {product.isUniversalFit && (
+                      <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 mt-4">
+                        Explicit Vehicle Fitments
+                      </h4>
+                    )}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {product.fitments.map((fit, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center gap-3 bg-slate-50 border border-slate-200/80 p-3.5 rounded-xl text-xs"
+                        >
+                          <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 font-bold uppercase shrink-0">
+                            {fit.brand.slice(0, 2)}
+                          </div>
+                          <div>
+                            <p className="font-bold text-slate-850">
+                              {fit.brand} {fit.model}
+                            </p>
+                            <p className="text-[10px] text-slate-400 mt-0.5">
+                              Year Model: {fit.yearTo && fit.yearTo !== fit.year ? `${fit.year}–${fit.yearTo}` : fit.year}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-bold text-slate-850">
-                            {fit.brand} {fit.model}
-                          </p>
-                          <p className="text-[10px] text-slate-400 mt-0.5">Year Model: {fit.year}</p>
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {!product.isUniversalFit && (!product.fitments || product.fitments.length === 0) && (
+                  <div className="py-12 flex flex-col items-center justify-center text-center gap-3 bg-slate-50 border border-slate-200/80 rounded-2xl p-6">
+                    <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                      <Info size={20} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-700">No Fitment Configured</p>
+                      <p className="text-xs text-slate-400 mt-0.5">No specific vehicle compatibility rules have been added for this product.</p>
+                    </div>
                   </div>
                 )}
               </div>

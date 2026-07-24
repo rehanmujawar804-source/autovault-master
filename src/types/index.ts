@@ -8,6 +8,7 @@ export interface VehicleFitment {
   brand: string;
   model: string;
   year: string;
+  yearTo?: string;
 }
 
 // ── Product ──────────────────────────────────
@@ -24,6 +25,7 @@ export interface Product {
   lowStockThreshold: number;
   status?: "Active" | "Inactive" | "Discontinued";
   fitments?: VehicleFitment[];
+  isUniversalFit?: boolean;
   // Optional extended fields
   preferredSupplierId?: string;
   supplier?: string;

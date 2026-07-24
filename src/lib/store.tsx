@@ -276,6 +276,36 @@ function refundMethodToAccountId(method: string): string {
   }
 }
 
+/**
+ * Normalizes transaction date values for Money In / Money Out:
+ * - Full ISO timestamps (containing "T"): preserved unchanged.
+ * - Date-only input ("YYYY-MM-DD"):
+ *   - If selected date equals today's local date (`todayLocalStr()`): return fresh current timestamp `new Date().toISOString()`.
+ *   - If selected date is a past or future date: return `${selectedDate}T12:00:00.000Z` to preserve calendar date safely at Noon UTC.
+ */
+export function constructTransactionISO(dateInputStr?: string): string {
+  const now = new Date();
+  if (!dateInputStr || !dateInputStr.trim()) return now.toISOString();
+
+  const trimmed = dateInputStr.trim();
+
+  // If already a full ISO timestamp containing time ("T"), preserve it unchanged
+  if (trimmed.includes("T")) {
+    return trimmed;
+  }
+
+  // Date-only input (YYYY-MM-DD)
+  const todayStr = todayLocalStr();
+
+  if (trimmed === todayStr) {
+    // Current moment timestamp for today's submissions
+    return now.toISOString();
+  }
+
+  // For past or future selected dates, append T12:00:00.000Z to preserve calendar date safely
+  return `${trimmed}T12:00:00.000Z`;
+}
+
 // ─────────────────────────────────────────────
 //  MIGRATION SYSTEM
 // ─────────────────────────────────────────────
@@ -727,7 +757,7 @@ function reducer(state: AppState, action: Action): AppState {
         referenceId: payment.invoiceId,
         customerId: payment.customerId,
         amount: payment.amount,
-        date: new Date().toISOString(),
+        date: constructTransactionISO(payment.date),
         method: payment.method,
         notes: payment.note || "Customer debt repayment",
       });
@@ -808,7 +838,7 @@ function reducer(state: AppState, action: Action): AppState {
           referenceId: inv.id,
           customerId,
           amount: alloc,
-          date: new Date().toISOString(),
+          date: constructTransactionISO(date),
           method,
           notes: note ? `FIFO Payment for ${inv.invoiceNumber} — ${note}` : `FIFO Payment for ${inv.invoiceNumber}`,
         });
@@ -2169,7 +2199,7 @@ function reducer(state: AppState, action: Action): AppState {
       }
 
       const accountId = methodToAccountId(paymentMethod);
-      const txDate = date || new Date().toISOString();
+      const txDate = constructTransactionISO(date);
       const refId =
         referenceId ||
         `EXP-${txDate.slice(0, 10).replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -2228,7 +2258,7 @@ function reducer(state: AppState, action: Action): AppState {
       }
 
       const accountId = methodToAccountId(paymentMethod);
-      const txDate = date || new Date().toISOString();
+      const txDate = constructTransactionISO(date);
       const refId =
         referenceId ||
         `INC-${txDate.slice(0, 10).replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -2722,7 +2752,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   function getNextInvoiceNumber() {
     const year = new Date().getFullYear();
     const count = state.invoices.length + 1;
-    return `INV-${year}-${String(count).padStart(4, "0")}`;
+    const prefix = (() => {
+      try {
+        const raw = typeof window !== "undefined" ? localStorage.getItem("autovault_settings") : null;
+        if (!raw) return "INV";
+        const s = JSON.parse(raw);
+        return (typeof s.invoicePrefix === "string" && s.invoicePrefix.trim()) ? s.invoicePrefix.trim() : "INV";
+      } catch {
+        return "INV";
+      }
+    })();
+    return `${prefix}-${year}-${String(count).padStart(4, "0")}`;
   }
 
   // ── Procurement Role Guard ───────────────────────────────────────────────

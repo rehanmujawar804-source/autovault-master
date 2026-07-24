@@ -53,6 +53,97 @@ table {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
+   GLOBAL DARK MODE STYLING (ERP UI ONLY — PRINTABLE INVOICE STAYS LIGHT PAPER)
+   ───────────────────────────────────────────────────────────────────────────── */
+html.dark body {
+  background-color: #0a111e !important;
+  color: #f8fafc !important;
+}
+
+html.dark .bg-white {
+  background-color: #0f192c !important;
+  color: #f8fafc !important;
+}
+
+html.dark .bg-slate-50,
+html.dark .bg-slate-50\/70,
+html.dark .bg-slate-50\/50 {
+  background-color: #0d1627 !important;
+  color: #e2e8f0 !important;
+}
+
+html.dark .bg-slate-100,
+html.dark .bg-slate-100\/80 {
+  background-color: #14223b !important;
+  color: #f8fafc !important;
+}
+
+html.dark .border-slate-200,
+html.dark .border-slate-200\/80,
+html.dark .border-slate-100 {
+  border-color: #1d2d47 !important;
+}
+
+html.dark .border-slate-300 {
+  border-color: #273b5c !important;
+}
+
+html.dark .text-slate-800,
+html.dark .text-slate-900,
+html.dark .text-navy-950 {
+  color: #f8fafc !important;
+}
+
+html.dark .text-slate-700,
+html.dark .text-slate-600 {
+  color: #cbd5e1 !important;
+}
+
+html.dark .text-slate-500,
+html.dark .text-slate-400 {
+  color: #94a3b8 !important;
+}
+
+html.dark input[type="text"],
+html.dark input[type="number"],
+html.dark input[type="email"],
+html.dark input[type="tel"],
+html.dark input[type="password"],
+html.dark textarea,
+html.dark select {
+  background-color: #0d1627 !important;
+  color: #f8fafc !important;
+  border-color: #273b5c !important;
+}
+
+/* MANDATORY SAFETY RULE: Printable Invoice ALWAYS stays crisp white paper in Dark Mode */
+html.dark #invoice-print,
+html.dark #invoice-print * {
+  color: #0f172a !important;
+}
+
+html.dark #invoice-print {
+  background-color: #ffffff !important;
+  border-color: #0a121f !important;
+}
+
+html.dark #invoice-print .bg-slate-50\/70,
+html.dark #invoice-print .bg-slate-50,
+html.dark #invoice-print .bg-slate-100\/80 {
+  background-color: #f8fafc !important;
+}
+
+html.dark #invoice-print .text-slate-400,
+html.dark #invoice-print .text-slate-500 {
+  color: #64748b !important;
+}
+
+html.dark #invoice-print .text-slate-800,
+html.dark #invoice-print .text-navy-950 {
+  color: #0a121f !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
    PRINT MEDIA STYLES
    ───────────────────────────────────────────────────────────────────────────── */
 @media print {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
 import StatCard from "@/components/StatCard";
 import { useStore } from "@/lib/store";
@@ -51,7 +51,11 @@ export default function DashboardPage() {
     getInvoiceOutstanding,
   } = useStore();
 
-  const { isOwner, loading } = useRole();
+  const { isOwner, loading, requireAuth } = useRole();
+
+  useEffect(() => {
+    if (!loading) requireAuth();
+  }, [loading, requireAuth]);
 
   const today = todayLocalStr();
 

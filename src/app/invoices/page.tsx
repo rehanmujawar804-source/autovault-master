@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, useEffect, Fragment } from "react";
 import { useStore } from "@/lib/store";
+import { useRole } from "@/hooks/useRole";
 import type { Invoice, PaymentMethod, PaymentStatus } from "@/types";
 import Link from "next/link";
 import { formatInvoiceDate, formatRepaymentDate } from "@/lib/dateUtils";
@@ -67,6 +68,11 @@ type PageTab = "invoices" | "repayments";
 
 export default function InvoicesPage() {
   const { state, recordDebtPayment, getDebtPaymentsByInvoice, getInvoiceById, getCustomerById, showToast, getInvoiceOutstanding, getTotalOutstandingDebt } = useStore();
+  const { loading, requireAuth } = useRole();
+
+  useEffect(() => {
+    if (!loading) requireAuth();
+  }, [loading, requireAuth]);
 
   const [activeTab, setActiveTab] = useState<PageTab>("invoices");
   const [search, setSearch] = useState("");

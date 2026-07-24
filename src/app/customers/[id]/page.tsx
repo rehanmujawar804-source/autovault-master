@@ -1,7 +1,8 @@
 "use client";
 
-import { use, useMemo, useState } from "react";
+import { use, useMemo, useState, useEffect } from "react";
 import { useStore } from "@/lib/store";
+import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
 import { formatInvoiceDate } from "@/lib/dateUtils";
 import { calculateRevenue } from "@/lib/revenueUtils";
@@ -63,6 +64,11 @@ export default function CustomerProfilePage({
     getInvoiceOutstanding,
     updateCustomer,
   } = useStore();
+  const { loading, requireAuth } = useRole();
+
+  useEffect(() => {
+    if (!loading) requireAuth();
+  }, [loading, requireAuth]);
 
   // ── Collect Payment Modal State ────────────────────────────────────────────
   const [collectInvoice, setCollectInvoice] = useState<Invoice | null>(null);

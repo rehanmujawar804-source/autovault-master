@@ -45,7 +45,21 @@ export default function InvoiceDetailPage({
   const { id } = use(params);
   const { state, getInvoiceById, getCustomerById, recordDebtPayment, getDebtPaymentsByInvoice, voidInvoice, voidDebtPayment, showToast,
           addSalesReturn, cancelSalesReturn, getSalesReturnsByInvoice, getReturnableQuantity, getInvoiceOutstanding } = useStore();
-  const { isOwner } = useRole();
+  const { isOwner, loading, requireAuth } = useRole();
+
+  useEffect(() => {
+    if (!loading) requireAuth();
+  }, [loading, requireAuth]);
+
+  const [shopSettings] = useState(() => {
+    if (typeof window === "undefined") return undefined;
+    try {
+      const raw = localStorage.getItem("autovault_settings");
+      return raw ? JSON.parse(raw) : undefined;
+    } catch {
+      return undefined;
+    }
+  });
 
   // ── Void Invoice Modal State ────────────────────────────────────────────
   const [voidModalOpen, setVoidModalOpen] = useState(false);
@@ -444,7 +458,7 @@ export default function InvoiceDetailPage({
 
         {/* ── Main invoice (printable area) ──────────────────────────────── */}
         <div className="lg:col-span-2 print:col-span-3">
-          <PrintableInvoice invoice={invoice} />
+          <PrintableInvoice invoice={invoice} shopSettings={shopSettings} />
         </div>
 
         {/* ── Right sidebar ─────────────────────────────────────────────── */}

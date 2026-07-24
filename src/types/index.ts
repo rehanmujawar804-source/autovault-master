@@ -176,6 +176,18 @@ export interface InvoiceItem {
   returnedQuantity?: number;
 }
 
+export interface InvoiceShopSnapshot {
+  shopName?: string;
+  phone?: string;
+  address?: string;
+  gstNumber?: string;
+  showLogo?: boolean;
+  showGST?: boolean;
+  showAddress?: boolean;
+  showPhone?: boolean;
+  footerMessage?: string;
+}
+
 export interface Invoice {
   id: string;
   invoiceNumber: string;
@@ -200,6 +212,7 @@ export interface Invoice {
   voidedAt?: string;
   voidReason?: string;
   voidedBy?: string;
+  shopSnapshot?: InvoiceShopSnapshot;
 }
 
 export interface CustomerActivity {

@@ -101,7 +101,7 @@ const OPERATING_EXPENSE_CATEGORIES: FinanceCategory[] = [
 
 export default function FinancePage() {
   const router = useRouter();
-  const { isOwner, loading } = useRole();
+  const { isOwner, loading, requireOwner } = useRole();
 
   const {
     state,
@@ -125,10 +125,10 @@ export default function FinancePage() {
 
   // Role Guard
   useEffect(() => {
-    if (!loading && !isOwner) {
-      router.push("/dashboard");
+    if (!loading) {
+      requireOwner();
     }
-  }, [loading, isOwner, router]);
+  }, [loading, requireOwner]);
 
   // Date Range State for Cash Flow Summary & Filtered Ledger
   const [fromDate, setFromDate] = useState(() => firstDayOfMonthISOString());
@@ -383,7 +383,7 @@ export default function FinancePage() {
         category: expenseCategory,
         amount: parsedAmount,
         paymentMethod: expenseMethod,
-        date: expenseDate ? new Date(expenseDate).toISOString() : new Date().toISOString(),
+        date: expenseDate,
         notes: expenseNotes.trim() || `Operating Expense: ${expenseCategory}`,
       });
 
@@ -432,7 +432,7 @@ export default function FinancePage() {
         category: moneyInCategory,
         amount: parsedAmount,
         paymentMethod: moneyInMethod,
-        date: new Date(moneyInDate).toISOString(),
+        date: moneyInDate,
         notes: moneyInNotes.trim() || `${moneyInCategory}: Receipt`,
         referenceId: moneyInRefId.trim() || undefined,
       });

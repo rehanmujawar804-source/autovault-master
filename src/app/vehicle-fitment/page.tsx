@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, useEffect, Fragment } from "react";
 import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
@@ -24,7 +24,11 @@ import {
 
 export default function VehicleFitmentPage() {
   const { state } = useStore();
-  const { isOwner } = useRole();
+  const { isOwner, loading, requireAuth } = useRole();
+
+  useEffect(() => {
+    if (!loading) requireAuth();
+  }, [loading, requireAuth]);
 
   // ── Filters ───────────────────────────────────────────────────────────────
   const [search, setSearch] = useState("");

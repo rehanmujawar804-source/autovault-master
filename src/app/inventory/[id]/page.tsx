@@ -55,7 +55,11 @@ export default function ProductDetailsPage({
 }) {
   const { id } = use(params);
   const { state, showToast } = useStore();
-  const { isOwner } = useRole();
+  const { isOwner, loading, requireAuth } = useRole();
+
+  useEffect(() => {
+    if (!loading) requireAuth();
+  }, [loading, requireAuth]);
 
   // Find target product
   const product = useMemo(() => {

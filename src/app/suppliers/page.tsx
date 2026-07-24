@@ -244,13 +244,13 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
 
 export default function SuppliersPage() {
   const { state, getTotalSupplierOutstanding, getSupplierOutstandingBalance, recordSupplierPaymentFIFO, showToast } = useStore();
-  const { isOwner, loading } = useRole();
+  const { isOwner, loading, requireOwner } = useRole();
   const router = useRouter();
 
   // ── Owner-only route guard ──────────────────────────────────────────
   useEffect(() => {
-    if (!loading && !isOwner) router.push("/dashboard");
-  }, [loading, isOwner, router]);
+    if (!loading) requireOwner();
+  }, [loading, requireOwner]);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"All" | "Active" | "Inactive">("All");

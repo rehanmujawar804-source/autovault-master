@@ -1507,13 +1507,13 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
     markPurchaseOrderCancelled,
     confirmPurchaseOrder,
   } = useStore();
-  const { isOwner, loading } = useRole();
+  const { isOwner, loading, requireOwner } = useRole();
   const router = useRouter();
 
   // ── Owner-only route guard ──────────────────────────────────────────
   useEffect(() => {
-    if (!loading && !isOwner) router.push("/dashboard");
-  }, [loading, isOwner, router]);
+    if (!loading) requireOwner();
+  }, [loading, requireOwner]);
 
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [showAddPurchase, setShowAddPurchase] = useState(false);

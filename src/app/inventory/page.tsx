@@ -83,7 +83,11 @@ type ProductForm = typeof EMPTY_FORM;
 export default function InventoryPage() {
   const { state, addProduct, updateProduct, adjustStock, getInventoryValue, showToast } =
     useStore();
-  const { isOwner, loading } = useRole();
+  const { isOwner, loading, requireAuth } = useRole();
+
+  useEffect(() => {
+    if (!loading) requireAuth();
+  }, [loading, requireAuth]);
 
   // ── Filters ───────────────────────────────────────────────────────────────
   const [search, setSearch] = useState("");

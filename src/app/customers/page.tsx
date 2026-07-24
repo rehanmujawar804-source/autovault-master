@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, useEffect, Fragment } from "react";
 import { useStore } from "@/lib/store";
+import { useRole } from "@/hooks/useRole";
 import type { Invoice, PaymentMethod } from "@/types";
 import Link from "next/link";
 import { formatInvoiceDate } from "@/lib/dateUtils";
@@ -55,6 +56,11 @@ export default function CustomersPage() {
     updateCustomer,
     showToast,
   } = useStore();
+  const { loading, requireAuth } = useRole();
+
+  useEffect(() => {
+    if (!loading) requireAuth();
+  }, [loading, requireAuth]);
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<DebtFilter>("All");

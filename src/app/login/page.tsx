@@ -5,6 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
+import { validateLogin } from "@/lib/authUtils";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -13,10 +14,11 @@ export default function LoginPage() {
   const router = useRouter();
 
   function handleLogin() {
-    if (email === "owner@autovault.com" && password === "owner123") {
+    const role = validateLogin(email, password);
+    if (role === "owner") {
       localStorage.setItem("role", "owner");
       window.location.href = "/dashboard";
-    } else if (email === "staff@autovault.com" && password === "staff123") {
+    } else if (role === "staff") {
       localStorage.setItem("role", "staff");
       window.location.href = "/dashboard";
     } else {

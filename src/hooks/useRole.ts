@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
 export type Role = "owner" | "staff" | null;
@@ -22,32 +22,43 @@ export function useRole() {
   });
   const router = useRouter();
 
-  function logout() {
+  const logout = useCallback(() => {
     localStorage.removeItem("role");
     setRole(null);
-    router.push("/login");
-  }
+    if (typeof window !== "undefined") {
+      window.location.href = "/login";
+    } else {
+      router.push("/login");
+    }
+  }, [router]);
 
   /**
-   * Call inside a page's top level to block staff from viewing an
-   * owner-only page (e.g. Analytics, Settings). Redirects to /dashboard.
-   * Call inside a useEffect, after `loading` is false.
+   * Call inside a page's top level to block unauthorized access to an
+   * owner-only page (e.g. Analytics, Settings, Finance, Suppliers).
+   * Unauthenticated users are sent to /login.
+   * Logged-in Staff users are sent to /dashboard.
    */
-  function requireOwner() {
-    if (role !== "owner") {
+  const requireOwner = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const currentRole = localStorage.getItem("role") as Role;
+    if (!currentRole) {
+      window.location.href = "/login";
+    } else if (currentRole !== "owner") {
       router.push("/dashboard");
     }
-  }
+  }, [router]);
 
   /**
    * Call to block anyone without a role from viewing a protected page.
    * Redirects to /login.
    */
-  function requireAuth() {
-    if (!role) {
-      router.push("/login");
+  const requireAuth = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const currentRole = localStorage.getItem("role") as Role;
+    if (!currentRole) {
+      window.location.href = "/login";
     }
-  }
+  }, []);
 
   return {
     role,

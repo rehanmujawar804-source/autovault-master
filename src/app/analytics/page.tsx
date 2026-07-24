@@ -50,7 +50,7 @@ type TrendPoint = {
 
 export default function AnalyticsPage() {
   const router = useRouter();
-  const { isOwner, loading } = useRole();
+  const { isOwner, loading, requireOwner } = useRole();
   const { state, getInventoryValue, getInvoiceOutstanding } = useStore();
 
   // ── States ────────────────────────────────────────────────────────────────
@@ -72,8 +72,8 @@ export default function AnalyticsPage() {
 
   // ── Owner-only guard ──────────────────────────────────────────────────────
   useEffect(() => {
-    if (!loading && !isOwner) router.push("/dashboard");
-  }, [loading, isOwner, router]);
+    if (!loading) requireOwner();
+  }, [loading, requireOwner]);
 
 
   // ── Date Filtering Helper ─────────────────────────────────────────────────

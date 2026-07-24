@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { useStore } from "@/lib/store";
+import { useRole } from "@/hooks/useRole";
 import type { Invoice, CartItem, PaymentMethod, PaymentStatus, HoldBill } from "@/types";
 import PrintableInvoice from "@/components/PrintableInvoice";
 import { toLocalDateStr, formatInvoiceDate } from "@/lib/dateUtils";
@@ -35,6 +36,21 @@ import {
 
 export default function BillingPage() {
   const { state, addInvoice, getNextInvoiceNumber, showToast, dispatch, createHoldBill, updateHoldBill, deleteHoldBill } = useStore();
+  const { loading, requireAuth } = useRole();
+
+  useEffect(() => {
+    if (!loading) requireAuth();
+  }, [loading, requireAuth]);
+
+  const [shopSettings] = useState(() => {
+    if (typeof window === "undefined") return undefined;
+    try {
+      const raw = localStorage.getItem("autovault_settings");
+      return raw ? JSON.parse(raw) : undefined;
+    } catch {
+      return undefined;
+    }
+  });
 
   // ── Search & Filter State ─────────────────────────────────────────────────
   const [search, setSearch] = useState("");
@@ -422,6 +438,17 @@ export default function BillingPage() {
         costPrice: i.product.currentCost,
       })),
       billedBy,
+      shopSnapshot: shopSettings ? {
+        shopName: shopSettings.shopName,
+        phone: shopSettings.phone,
+        address: shopSettings.address,
+        gstNumber: shopSettings.gstNumber,
+        showLogo: shopSettings.showLogo,
+        showGST: shopSettings.showGST,
+        showAddress: shopSettings.showAddress,
+        showPhone: shopSettings.showPhone,
+        footerMessage: shopSettings.footerMessage,
+      } : undefined,
     };
 
     try {
@@ -464,7 +491,7 @@ export default function BillingPage() {
   }
 
   if (generatedInvoice) {
-    return <InvoiceReceipt invoice={generatedInvoice} onNewBill={handleNewBill} />;
+    return <InvoiceReceipt invoice={generatedInvoice} onNewBill={handleNewBill} shopSettings={shopSettings} />;
   }
 
   // ── Category badge color helper ──────────────────────────────────────────
@@ -1423,7 +1450,7 @@ const METHOD_STYLES: Record<string, string> = {
   Credit: "bg-red-50 text-red-600",
 };
 
-function InvoiceReceipt({ invoice, onNewBill }: { invoice: Invoice; onNewBill: () => void }) {
+function InvoiceReceipt({ invoice, onNewBill, shopSettings }: { invoice: Invoice; onNewBill: () => void; shopSettings?: any }) {
   function handlePrint() { window.print(); }
 
   function handleWhatsApp() {
@@ -1474,7 +1501,7 @@ function InvoiceReceipt({ invoice, onNewBill }: { invoice: Invoice; onNewBill: (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 print:block">
         {/* Printable Receipt */}
         <div className="lg:col-span-2 print:col-span-3">
-          <PrintableInvoice invoice={invoice} />
+          <PrintableInvoice invoice={invoice} shopSettings={shopSettings} />
         </div>
 
         {/* Actions panel */}

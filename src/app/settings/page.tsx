@@ -7,6 +7,15 @@ import { useStore, roundMoney } from "@/lib/store";
 import { useRouter } from "next/navigation";
 import { applyGlobalTheme } from "@/components/AppShell";
 import {
+  getAuthUsers,
+  updateRoleCredentials,
+  resetAuthCredentialsToDefaults,
+  getLockoutStatus,
+  validatePasswordPolicy,
+  OWNER_LOCKOUT_KEY,
+  STAFF_LOCKOUT_KEY,
+} from "@/lib/authUtils";
+import {
   Save,
   Store,
   User,
@@ -126,6 +135,102 @@ export default function SettingsPage() {
   }>(null);
   const importJsonRef = useRef<HTMLInputElement | null>(null);
 
+  // ── User Accounts & Security State ───────────────────────────────────────
+  const [authUsers, setAuthUsers] = useState(() => getAuthUsers());
+
+  // Lockout Timer States
+  const [ownerLockoutSeconds, setOwnerLockoutSeconds] = useState(0);
+  const [staffLockoutSeconds, setStaffLockoutSeconds] = useState(0);
+
+  useEffect(() => {
+    function checkRoleLockouts() {
+      const ownerStatus = getLockoutStatus(OWNER_LOCKOUT_KEY);
+      setOwnerLockoutSeconds(ownerStatus.isLocked ? ownerStatus.secondsRemaining : 0);
+
+      const staffStatus = getLockoutStatus(STAFF_LOCKOUT_KEY);
+      setStaffLockoutSeconds(staffStatus.isLocked ? staffStatus.secondsRemaining : 0);
+    }
+    checkRoleLockouts();
+    const interval = setInterval(checkRoleLockouts, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Owner Card State
+  const [currentOwnerUsername, setCurrentOwnerUsername] = useState(() => authUsers.owner.username);
+  const [currentOwnerPassword, setCurrentOwnerPassword] = useState("");
+  const [newOwnerUsername, setNewOwnerUsername] = useState(() => authUsers.owner.username);
+  const [newOwnerPassword, setNewOwnerPassword] = useState("");
+  const [confirmOwnerPassword, setConfirmOwnerPassword] = useState("");
+  const [ownerError, setOwnerError] = useState("");
+  const [ownerSuccess, setOwnerSuccess] = useState("");
+
+  // Staff Card State
+  const [currentStaffUsername, setCurrentStaffUsername] = useState(() => authUsers.staff.username);
+  const [currentStaffPassword, setCurrentStaffPassword] = useState("");
+  const [newStaffUsername, setNewStaffUsername] = useState(() => authUsers.staff.username);
+  const [newStaffPassword, setNewStaffPassword] = useState("");
+  const [confirmStaffPassword, setConfirmStaffPassword] = useState("");
+  const [staffError, setStaffError] = useState("");
+  const [staffSuccess, setStaffSuccess] = useState("");
+
+  function handleSaveOwnerAccount(e: React.FormEvent) {
+    e.preventDefault();
+    setOwnerError("");
+    setOwnerSuccess("");
+
+    const result = updateRoleCredentials({
+      role: "owner",
+      currentUsernameInput: currentOwnerUsername,
+      currentPasswordInput: currentOwnerPassword,
+      newUsernameInput: newOwnerUsername,
+      newPasswordInput: newOwnerPassword,
+      confirmPasswordInput: confirmOwnerPassword,
+    });
+
+    if (result.success) {
+      const updated = getAuthUsers();
+      setAuthUsers(updated);
+      setCurrentOwnerUsername(updated.owner.username);
+      setCurrentOwnerPassword("");
+      setNewOwnerPassword("");
+      setConfirmOwnerPassword("");
+      setNewOwnerUsername(updated.owner.username);
+      setOwnerSuccess("Owner account credentials saved successfully.");
+      showToast("Owner credentials saved successfully!", "success");
+    } else {
+      setOwnerError(result.error || "Failed to update Owner credentials.");
+    }
+  }
+
+  function handleSaveStaffAccount(e: React.FormEvent) {
+    e.preventDefault();
+    setStaffError("");
+    setStaffSuccess("");
+
+    const result = updateRoleCredentials({
+      role: "staff",
+      currentUsernameInput: currentStaffUsername,
+      currentPasswordInput: currentStaffPassword,
+      newUsernameInput: newStaffUsername,
+      newPasswordInput: newStaffPassword,
+      confirmPasswordInput: confirmStaffPassword,
+    });
+
+    if (result.success) {
+      const updated = getAuthUsers();
+      setAuthUsers(updated);
+      setCurrentStaffUsername(updated.staff.username);
+      setCurrentStaffPassword("");
+      setNewStaffPassword("");
+      setConfirmStaffPassword("");
+      setNewStaffUsername(updated.staff.username);
+      setStaffSuccess("Staff account credentials saved successfully.");
+      showToast("Staff credentials saved successfully!", "success");
+    } else {
+      setStaffError(result.error || "Failed to update Staff credentials.");
+    }
+  }
+
   // ── Owner-only guard ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!loading) requireOwner();
@@ -216,9 +321,22 @@ export default function SettingsPage() {
     }
     dispatch({ type: "RESET_STORE" });
     localStorage.removeItem("autovault_store");
+    resetAuthCredentialsToDefaults();
+    const defaultAuth = getAuthUsers();
+    setAuthUsers(defaultAuth);
+    setCurrentOwnerUsername(defaultAuth.owner.username);
+    setCurrentOwnerPassword("");
+    setNewOwnerUsername(defaultAuth.owner.username);
+    setNewOwnerPassword("");
+    setConfirmOwnerPassword("");
+    setCurrentStaffUsername(defaultAuth.staff.username);
+    setCurrentStaffPassword("");
+    setNewStaffUsername(defaultAuth.staff.username);
+    setNewStaffPassword("");
+    setConfirmStaffPassword("");
     setShowResetConfirm(false);
     setResetInputText("");
-    showToast("Store reset successfully. Reverted to baseline clean state.", "info");
+    showToast("Store and login credentials reset successfully. Reverted to baseline clean state.", "info");
     router.push("/dashboard");
   }
 
@@ -569,6 +687,351 @@ export default function SettingsPage() {
               <span className="font-bold text-slate-800">Theme Preference:</span>{" "}
               <span className="capitalize font-semibold">{settings.theme} Mode</span>. Printable invoices and PDF exports will always retain crisp light paper formatting for printing compatibility.
             </div>
+          </div>
+
+          {/* ── Section 5: User Accounts & Security ─────────────────────── */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 border-l-4 border-l-blue-600 shadow-sm space-y-6">
+            <div className="border-b border-slate-100 pb-3">
+              <h2 className="font-bold text-slate-800 text-base flex items-center gap-2">
+                <Lock size={18} className="text-blue-600" />
+                5. User Accounts &amp; Security
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Manage login credentials for Owner and Staff accounts. Mandatory re-authentication required.
+              </p>
+            </div>
+
+            {/* Owner Account Card */}
+            <form onSubmit={handleSaveOwnerAccount} autoComplete="off" className="bg-slate-50 border border-slate-200 rounded-xl p-4.5 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
+                <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  <User size={16} className="text-blue-600" />
+                  Owner Account Credentials
+                </h3>
+                <span className="bg-blue-100 text-blue-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+                  Primary Admin
+                </span>
+              </div>
+
+              {ownerLockoutSeconds > 0 && (
+                <div className="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-2.5 flex items-center justify-between font-medium">
+                  <span>Re-authentication locked due to failed attempts</span>
+                  <span className="font-mono font-bold bg-amber-200/60 px-2 py-0.5 rounded text-amber-900">{ownerLockoutSeconds}s</span>
+                </div>
+              )}
+
+              {/* Current Credentials Sub-section */}
+              <div className="space-y-2">
+                <span className="text-xs font-bold text-slate-700 block uppercase tracking-wider text-[10px]">
+                  1. Re-Authenticate Current Owner Credentials
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 block mb-1">Current Owner Username *</label>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      minLength={3}
+                      maxLength={50}
+                      placeholder="e.g. owner@autovault.com"
+                      value={currentOwnerUsername}
+                      onChange={(e) => setCurrentOwnerUsername(e.target.value)}
+                      disabled={ownerLockoutSeconds > 0}
+                      className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 block mb-1">Current Owner Password *</label>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      minLength={8}
+                      maxLength={64}
+                      placeholder="Enter current password"
+                      value={currentOwnerPassword}
+                      onChange={(e) => setCurrentOwnerPassword(e.target.value)}
+                      disabled={ownerLockoutSeconds > 0}
+                      className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* New Credentials Sub-section */}
+              <div className="space-y-2 pt-1 border-t border-slate-200/60">
+                <span className="text-xs font-bold text-slate-700 block uppercase tracking-wider text-[10px]">
+                  2. Set New Owner Credentials
+                </span>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 block mb-1">New Owner Username *</label>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      minLength={3}
+                      maxLength={50}
+                      placeholder="Owner username / email"
+                      value={newOwnerUsername}
+                      onChange={(e) => setNewOwnerUsername(e.target.value)}
+                      disabled={ownerLockoutSeconds > 0}
+                      className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-slate-600 block mb-1">New Owner Password (optional)</label>
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={8}
+                        maxLength={64}
+                        placeholder="Leave blank to keep existing"
+                        value={newOwnerPassword}
+                        onChange={(e) => setNewOwnerPassword(e.target.value)}
+                        disabled={ownerLockoutSeconds > 0}
+                        className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-600 block mb-1">Confirm New Password</label>
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={8}
+                        maxLength={64}
+                        placeholder="Confirm new password"
+                        value={confirmOwnerPassword}
+                        onChange={(e) => setConfirmOwnerPassword(e.target.value)}
+                        disabled={ownerLockoutSeconds > 0}
+                        className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
+                      />
+                    </div>
+                  </div>
+
+                  {newOwnerPassword && (
+                    <div className="bg-slate-100/80 border border-slate-200 rounded-lg p-2.5 space-y-1 text-[11px]">
+                      <span className="font-bold text-slate-700 block mb-1">New Password Requirements:</span>
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+                        {(() => {
+                          const p = validatePasswordPolicy(newOwnerPassword);
+                          return (
+                            <>
+                              <span className={p.hasMinLength && p.hasMaxLength ? "text-emerald-700 font-semibold" : "text-slate-500"}>
+                                {p.hasMinLength && p.hasMaxLength ? "✓" : "○"} 8–64 characters
+                              </span>
+                              <span className={p.hasUpper ? "text-emerald-700 font-semibold" : "text-slate-500"}>
+                                {p.hasUpper ? "✓" : "○"} 1 Uppercase letter (A-Z)
+                              </span>
+                              <span className={p.hasLower ? "text-emerald-700 font-semibold" : "text-slate-500"}>
+                                {p.hasLower ? "✓" : "○"} 1 Lowercase letter (a-z)
+                              </span>
+                              <span className={p.hasNumber ? "text-emerald-700 font-semibold" : "text-slate-500"}>
+                                {p.hasNumber ? "✓" : "○"} 1 Number (0-9)
+                              </span>
+                              <span className={p.hasSpecial ? "text-emerald-700 font-semibold" : "text-slate-500"}>
+                                {p.hasSpecial ? "✓" : "○"} 1 Special char (!@#$%^&*)
+                              </span>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {ownerError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg p-2.5 flex items-center gap-2">
+                  <AlertCircle size={14} className="shrink-0" />
+                  <span>{ownerError}</span>
+                </div>
+              )}
+              {ownerSuccess && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-lg p-2.5 flex items-center gap-2">
+                  <CheckCircle size={14} className="shrink-0" />
+                  <span>{ownerSuccess}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={ownerLockoutSeconds > 0}
+                className={`w-full font-bold text-xs py-2.5 rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5 ${
+                  ownerLockoutSeconds > 0
+                    ? "bg-slate-300 text-slate-500 cursor-not-allowed"
+                    : "bg-navy-950 hover:bg-navy-900 text-white cursor-pointer"
+                }`}
+              >
+                <Save size={14} className="text-yellow-400" />
+                {ownerLockoutSeconds > 0 ? `Locked (${ownerLockoutSeconds}s)` : "Save Owner Credentials"}
+              </button>
+            </form>
+
+            {/* Staff Account Card */}
+            <form onSubmit={handleSaveStaffAccount} autoComplete="off" className="bg-slate-50 border border-slate-200 rounded-xl p-4.5 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
+                <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  <User size={16} className="text-emerald-600" />
+                  Staff Account Credentials
+                </h3>
+                <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+                  POS &amp; Store Access
+                </span>
+              </div>
+
+              {staffLockoutSeconds > 0 && (
+                <div className="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-2.5 flex items-center justify-between font-medium">
+                  <span>Re-authentication locked due to failed attempts</span>
+                  <span className="font-mono font-bold bg-amber-200/60 px-2 py-0.5 rounded text-amber-900">{staffLockoutSeconds}s</span>
+                </div>
+              )}
+
+              {/* Current Credentials Sub-section */}
+              <div className="space-y-2">
+                <span className="text-xs font-bold text-slate-700 block uppercase tracking-wider text-[10px]">
+                  1. Re-Authenticate Current Staff Credentials
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 block mb-1">Current Staff Username *</label>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      minLength={3}
+                      maxLength={50}
+                      placeholder="e.g. staff@autovault.com"
+                      value={currentStaffUsername}
+                      onChange={(e) => setCurrentStaffUsername(e.target.value)}
+                      disabled={staffLockoutSeconds > 0}
+                      className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 block mb-1">Current Staff Password *</label>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      minLength={8}
+                      maxLength={64}
+                      placeholder="Enter current staff password"
+                      value={currentStaffPassword}
+                      onChange={(e) => setCurrentStaffPassword(e.target.value)}
+                      disabled={staffLockoutSeconds > 0}
+                      className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* New Credentials Sub-section */}
+              <div className="space-y-2 pt-1 border-t border-slate-200/60">
+                <span className="text-xs font-bold text-slate-700 block uppercase tracking-wider text-[10px]">
+                  2. Set New Staff Credentials
+                </span>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 block mb-1">New Staff Username *</label>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      minLength={3}
+                      maxLength={50}
+                      placeholder="Staff username / email"
+                      value={newStaffUsername}
+                      onChange={(e) => setNewStaffUsername(e.target.value)}
+                      disabled={staffLockoutSeconds > 0}
+                      className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-slate-600 block mb-1">New Staff Password (optional)</label>
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={8}
+                        maxLength={64}
+                        placeholder="Leave blank to keep existing"
+                        value={newStaffPassword}
+                        onChange={(e) => setNewStaffPassword(e.target.value)}
+                        disabled={staffLockoutSeconds > 0}
+                        className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-600 block mb-1">Confirm New Password</label>
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={8}
+                        maxLength={64}
+                        placeholder="Confirm new password"
+                        value={confirmStaffPassword}
+                        onChange={(e) => setConfirmStaffPassword(e.target.value)}
+                        disabled={staffLockoutSeconds > 0}
+                        className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100"
+                      />
+                    </div>
+                  </div>
+
+                  {newStaffPassword && (
+                    <div className="bg-slate-100/80 border border-slate-200 rounded-lg p-2.5 space-y-1 text-[11px]">
+                      <span className="font-bold text-slate-700 block mb-1">New Password Requirements:</span>
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+                        {(() => {
+                          const p = validatePasswordPolicy(newStaffPassword);
+                          return (
+                            <>
+                              <span className={p.hasMinLength && p.hasMaxLength ? "text-emerald-700 font-semibold" : "text-slate-500"}>
+                                {p.hasMinLength && p.hasMaxLength ? "✓" : "○"} 8–64 characters
+                              </span>
+                              <span className={p.hasUpper ? "text-emerald-700 font-semibold" : "text-slate-500"}>
+                                {p.hasUpper ? "✓" : "○"} 1 Uppercase letter (A-Z)
+                              </span>
+                              <span className={p.hasLower ? "text-emerald-700 font-semibold" : "text-slate-500"}>
+                                {p.hasLower ? "✓" : "○"} 1 Lowercase letter (a-z)
+                              </span>
+                              <span className={p.hasNumber ? "text-emerald-700 font-semibold" : "text-slate-500"}>
+                                {p.hasNumber ? "✓" : "○"} 1 Number (0-9)
+                              </span>
+                              <span className={p.hasSpecial ? "text-emerald-700 font-semibold" : "text-slate-500"}>
+                                {p.hasSpecial ? "✓" : "○"} 1 Special char (!@#$%^&*)
+                              </span>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {staffError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg p-2.5 flex items-center gap-2">
+                  <AlertCircle size={14} className="shrink-0" />
+                  <span>{staffError}</span>
+                </div>
+              )}
+              {staffSuccess && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-lg p-2.5 flex items-center gap-2">
+                  <CheckCircle size={14} className="shrink-0" />
+                  <span>{staffSuccess}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={staffLockoutSeconds > 0}
+                className={`w-full font-bold text-xs py-2.5 rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5 ${
+                  staffLockoutSeconds > 0
+                    ? "bg-slate-300 text-slate-500 cursor-not-allowed"
+                    : "bg-slate-900 hover:bg-slate-800 text-white cursor-pointer"
+                }`}
+              >
+                <Save size={14} className="text-emerald-400" />
+                {staffLockoutSeconds > 0 ? `Locked (${staffLockoutSeconds}s)` : "Save Staff Credentials"}
+              </button>
+            </form>
           </div>
 
           {/* ── Section 7: Current Session & RBAC ───────────────────────── */}

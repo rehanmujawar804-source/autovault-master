@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect, Fragment } from "react";
 import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import { formatFitmentDisplay, isFitmentMatch } from "@/lib/fitmentUtils";
+import { SearchableSelect } from "@/components/SearchableSelect";
 import Link from "next/link";
 import {
   Search,
@@ -493,28 +494,18 @@ export default function VehicleFitmentPage() {
                     <span className="text-emerald-600 font-semibold text-[10px]">Active</span>
                   )}
                 </label>
-                <div className="relative">
-                  <select
-                    value={selectedBrand}
-                    onChange={(e) => {
-                      setSelectedBrand(e.target.value);
-                      setSelectedModel("");
-                      setSelectedYear("");
-                    }}
-                    className="w-full appearance-none border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-400/40 focus:border-amber-400 transition-all font-medium text-slate-800 pr-8 cursor-pointer"
-                  >
-                    <option value="">All Makes (Brands)</option>
-                    {brands.map((b) => (
-                      <option key={b} value={b}>
-                        {b}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown
-                    size={14}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
-                  />
-                </div>
+                <SearchableSelect
+                  value={selectedBrand}
+                  onChange={(val) => {
+                    setSelectedBrand(val);
+                    setSelectedModel("");
+                    setSelectedYear("");
+                  }}
+                  options={brands}
+                  placeholder="All Makes (Brands)"
+                  allOptionLabel="All Makes (Brands)"
+                  dark={false}
+                />
               </div>
 
               {/* STEP 2: MODEL */}
@@ -527,34 +518,18 @@ export default function VehicleFitmentPage() {
                     <span className="text-slate-400 text-[10px]">Select Make First</span>
                   ) : null}
                 </label>
-                <div className="relative">
-                  <select
-                    disabled={!selectedBrand && models.length === 0}
-                    value={selectedModel}
-                    onChange={(e) => {
-                      setSelectedModel(e.target.value);
-                      setSelectedYear("");
-                    }}
-                    className={`w-full appearance-none border rounded-xl px-3.5 py-2.5 text-sm transition-all font-medium pr-8 ${
-                      !selectedBrand
-                        ? "bg-slate-100/70 border-slate-200 text-slate-400 cursor-not-allowed"
-                        : "bg-slate-50 border-slate-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-400/40 focus:border-amber-400 text-slate-800 cursor-pointer"
-                    }`}
-                  >
-                    <option value="">
-                      {!selectedBrand ? "Select Make First..." : "All Models"}
-                    </option>
-                    {models.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown
-                    size={14}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
-                  />
-                </div>
+                <SearchableSelect
+                  disabled={!selectedBrand && models.length === 0}
+                  value={selectedModel}
+                  onChange={(val) => {
+                    setSelectedModel(val);
+                    setSelectedYear("");
+                  }}
+                  options={models}
+                  placeholder={!selectedBrand ? "Select Make First..." : "All Models"}
+                  allOptionLabel="All Models"
+                  dark={false}
+                />
               </div>
 
               {/* STEP 3: YEAR */}
@@ -567,31 +542,15 @@ export default function VehicleFitmentPage() {
                     <span className="text-slate-400 text-[10px]">Select Model First</span>
                   ) : null}
                 </label>
-                <div className="relative">
-                  <select
-                    disabled={!selectedModel && years.length === 0}
-                    value={selectedYear}
-                    onChange={(e) => setSelectedYear(e.target.value)}
-                    className={`w-full appearance-none border rounded-xl px-3.5 py-2.5 text-sm transition-all font-medium pr-8 ${
-                      !selectedModel
-                        ? "bg-slate-100/70 border-slate-200 text-slate-400 cursor-not-allowed"
-                        : "bg-slate-50 border-slate-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-400/40 focus:border-amber-400 text-slate-800 cursor-pointer"
-                    }`}
-                  >
-                    <option value="">
-                      {!selectedModel ? "Select Model First..." : "All Years"}
-                    </option>
-                    {years.map((y) => (
-                      <option key={y} value={y}>
-                        {y}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown
-                    size={14}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
-                  />
-                </div>
+                <SearchableSelect
+                  disabled={!selectedModel && years.length === 0}
+                  value={selectedYear}
+                  onChange={(val) => setSelectedYear(val)}
+                  options={years}
+                  placeholder={!selectedModel ? "Select Model First..." : "All Years"}
+                  allOptionLabel="All Years"
+                  dark={false}
+                />
               </div>
             </div>
           </div>

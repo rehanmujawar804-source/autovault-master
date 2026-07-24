@@ -7,6 +7,7 @@ import type { Invoice, CartItem, PaymentMethod, PaymentStatus, HoldBill } from "
 import PrintableInvoice from "@/components/PrintableInvoice";
 import { toLocalDateStr, formatInvoiceDate } from "@/lib/dateUtils";
 import { isFitmentMatch } from "@/lib/fitmentUtils";
+import { SearchableSelect } from "@/components/SearchableSelect";
 import {
   Search,
   Plus,
@@ -719,53 +720,39 @@ export default function BillingPage() {
             ) : (
               /* Expanded Cascading Selectors */
               <div className="grid grid-cols-3 gap-2 mt-2.5 pt-2 border-t border-navy-800/80">
-                <select
+                <SearchableSelect
                   value={posVehicleBrand}
-                  onChange={(e) => {
-                    setPosVehicleBrand(e.target.value);
+                  onChange={(val) => {
+                    setPosVehicleBrand(val);
                     setPosVehicleModel("");
                     setPosVehicleYear("");
                   }}
-                  className="bg-navy-900 border border-navy-700 text-white rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400 cursor-pointer"
-                >
-                  <option value="">Make (All)</option>
-                  {posBrands.map((b) => (
-                    <option key={b} value={b}>{b}</option>
-                  ))}
-                </select>
-                <select
+                  options={posBrands}
+                  placeholder="Make (All)"
+                  allOptionLabel="Make (All)"
+                  dark={true}
+                />
+                <SearchableSelect
                   disabled={!posVehicleBrand}
                   value={posVehicleModel}
-                  onChange={(e) => {
-                    setPosVehicleModel(e.target.value);
+                  onChange={(val) => {
+                    setPosVehicleModel(val);
                     setPosVehicleYear("");
                   }}
-                  className={`rounded-lg px-2 py-1 text-xs focus:outline-none transition-all ${
-                    !posVehicleBrand
-                      ? "bg-navy-950/60 border border-navy-800 text-slate-500 cursor-not-allowed"
-                      : "bg-navy-900 border border-navy-700 text-white focus:ring-1 focus:ring-amber-400 cursor-pointer"
-                  }`}
-                >
-                  <option value="">{!posVehicleBrand ? "Select Make" : "Model (All)"}</option>
-                  {posModels.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-                <select
+                  options={posModels}
+                  placeholder={!posVehicleBrand ? "Select Make" : "Model (All)"}
+                  allOptionLabel="Model (All)"
+                  dark={true}
+                />
+                <SearchableSelect
                   disabled={!posVehicleModel}
                   value={posVehicleYear}
-                  onChange={(e) => setPosVehicleYear(e.target.value)}
-                  className={`rounded-lg px-2 py-1 text-xs focus:outline-none transition-all ${
-                    !posVehicleModel
-                      ? "bg-navy-950/60 border border-navy-800 text-slate-500 cursor-not-allowed"
-                      : "bg-navy-900 border border-navy-700 text-white focus:ring-1 focus:ring-amber-400 cursor-pointer"
-                  }`}
-                >
-                  <option value="">{!posVehicleModel ? "Select Model" : "Year (All)"}</option>
-                  {posYears.map((y) => (
-                    <option key={y} value={y}>{y}</option>
-                  ))}
-                </select>
+                  onChange={(val) => setPosVehicleYear(val)}
+                  options={posYears}
+                  placeholder={!posVehicleModel ? "Select Model" : "Year (All)"}
+                  allOptionLabel="Year (All)"
+                  dark={true}
+                />
               </div>
             )}
           </div>

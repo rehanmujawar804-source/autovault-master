@@ -2281,6 +2281,10 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    case "RESET_STORE": {
+      return INITIAL_STATE;
+    }
+
     default:
       return state;
   }

@@ -319,9 +319,57 @@ export default function SettingsPage() {
       showToast("Please type RESET exactly to confirm.", "error");
       return;
     }
+
+    // 1. Reset React in-memory store state to canonical INITIAL_STATE
     dispatch({ type: "RESET_STORE" });
-    localStorage.removeItem("autovault_store");
+
+    // 2. Remove or reset business data storage key
+    try {
+      localStorage.removeItem("autovault_store");
+    } catch {
+      // Non-blocking
+    }
+
+    // 3. Reset authentication credentials & clear lockout counters
     resetAuthCredentialsToDefaults();
+
+    // 4. Reset shop configuration settings to original defaults
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(DEFAULTS));
+      setSettings(DEFAULTS);
+      applyGlobalTheme();
+    } catch {
+      // Non-blocking
+    }
+
+    // 5. Reset sidebar preference to original default (expanded)
+    try {
+      localStorage.removeItem("autovault_sidebar_collapsed");
+    } catch {
+      // Non-blocking
+    }
+
+    // 6. Reset backup timestamp & migration metadata
+    try {
+      localStorage.removeItem(LAST_BACKUP_KEY);
+      setLastBackupTime(null);
+    } catch {
+      // Non-blocking
+    }
+    try {
+      localStorage.removeItem("autovault_migrations");
+    } catch {
+      // Non-blocking
+    }
+
+    // 7. Reset active session (invalidate role)
+    try {
+      localStorage.removeItem("role");
+    } catch {
+      // Non-blocking
+    }
+
+    // 8. Update UI modal state & reset auth credentials form state
     const defaultAuth = getAuthUsers();
     setAuthUsers(defaultAuth);
     setCurrentOwnerUsername(defaultAuth.owner.username);
@@ -336,8 +384,15 @@ export default function SettingsPage() {
     setConfirmStaffPassword("");
     setShowResetConfirm(false);
     setResetInputText("");
-    showToast("Store and login credentials reset successfully. Reverted to baseline clean state.", "info");
-    router.push("/dashboard");
+
+    showToast("Full factory reset completed. Reverted to baseline clean state.", "info");
+
+    // 9. Redirect to login page for mandatory re-authentication
+    if (typeof window !== "undefined") {
+      window.location.href = "/login";
+    } else {
+      router.push("/login");
+    }
   }
 
   function handleImportFileChange(e: React.ChangeEvent<HTMLInputElement>) {

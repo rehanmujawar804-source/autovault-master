@@ -119,9 +119,10 @@ function ProductSearchCombobox({ value, onChange, products, rowIdx }: ProductSea
   const selected = products.find((p) => p.id === value);
 
   const filtered = useMemo(() => {
+    const purchasable = products.filter((p) => (p.status || "Active") === "Active");
     const q = query.trim().toLowerCase();
-    if (!q) return products;
-    return products.filter(
+    if (!q) return purchasable;
+    return purchasable.filter(
       (p) =>
         p.name.toLowerCase().includes(q) ||
         p.sku.toLowerCase().includes(q) ||
@@ -171,13 +172,12 @@ function ProductSearchCombobox({ value, onChange, products, rowIdx }: ProductSea
                 <span className="text-xs font-black text-slate-800">
                   <HighlightedText text={p.name} query={query} />
                 </span>
-                <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-full shrink-0 border ${
-                  p.stock === 0
+                <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-full shrink-0 border ${p.stock === 0
                     ? "bg-red-50 border-red-200 text-red-700"
                     : p.stock <= p.lowStockThreshold
-                    ? "bg-amber-50 border-amber-200 text-amber-700"
-                    : "bg-green-50 border-green-200 text-green-700"
-                }`}>
+                      ? "bg-amber-50 border-amber-200 text-amber-700"
+                      : "bg-green-50 border-green-200 text-green-700"
+                  }`}>
                   Stock: {p.stock}
                 </span>
               </div>
@@ -260,18 +260,17 @@ const SupplierInvoiceRowItem = memo(({
         </div>
 
         {selectedProduct && (
-          <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full border shrink-0 ${
-            selectedProduct.stock === 0
+          <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full border shrink-0 ${selectedProduct.stock === 0
               ? "bg-red-50 border-red-200 text-red-700 animate-pulse"
               : selectedProduct.stock <= selectedProduct.lowStockThreshold
-              ? "bg-amber-50 border-amber-200 text-amber-700"
-              : "bg-green-50 border-green-200 text-green-700"
-          }`}>
+                ? "bg-amber-50 border-amber-200 text-amber-700"
+                : "bg-green-50 border-green-200 text-green-700"
+            }`}>
             {selectedProduct.stock === 0
               ? "Out of Stock"
               : selectedProduct.stock <= selectedProduct.lowStockThreshold
-              ? `Low Stock: ${selectedProduct.stock}`
-              : `Stock: ${selectedProduct.stock}`}
+                ? `Low Stock: ${selectedProduct.stock}`
+                : `Stock: ${selectedProduct.stock}`}
           </span>
         )}
       </div>
@@ -301,9 +300,8 @@ const SupplierInvoiceRowItem = memo(({
             placeholder="0"
             value={row.quantity}
             onChange={(e) => onChangeQty(row.id, e.target.value)}
-            className={`w-full border rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all ${
-              error?.quantity ? "border-red-400 bg-red-50/50" : "border-slate-200 bg-white"
-            }`}
+            className={`w-full border rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all ${error?.quantity ? "border-red-400 bg-red-50/50" : "border-slate-200 bg-white"
+              }`}
           />
           {error?.quantity && (
             <span className="text-[9px] font-extrabold text-red-500 mt-0.5 block leading-tight">{error.quantity}</span>
@@ -320,9 +318,8 @@ const SupplierInvoiceRowItem = memo(({
             placeholder="0.00"
             value={row.buyPrice}
             onChange={(e) => onChangePrice(row.id, e.target.value)}
-            className={`w-full border rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all ${
-              error?.buyPrice ? "border-red-400 bg-red-50/50" : "border-slate-200 bg-white"
-            }`}
+            className={`w-full border rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all ${error?.buyPrice ? "border-red-400 bg-red-50/50" : "border-slate-200 bg-white"
+              }`}
           />
           {error?.buyPrice && (
             <span className="text-[9px] font-extrabold text-red-500 mt-0.5 block leading-tight">{error.buyPrice}</span>
@@ -1794,11 +1791,10 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 transition-all whitespace-nowrap cursor-pointer ${
-                activeTab === tab.id
+              className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 transition-all whitespace-nowrap cursor-pointer ${activeTab === tab.id
                   ? "border-navy-950 text-navy-950"
                   : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
-              }`}
+                }`}
             >
               <tab.icon size={15} />
               {tab.label}
@@ -1981,7 +1977,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                     {purchases.map((pur) => {
                       const product = products.find((p) => p.id === pur.productId);
                       const total = pur.totalAmount ?? (pur.buyPrice * pur.quantity);
-                      
+
                       // Derive paid, due and status dynamically from actual payments and returns
                       const paymentsForP = getSupplierPaymentsBySupplier(id).filter(sp => sp.purchaseId === pur.id);
                       const paid = paymentsForP.reduce((s, pay) => s + pay.amount, 0);
@@ -1993,8 +1989,8 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                       const statusColors = computedStatus === "Paid"
                         ? "bg-green-100 text-green-800 border-green-200"
                         : computedStatus === "Partial"
-                        ? "bg-amber-100 text-amber-800 border-amber-200"
-                        : "bg-red-100 text-red-800 border-red-200";
+                          ? "bg-amber-100 text-amber-800 border-amber-200"
+                          : "bg-red-100 text-red-800 border-red-200";
                       return (
                         <tr key={pur.id} className="hover:bg-slate-50/70 transition-colors">
                           <td className="px-4 py-3 text-xs font-mono text-slate-400">{pur.invoiceNumber || "—"}</td>
@@ -2087,7 +2083,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                   {purchasesWithTimeline.map((pur) => {
                     const product = products.find((p) => p.id === pur.productId);
                     const total = pur.totalAmount ?? (pur.buyPrice * pur.quantity);
-                    
+
                     // Get all payments for this purchase, sorted chronologically (oldest first)
                     const paymentsForP = supplierPayments
                       .filter((sp) => sp.purchaseId === pur.id)
@@ -2096,7 +2092,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                     const returnsForP = getPurchaseReturnsByPurchase(pur.id)
                       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
-                    type TimelineEvent = 
+                    type TimelineEvent =
                       | { type: "payment"; id: string; date: string; amount: number; method: PaymentMethod; isUpfront?: boolean; paidBy: string; note?: string }
                       | { type: "return"; id: string; date: string; qty: number; buyPrice: number; totalAmount: number; refundAmount: number; reason: string; returnedBy: string };
 
@@ -2123,7 +2119,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                         returnedBy: r.returnedBy,
                       })),
                     ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-                    
+
                     // Compute timeline events with remaining balance step-by-step
                     let runningPaid = 0;
                     let runningReturned = 0;
@@ -2261,13 +2257,12 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                         <div className="flex items-center justify-between bg-white border border-slate-150 rounded-xl p-3 text-xs">
                           <div className="flex items-center gap-2">
                             <span className="text-slate-500 font-medium">Status:</span>
-                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
-                              isFullyPaid
+                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${isFullyPaid
                                 ? "bg-green-100 text-green-800 border-green-200"
                                 : (runningPaid > 0 || runningReturned > 0)
-                                ? "bg-amber-100 text-amber-800 border-amber-200"
-                                : "bg-red-100 text-red-800 border-red-200"
-                            }`}>
+                                  ? "bg-amber-100 text-amber-800 border-amber-200"
+                                  : "bg-red-100 text-red-800 border-red-200"
+                              }`}>
                               {isFullyPaid ? "Paid" : (runningPaid > 0 || runningReturned > 0) ? "Partial" : "Credit"}
                             </span>
                           </div>
@@ -2887,7 +2882,7 @@ function RecordSupplierPaymentModal({
     setError("");
     if (!paidBy) { setError("Please select who is making this payment."); return; }
     if (parsedAmount <= 0) { setError("Payment amount must be greater than ₹0."); return; }
-    
+
     // Decimal precision validation
     if (amount.includes(".")) {
       const decimalPart = amount.split(".")[1];
@@ -3003,11 +2998,10 @@ function RecordSupplierPaymentModal({
                       key={m}
                       type="button"
                       onClick={() => setMethod(m)}
-                      className={`py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                        method === m
+                      className={`py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${method === m
                           ? "bg-slate-900 border-slate-900 text-white"
                           : `${METHOD_COLORS[m]} hover:opacity-80`
-                      }`}
+                        }`}
                     >
                       {m}
                     </button>
@@ -3026,11 +3020,10 @@ function RecordSupplierPaymentModal({
                       key={role}
                       type="button"
                       onClick={() => setPaidBy(role)}
-                      className={`flex-1 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                        paidBy === role
+                      className={`flex-1 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${paidBy === role
                           ? "bg-slate-900 border-slate-900 text-white"
                           : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                      }`}
+                        }`}
                     >
                       {role}
                     </button>
@@ -3287,9 +3280,9 @@ function ReturnPurchaseModal({
   }
 
   const REFUND_METHODS: { value: PaymentMethod | "Adjustment"; label: string; color: string }[] = [
-    { value: "Cash",       label: "Cash",       color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-    { value: "UPI",        label: "UPI",        color: "bg-blue-50 text-blue-700 border-blue-200" },
-    { value: "Card",       label: "Bank/Card",  color: "bg-purple-50 text-purple-700 border-purple-200" },
+    { value: "Cash", label: "Cash", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+    { value: "UPI", label: "UPI", color: "bg-blue-50 text-blue-700 border-blue-200" },
+    { value: "Card", label: "Bank/Card", color: "bg-purple-50 text-purple-700 border-purple-200" },
     { value: "Adjustment", label: "Adjustment", color: "bg-slate-100 text-slate-600 border-slate-200" },
   ];
 
@@ -3415,11 +3408,10 @@ function ReturnPurchaseModal({
                     key={m.value}
                     type="button"
                     onClick={() => { setRefundMethod(m.value); setError(""); }}
-                    className={`py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                      refundMethod === m.value
+                    className={`py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${refundMethod === m.value
                         ? "bg-slate-900 border-slate-900 text-white"
                         : `${m.color} hover:opacity-80`
-                    }`}
+                      }`}
                   >
                     {m.label}
                   </button>

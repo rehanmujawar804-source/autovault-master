@@ -67,6 +67,7 @@ export default function VehicleFitmentPage() {
           stock: number;
           lowStockThreshold: number;
           isUniversalFit?: boolean;
+          status?: string;
         }[];
       }
     > = {};
@@ -94,6 +95,7 @@ export default function VehicleFitmentPage() {
             stock: product.stock ?? 0,
             lowStockThreshold: product.lowStockThreshold ?? 5,
             isUniversalFit: product.isUniversalFit,
+            status: product.status || "Active",
           });
         }
       }
@@ -795,7 +797,18 @@ export default function VehicleFitmentPage() {
                                               {p.category}
                                             </td>
                                             <td className="px-4 py-3">
-                                              {renderStockBadge(p.stock, p.lowStockThreshold)}
+                                              <div className="flex items-center gap-1.5 flex-wrap">
+                                                {p.status === "Inactive" ? (
+                                                  <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-500 border border-slate-200 px-2 py-0.5 rounded-full">
+                                                    Inactive
+                                                  </span>
+                                                ) : p.status === "Discontinued" ? (
+                                                  <span className="text-[10px] font-bold uppercase tracking-wider bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded-full">
+                                                    Discontinued
+                                                  </span>
+                                                ) : null}
+                                                {renderStockBadge(p.stock, p.lowStockThreshold)}
+                                              </div>
                                             </td>
                                             <td className="px-4 py-3 text-right font-bold text-slate-900">
                                               ₹{p.price.toLocaleString()}

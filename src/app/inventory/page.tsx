@@ -171,9 +171,13 @@ export default function InventoryPage() {
     const ps = state.products;
     return {
       all:          ps.length,
-      healthy:      ps.filter((p) => p.stock > p.lowStockThreshold).length,
-      lowStock:     ps.filter((p) => p.stock > 0 && p.stock <= p.lowStockThreshold).length,
-      outOfStock:   ps.filter((p) => p.stock === 0).length,
+      healthy:      ps.filter((p) => (p.status || "Active") === "Active" && p.stock > p.lowStockThreshold).length,
+      lowStock:     ps.filter((p) => {
+                      const status = p.status || "Active";
+                      if (status === "Inactive") return false;
+                      return p.stock > 0 && p.stock <= p.lowStockThreshold;
+                    }).length,
+      outOfStock:   ps.filter((p) => (p.status || "Active") === "Active" && p.stock === 0).length,
       inactive:     ps.filter((p) => (p.status || "Active") === "Inactive").length,
       discontinued: ps.filter((p) => p.status === "Discontinued").length,
     };

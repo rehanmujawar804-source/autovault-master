@@ -1300,7 +1300,7 @@ export default function InvoiceDetailPage({
                       >
                         <option value="">-- Choose product --</option>
                         {state.products
-                          .filter((p) => p.status !== "Inactive" && p.status !== "Discontinued")
+                          .filter((p) => (p.status || "Active") === "Active")
                           .map((p) => (
                             <option key={p.id} value={p.id}>
                               {p.name} ({p.sku}) — ₹{p.sellPrice.toLocaleString()} (Stock: {p.stock})

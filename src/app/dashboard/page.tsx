@@ -125,9 +125,13 @@ export default function DashboardPage() {
       .sort((a, b) => b.debt - a.debt)
       .slice(0, 5);
 
-    // Low / out of stock
-    const lowStock = state.products.filter((p) => p.stock > 0 && p.stock <= p.lowStockThreshold);
-    const outOfStock = state.products.filter((p) => p.stock === 0);
+    // Low / out of stock (actionable restock opportunities only)
+    const lowStock = state.products.filter((p) => {
+      const status = p.status || "Active";
+      if (status === "Inactive") return false;
+      return p.stock > 0 && p.stock <= p.lowStockThreshold;
+    });
+    const outOfStock = state.products.filter((p) => (p.status || "Active") === "Active" && p.stock === 0);
 
     // Payment method breakdown
     const methods = ["Cash", "UPI", "Card", "Credit"] as const;

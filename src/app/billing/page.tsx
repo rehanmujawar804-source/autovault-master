@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
-import type { Invoice, CartItem, PaymentMethod, PaymentStatus, HoldBill } from "@/types";
+import type { Product, Invoice, CartItem, PaymentMethod, PaymentStatus, HoldBill } from "@/types";
 import PrintableInvoice from "@/components/PrintableInvoice";
 import { toLocalDateStr, formatInvoiceDate } from "@/lib/dateUtils";
 import { isFitmentMatch } from "@/lib/fitmentUtils";
@@ -33,6 +33,7 @@ import {
   ChevronUp,
   Sparkles,
   Info,
+  AlertTriangle,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,10 +69,17 @@ export default function BillingPage() {
   const [posVehicleModel, setPosVehicleModel] = useState("");
   const [posVehicleYear, setPosVehicleYear] = useState("");
 
+  function isSellableInPOS(product: Product): boolean {
+    const status = product.status || "Active";
+    if (status === "Active") return true;
+    if (status === "Discontinued") return product.stock > 0;
+    return false;
+  }
+
   const posBrands = useMemo(() => {
     const set = new Set<string>();
     for (const product of state.products) {
-      if ((product.status || "Active") !== "Active" || product.status === "Discontinued") continue;
+      if (!isSellableInPOS(product)) continue;
       for (const fit of product.fitments || []) {
         if (fit.brand) set.add(fit.brand.trim());
       }
@@ -83,7 +91,7 @@ export default function BillingPage() {
     const set = new Set<string>();
     if (!posVehicleBrand) return [];
     for (const product of state.products) {
-      if ((product.status || "Active") !== "Active" || product.status === "Discontinued") continue;
+      if (!isSellableInPOS(product)) continue;
       for (const fit of product.fitments || []) {
         if (fit.brand && fit.brand.trim().toLowerCase() === posVehicleBrand.trim().toLowerCase() && fit.model) {
           set.add(fit.model.trim());
@@ -97,7 +105,7 @@ export default function BillingPage() {
     const set = new Set<string>();
     if (!posVehicleBrand || !posVehicleModel) return [];
     for (const product of state.products) {
-      if ((product.status || "Active") !== "Active" || product.status === "Discontinued") continue;
+      if (!isSellableInPOS(product)) continue;
       for (const fit of product.fitments || []) {
         const sameBrand = fit.brand && fit.brand.trim().toLowerCase() === posVehicleBrand.trim().toLowerCase();
         const sameModel = fit.model && fit.model.trim().toLowerCase() === posVehicleModel.trim().toLowerCase();
@@ -251,7 +259,7 @@ export default function BillingPage() {
     const validatedItems = bill.items
       .map((item) => {
         const liveProd = state.products.find((p) => p.id === item.product.id);
-        if (!liveProd || (liveProd.status || "Active") !== "Active" || liveProd.stock <= 0) {
+        if (!liveProd || !isSellableInPOS(liveProd) || liveProd.stock <= 0) {
           hasStockAdjustment = true;
           return null;
         }
@@ -359,7 +367,7 @@ export default function BillingPage() {
 
   // ── Dynamic categories ────────────────────────────────────────────────────
   const categories = useMemo(() => {
-    const sellable = state.products.filter((p) => (p.status || "Active") === "Active" && p.status !== "Discontinued");
+    const sellable = state.products.filter(isSellableInPOS);
     const cats = Array.from(new Set(sellable.map((p) => p.category))).sort();
     return ["All", ...cats];
   }, [state.products]);
@@ -368,7 +376,7 @@ export default function BillingPage() {
 
   // ── Filtered products ─────────────────────────────────────────────────────
   const filteredProducts = useMemo(() => {
-    let list = state.products.filter((p) => (p.status || "Active") === "Active" && p.status !== "Discontinued");
+    let list = state.products.filter(isSellableInPOS);
     if (selectedCategory !== "All") list = list.filter((p) => p.category === selectedCategory);
     const q = search.trim().toLowerCase();
     if (!q) return list;
@@ -392,7 +400,7 @@ export default function BillingPage() {
   // ── Cart helpers ──────────────────────────────────────────────────────────
   function addToCart(productId: string) {
     const product = state.products.find((p) => p.id === productId);
-    if (!product || product.stock === 0 || (product.status || "Active") !== "Active" || product.status === "Discontinued") return;
+    if (!product || product.stock === 0 || !isSellableInPOS(product)) return;
     setCart((prev) => {
       const existing = prev.find((i) => i.product.id === productId);
       if (existing) {
@@ -714,10 +722,10 @@ export default function BillingPage() {
                   {posVehicleBrand && posVehicleModel && posVehicleYear
                     ? `Selected Vehicle: ${posVehicleBrand} ${posVehicleModel} • ${posVehicleYear}`
                     : posVehicleBrand && posVehicleModel
-                    ? `Selected Vehicle: ${posVehicleBrand} ${posVehicleModel}`
-                    : posVehicleBrand
-                    ? `Selected Vehicle: ${posVehicleBrand}`
-                    : "No vehicle selected"}
+                      ? `Selected Vehicle: ${posVehicleBrand} ${posVehicleModel}`
+                      : posVehicleBrand
+                        ? `Selected Vehicle: ${posVehicleBrand}`
+                        : "No vehicle selected"}
                 </span>
                 <span className="text-[10px] text-slate-400 font-medium">Click to configure</span>
               </div>
@@ -791,11 +799,10 @@ export default function BillingPage() {
                 key={c}
                 type="button"
                 onClick={() => setSelectedCategory(c)}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border cursor-pointer shrink-0 ${
-                  selectedCategory === c
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border cursor-pointer shrink-0 ${selectedCategory === c
                     ? "bg-navy-950 border-navy-950 text-white shadow-sm"
                     : "bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700"
-                }`}
+                  }`}
               >
                 {c}
               </button>
@@ -842,13 +849,12 @@ export default function BillingPage() {
                     <div
                       key={product.id}
                       onClick={() => !outOfStock && addToCart(product.id)}
-                      className={`relative bg-white rounded-xl border p-4 flex flex-col justify-between cursor-pointer select-none transition-all duration-150 group ${
-                        outOfStock
+                      className={`relative bg-white rounded-xl border p-4 flex flex-col justify-between cursor-pointer select-none transition-all duration-150 group ${outOfStock
                           ? "border-slate-150 opacity-55 cursor-not-allowed"
                           : inCart
-                          ? "border-amber-400 shadow-md ring-2 ring-amber-300/40 bg-amber-50/20"
-                          : "border-slate-200 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5"
-                      }`}
+                            ? "border-amber-400 shadow-md ring-2 ring-amber-300/40 bg-amber-50/20"
+                            : "border-slate-200 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5"
+                        }`}
                     >
                       {/* Qty badge */}
                       {inCart && (
@@ -870,6 +876,14 @@ export default function BillingPage() {
                         {product.name}
                       </p>
                       <p className="text-[10px] font-mono text-slate-400 mt-1">SKU: {product.sku}</p>
+                      {product.status === "Discontinued" && (
+                        <div className="mt-1.5">
+                          <span className="inline-flex items-center gap-1 text-[9px] font-black text-amber-900 bg-amber-100/90 border border-amber-300 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                            <AlertTriangle size={10} className="text-amber-600 shrink-0" />
+                            Discontinued — Clearance
+                          </span>
+                        </div>
+                      )}
 
                       {/* Vehicle Compatibility Status Badge */}
                       {isVehicleFilterActive && (
@@ -877,12 +891,12 @@ export default function BillingPage() {
                           {compatStatus === "universal" ? (
                             <span className="inline-flex items-center gap-1 font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
                               <Sparkles size={11} className="text-amber-600" />
-                              Universal Fit
+                              {product.status === "Discontinued" ? "Universal Fit — Discontinued Clearance" : "Universal Fit"}
                             </span>
                           ) : compatStatus === "compatible" ? (
                             <span className="inline-flex items-center gap-1 font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
                               <CheckCircle size={11} className="text-emerald-600" />
-                              Compatible
+                              {product.status === "Discontinued" ? "Compatible — Discontinued Clearance" : "Compatible"}
                             </span>
                           ) : compatStatus === "unconfigured" ? (
                             <span className="inline-flex items-center gap-1 font-medium text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
@@ -1011,40 +1025,40 @@ export default function BillingPage() {
                         </button>
                       </div>
 
-                    <div className="flex items-center justify-between">
-                      {/* Qty controls */}
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => updateQty(item.product.id, item.quantity - 1)}
-                          className="w-7 h-7 rounded-lg bg-white border border-slate-200 hover:bg-red-50 hover:border-red-200 hover:text-red-500 flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-90"
-                        >
-                          <Minus size={11} />
-                        </button>
-                        <span className="w-7 text-center font-bold text-sm text-slate-800">{item.quantity}</span>
-                        <button
-                          type="button"
-                          onClick={() => updateQty(item.product.id, item.quantity + 1)}
-                          disabled={item.quantity >= item.product.stock}
-                          className="w-7 h-7 rounded-lg bg-white border border-slate-200 hover:bg-green-50 hover:border-green-200 hover:text-green-600 flex items-center justify-center transition-all disabled:opacity-30 cursor-pointer shadow-sm active:scale-90"
-                        >
-                          <Plus size={11} />
-                        </button>
-                      </div>
+                      <div className="flex items-center justify-between">
+                        {/* Qty controls */}
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => updateQty(item.product.id, item.quantity - 1)}
+                            className="w-7 h-7 rounded-lg bg-white border border-slate-200 hover:bg-red-50 hover:border-red-200 hover:text-red-500 flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-90"
+                          >
+                            <Minus size={11} />
+                          </button>
+                          <span className="w-7 text-center font-bold text-sm text-slate-800">{item.quantity}</span>
+                          <button
+                            type="button"
+                            onClick={() => updateQty(item.product.id, item.quantity + 1)}
+                            disabled={item.quantity >= item.product.stock}
+                            className="w-7 h-7 rounded-lg bg-white border border-slate-200 hover:bg-green-50 hover:border-green-200 hover:text-green-600 flex items-center justify-center transition-all disabled:opacity-30 cursor-pointer shadow-sm active:scale-90"
+                          >
+                            <Plus size={11} />
+                          </button>
+                        </div>
 
-                      <div className="text-right">
-                        <span className="block font-bold text-sm text-slate-900">
-                          ₹{(item.product.sellPrice * item.quantity).toLocaleString()}
-                        </span>
-                        {item.quantity > 1 && (
-                          <span className="block text-[10px] text-slate-400">
-                            ₹{item.product.sellPrice.toLocaleString()} each
+                        <div className="text-right">
+                          <span className="block font-bold text-sm text-slate-900">
+                            ₹{(item.product.sellPrice * item.quantity).toLocaleString()}
                           </span>
-                        )}
+                          {item.quantity > 1 && (
+                            <span className="block text-[10px] text-slate-400">
+                              ₹{item.product.sellPrice.toLocaleString()} each
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
+                  );
                 })}
               </div>
             )}
@@ -1256,11 +1270,10 @@ export default function BillingPage() {
                     key={pct}
                     type="button"
                     onClick={() => handlePresetDiscount(pct)}
-                    className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
-                      discount === pct && discountInput === String(pct)
+                    className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-all cursor-pointer ${discount === pct && discountInput === String(pct)
                         ? "bg-navy-950 border-navy-950 text-white shadow-sm"
                         : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600"
-                    }`}
+                      }`}
                   >
                     {pct === 0 ? "0%" : `${pct}%`}
                   </button>
@@ -1307,11 +1320,10 @@ export default function BillingPage() {
                       key={item.id}
                       type="button"
                       onClick={() => setPaymentMethod(item.id as PaymentMethod)}
-                      className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-all cursor-pointer active:scale-95 ${
-                        active
+                      className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-all cursor-pointer active:scale-95 ${active
                           ? "bg-navy-950 border-navy-950 text-white shadow-md"
                           : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600"
-                      }`}
+                        }`}
                     >
                       {item.icon}
                       {item.label}
@@ -1385,11 +1397,10 @@ export default function BillingPage() {
                       key={role}
                       type="button"
                       onClick={() => setBilledBy(role)}
-                      className={`flex-1 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer active:scale-95 ${
-                        active
+                      className={`flex-1 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer active:scale-95 ${active
                           ? "bg-navy-950 border-navy-950 text-white shadow-md"
                           : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                      }`}
+                        }`}
                     >
                       {role}
                     </button>
@@ -1467,11 +1478,11 @@ export default function BillingPage() {
 
       {/* ── Held Bills Side-Drawer / Modal ─────────────────────────────────── */}
       {heldBillsDrawerOpen && (
-        <div 
+        <div
           onClick={() => setHeldBillsDrawerOpen(false)}
           className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-end z-50 animate-in fade-in duration-200"
         >
-          <div 
+          <div
             onClick={(e) => e.stopPropagation()}
             className="bg-white w-full max-w-md h-full flex flex-col shadow-2xl border-l border-slate-200 animate-in slide-in-from-right duration-200"
           >
@@ -1484,7 +1495,7 @@ export default function BillingPage() {
                 </h2>
                 <p className="text-xs text-slate-400 mt-0.5">Select a parked cart to resume checkout</p>
               </div>
-              <button 
+              <button
                 onClick={() => setHeldBillsDrawerOpen(false)}
                 className="p-1 rounded-lg hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition cursor-pointer"
               >
@@ -1547,11 +1558,10 @@ export default function BillingPage() {
                   const isCurrentActive = b.id === activeHoldBillId;
 
                   return (
-                    <div 
-                      key={b.id} 
-                      className={`bg-white rounded-xl border p-4 shadow-sm space-y-3 relative transition hover:border-slate-300 ${
-                        isCurrentActive ? "ring-2 ring-amber-400 border-amber-400" : "border-slate-200"
-                      }`}
+                    <div
+                      key={b.id}
+                      className={`bg-white rounded-xl border p-4 shadow-sm space-y-3 relative transition hover:border-slate-300 ${isCurrentActive ? "ring-2 ring-amber-400 border-amber-400" : "border-slate-200"
+                        }`}
                     >
                       {/* Top Header Card */}
                       <div className="flex justify-between items-start">

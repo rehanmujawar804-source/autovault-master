@@ -920,7 +920,7 @@ export default function VehicleFitmentPage() {
                                 {prod.isUniversalFit && (
                                   <span className="inline-flex items-center gap-1.5 bg-amber-100/90 text-amber-900 border border-amber-300/80 text-xs px-3 py-1 rounded-xl font-bold shadow-2xs">
                                     <Sparkles size={13} className="text-amber-600" />
-                                    Universal Fit — All Vehicles
+                                    Universal Fit — Compatible with all vehicles
                                   </span>
                                 )}
                                 {fitmentsList.length > 0 && (

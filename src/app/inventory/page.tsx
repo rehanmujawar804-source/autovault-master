@@ -799,7 +799,36 @@ export default function InventoryPage() {
         onChange={handleImportCSV}
         className="hidden"
       />
-      <h1 className="text-2xl font-black text-navy-950 mb-4">Inventory</h1>
+
+      {/* ── Page Header with action buttons moved here per audit ── */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <h1 className="text-2xl font-bold text-navy-950">Inventory</h1>
+        {isOwner && (
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleExportCSV}
+              className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 transition-colors cursor-pointer"
+            >
+              <Download size={13} />
+              Export
+            </button>
+            <button
+              onClick={() => document.getElementById("csv-import-input")?.click()}
+              className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 transition-colors cursor-pointer"
+            >
+              <Upload size={13} />
+              Import
+            </button>
+            <button
+              onClick={() => { setEditingProduct(null); setShowModal(true); }}
+              className="flex items-center gap-1.5 h-9 px-4 rounded-lg text-xs font-bold text-navy-950 bg-yellow-400 hover:bg-yellow-300 border border-yellow-300 transition-colors cursor-pointer shadow-sm"
+            >
+              <Plus size={14} />
+              Add Product
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* ── KPI Cards ──────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6 min-w-0">
@@ -878,19 +907,19 @@ export default function InventoryPage() {
       </div>
 
       {/* ── Operations Control Room ─────────────────────────────────────────── */}
-      <div className="bg-white rounded-2xl border border-slate-200 mb-6 shadow-sm overflow-hidden min-w-0 w-full">
+      <div className="bg-white rounded-2xl border border-slate-200 mb-6 overflow-hidden min-w-0 w-full">
         {/* Panel header */}
-        <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-navy-950 to-navy-700 flex items-center justify-center shrink-0">
-            <Activity size={13} className="text-yellow-400" />
+        <div className="flex items-center gap-2.5 px-5 py-3 border-b border-slate-100 bg-slate-50/60">
+          <div className="w-6 h-6 rounded-md bg-navy-950 flex items-center justify-center shrink-0">
+            <Activity size={12} className="text-yellow-400" />
           </div>
           <div>
-            <h2 className="text-sm font-bold text-slate-800 leading-none">Operations Control Room</h2>
+            <h2 className="text-xs font-bold text-slate-700 leading-none">Operations Control Room</h2>
             <p className="text-[10px] text-slate-400 mt-0.5">Real-time inventory intelligence</p>
           </div>
           <div className="ml-auto flex items-center gap-1.5">
-            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse inline-block" />
+            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
               Live
             </span>
           </div>
@@ -916,7 +945,7 @@ export default function InventoryPage() {
                     className="transition-all duration-500"
                   />
                 </svg>
-                <span className="absolute inset-0 flex items-center justify-center text-[10px] font-black text-slate-700">
+                <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-slate-700">
                   {insights.healthScore}%
                 </span>
               </div>
@@ -1005,7 +1034,7 @@ export default function InventoryPage() {
                   <DollarSign size={15} />
                 </div>
                 <div className="min-w-0">
-                  <p className={`text-sm font-black ${
+                  <p className={`text-sm font-bold ${
                     insights.avgMargin >= 30 ? 'text-green-600'
                     : insights.avgMargin >= 15 ? 'text-amber-600'
                     : 'text-red-600'
@@ -1065,22 +1094,22 @@ export default function InventoryPage() {
       </div>
 
       {/* ── Professional Sticky Filter Toolbar ──────────────────────────────── */}
-      <div className="sticky top-4 z-20 bg-white/95 backdrop-blur-sm rounded-2xl border border-slate-200 shadow-md mb-3 p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2.5 min-w-0">
+      <div className="sticky top-4 z-20 bg-white/95 backdrop-blur-sm rounded-xl border border-slate-200 shadow-sm mb-3 p-2.5">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
 
           {/* Filters group */}
           <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
             {/* Search */}
             <div className="relative min-w-0">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
               <input
                 id="inv-search"
                 ref={searchRef}
                 type="text"
-                placeholder="Search…  Ctrl+F"
+                placeholder="Search products…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="border border-slate-200 rounded-lg pl-8 pr-3 h-9 text-sm w-44 sm:w-52 md:w-56 focus:outline-none focus:ring-2 focus:ring-amber-400 bg-slate-50 focus:bg-white transition-all placeholder:text-slate-400 placeholder:text-xs"
+                className="border border-slate-200 rounded-lg pl-8 pr-3 h-8 text-xs w-44 sm:w-52 focus:outline-none focus:ring-2 focus:ring-amber-400/50 focus:border-amber-400 bg-slate-50/80 focus:bg-white transition-all placeholder:text-slate-400"
               />
             </div>
 
@@ -1088,7 +1117,7 @@ export default function InventoryPage() {
             <select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
-              className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 max-w-[130px] transition-colors"
+              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 max-w-[130px] transition-colors"
             >
               {categories.map((c) => (
                 <option key={c} value={c}>{c === "All" ? "All Categories" : c}</option>
@@ -1099,7 +1128,7 @@ export default function InventoryPage() {
             <select
               value={brandFilter}
               onChange={(e) => setBrandFilter(e.target.value)}
-              className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 max-w-[130px] transition-colors"
+              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 max-w-[130px] transition-colors"
             >
               {brands.map((b) => (
                 <option key={b} value={b}>{b === "All" ? "All Brands" : b}</option>
@@ -1110,7 +1139,7 @@ export default function InventoryPage() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 transition-colors"
+              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 transition-colors"
             >
               <option value="All">All Status</option>
               <option value="Active">Active</option>
@@ -1122,7 +1151,7 @@ export default function InventoryPage() {
             <select
               value={stockFilter}
               onChange={(e) => setStockFilter(e.target.value as StockFilter)}
-              className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 transition-colors"
+              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 transition-colors"
             >
               <option value="All">All Stock</option>
               <option value="Healthy">Healthy</option>
@@ -1134,50 +1163,22 @@ export default function InventoryPage() {
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
-              className="h-9 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shrink-0 max-w-[160px] transition-colors"
+              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 max-w-[160px] transition-colors"
             >
               {SORT_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
-          </div>
 
-          {/* Action buttons */}
-          <div className="flex items-center gap-1.5 shrink-0 ml-auto flex-wrap">
             {hasActiveFilters && (
               <button
                 onClick={resetFilters}
                 title="Reset all filters (Esc)"
-                className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all cursor-pointer"
+                className="flex items-center gap-1 h-8 px-2.5 rounded-lg text-xs font-medium text-slate-500 hover:text-slate-700 bg-transparent hover:bg-slate-100 border border-transparent hover:border-slate-200 transition-all cursor-pointer"
               >
-                <X size={13} />
+                <X size={12} />
                 Reset
               </button>
-            )}
-            {isOwner && (
-              <>
-                <button
-                  onClick={handleExportCSV}
-                  className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all cursor-pointer"
-                >
-                  <Download size={13} />
-                  Export
-                </button>
-                <button
-                  onClick={() => document.getElementById("csv-import-input")?.click()}
-                  className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all cursor-pointer"
-                >
-                  <Upload size={13} />
-                  Import
-                </button>
-                <button
-                  onClick={() => { setEditingProduct(null); setShowModal(true); }}
-                  className="flex items-center gap-1.5 h-9 px-4 rounded-lg text-xs font-bold text-navy-950 bg-yellow-400 hover:bg-yellow-300 border border-yellow-300 transition-all cursor-pointer shadow-sm"
-                >
-                  <Plus size={14} />
-                  Add Product
-                </button>
-              </>
             )}
           </div>
         </div>
@@ -1224,43 +1225,51 @@ export default function InventoryPage() {
         {filtered.length === 0 ? (
           state.products.length === 0 ? (
             /* ── Empty warehouse state ── */
-            <div className="py-20 flex flex-col items-center gap-4">
-              <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-slate-100 to-slate-50 border border-slate-200 flex items-center justify-center shadow-sm">
-                <Package size={36} className="text-slate-300" />
-              </div>
+            <div className="py-20 flex flex-col items-center gap-5">
+              <svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-200">
+                <rect x="8" y="20" width="56" height="40" rx="4" stroke="currentColor" strokeWidth="2" fill="none"/>
+                <path d="M8 28h56" stroke="currentColor" strokeWidth="2"/>
+                <path d="M28 20V12h16v8" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                <path d="M26 42h20M26 50h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                <circle cx="58" cy="54" r="10" fill="white" stroke="currentColor" strokeWidth="2"/>
+                <path d="M55 54h6M58 51v6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
               <div className="text-center">
-                <p className="text-base font-bold text-slate-700">Warehouse is Empty</p>
-                <p className="text-sm text-slate-400 mt-1 max-w-xs mx-auto leading-relaxed">
-                  No inventory has been added yet. Start by importing a CSV or adding your first product.
+                <p className="text-sm font-bold text-slate-700">Warehouse is Empty</p>
+                <p className="text-xs text-slate-400 mt-1.5 max-w-[280px] mx-auto leading-relaxed">
+                  No products added yet. Use <strong className="text-slate-500">Import</strong> to upload a CSV or add your first product manually.
                 </p>
               </div>
               {isOwner && (
                 <button
                   onClick={() => { setEditingProduct(null); setShowModal(true); }}
-                  className="inline-flex items-center gap-2 bg-yellow-400 hover:bg-yellow-300 text-navy-950 text-sm font-black px-6 py-2.5 rounded-xl transition-all shadow-md active:scale-95 cursor-pointer"
+                  className="inline-flex items-center gap-2 bg-yellow-400 hover:bg-yellow-300 text-navy-950 text-sm font-bold px-5 py-2 rounded-lg transition-colors cursor-pointer"
                 >
-                  <Plus size={15} />
+                  <Plus size={14} />
                   Add First Product
                 </button>
               )}
             </div>
           ) : (
             /* ── No search results state ── */
-            <div className="py-20 flex flex-col items-center gap-4">
-              <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-slate-100 to-slate-50 border border-slate-200 flex items-center justify-center shadow-sm">
-                <Search size={32} className="text-slate-300" />
-              </div>
+            <div className="py-20 flex flex-col items-center gap-5">
+              <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-200">
+                <circle cx="28" cy="28" r="18" stroke="currentColor" strokeWidth="2" fill="none"/>
+                <path d="M41 41l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                <path d="M22 28h12M28 22v12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
               <div className="text-center">
-                <p className="text-base font-bold text-slate-700">No Products Match Your Filters</p>
-                <p className="text-sm text-slate-400 mt-1 max-w-xs mx-auto leading-relaxed">
-                  Try adjusting your search query or clearing the active category and stock filters.
+                <p className="text-sm font-bold text-slate-700">No Products Match</p>
+                <p className="text-xs text-slate-400 mt-1.5 max-w-[260px] mx-auto leading-relaxed">
+                  Try adjusting your search or clearing the active filters.
                 </p>
               </div>
               <button
                 onClick={resetFilters}
-                className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-semibold px-5 py-2 rounded-xl transition-all cursor-pointer"
+                className="inline-flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-4 py-2 rounded-lg transition-colors cursor-pointer border border-slate-200"
               >
-                Reset Filters
+                <X size={12} />
+                Clear Filters
               </button>
             </div>
           )
@@ -1268,8 +1277,8 @@ export default function InventoryPage() {
           <div className="overflow-x-auto min-w-0 w-full">
             <table className="w-full text-sm border-collapse">
               {/* ── Sticky professional header ── */}
-              <thead className="sticky top-0 z-10">
-                <tr className="bg-slate-50 border-b-2 border-slate-200">
+              <thead className="sticky top-0 z-10 shadow-[0_1px_0_0_theme(colors.slate.200)]">
+                <tr className="bg-slate-50/95 backdrop-blur-sm border-b border-slate-200">
                   {/* Select All Checkbox – Owner Only */}
                   {isOwner && (
                     <th className="w-10 pl-4 pr-1 py-3 text-center">
@@ -1359,16 +1368,16 @@ export default function InventoryPage() {
 
                   // Status badge
                   const statusBadge = (product.status || 'Active') === 'Active'
-                    ? <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />Active</span>
+                    ? <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />Active</span>
                     : product.status === 'Inactive'
-                    ? <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-wider bg-slate-100 text-slate-500 border border-slate-300 px-2 py-0.5 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-slate-400 inline-block" />Inactive</span>
-                    : <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-wider bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />Discontinued</span>;
+                    ? <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-slate-100 text-slate-500 border border-slate-200 px-2 py-0.5 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-slate-400 inline-block" />Inactive</span>
+                    : <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />Discontinued</span>;
 
                   return (
                     <Fragment key={product.id}>
                       {/* ── Main row ── */}
                       <tr
-                        className={`border-b border-slate-100 border-l-4 ${accentColor} ${rowBg} hover:bg-slate-50 hover:shadow-sm transition-all duration-150 group`}
+                        className={`border-b border-slate-100 border-l-4 ${accentColor} ${rowBg} hover:bg-slate-50/80 transition-colors duration-100 group`}
                       >
                         {/* Row selection checkbox – Owner Only */}
                         {isOwner && (
@@ -1399,7 +1408,7 @@ export default function InventoryPage() {
                             className="text-left w-full"
                             onClick={() => setExpandedProductId(isExpanded ? null : product.id)}
                           >
-                            <p className="font-semibold text-slate-800 group-hover:text-navy-700 transition-colors text-[13px] leading-tight">
+                            <p className="font-medium text-slate-800 group-hover:text-navy-700 transition-colors text-[13px] leading-tight">
                               {product.name}
                             </p>
                             <p className="font-mono text-[10px] text-slate-400 mt-0.5 tracking-wide">{product.sku}</p>
@@ -1424,12 +1433,12 @@ export default function InventoryPage() {
 
                         {/* Brand */}
                         <td className="px-4 py-3.5 hidden lg:table-cell">
-                          <span className="text-[13px] font-semibold text-slate-700">{product.brand || <span className="text-slate-300">—</span>}</span>
+                          <span className="text-xs text-slate-600">{product.brand || <span className="text-slate-300">—</span>}</span>
                         </td>
 
                         {/* Category */}
                         <td className="px-4 py-3.5 hidden lg:table-cell">
-                          <span className="inline-block text-[10px] font-semibold bg-slate-100 border border-slate-200 text-slate-600 px-2.5 py-1 rounded-md">
+                          <span className="inline-block text-[10px] font-medium bg-slate-50 border border-slate-200 text-slate-500 px-2 py-0.5 rounded">
                             {product.category || '—'}
                           </span>
                         </td>
@@ -1441,23 +1450,23 @@ export default function InventoryPage() {
 
                         {/* Stock – with mini progress bar */}
                         <td className="px-4 py-3.5">
-                          <div className="flex flex-col items-center gap-1 min-w-[60px]">
-                            <span className={`text-xs font-black ${
+                          <div className="flex flex-col items-center gap-1 min-w-[64px]">
+                            <span className={`text-xs font-bold tabular-nums ${
                               outOfStock ? 'text-red-600' : lowStock ? 'text-amber-600' : 'text-slate-800'
                             }`}>
                               {product.stock} <span className="font-normal text-slate-400 text-[9px]">units</span>
                             </span>
                             {/* Progress bar */}
-                            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
                               <div
-                                className={`h-full rounded-full transition-all duration-500 ${barColor}`}
-                                style={{ width: `${Math.max(stockPct, outOfStock ? 0 : 4)}%` }}
+                                className={`h-full rounded-full transition-all duration-300 ${barColor}`}
+                                style={{ width: `${Math.max(stockPct, outOfStock ? 0 : 3)}%` }}
                               />
                             </div>
-                            <span className={`text-[9px] font-bold uppercase tracking-wide ${
+                            <span className={`text-[9px] font-medium ${
                               outOfStock ? 'text-red-500' : lowStock ? 'text-amber-500' : 'text-emerald-600'
                             }`}>
-                              {outOfStock ? 'Out of Stock' : lowStock ? 'Low' : 'Healthy'}
+                              {outOfStock ? 'Out of stock' : lowStock ? 'Low' : 'Healthy'}
                             </span>
                           </div>
                         </td>
@@ -1477,7 +1486,7 @@ export default function InventoryPage() {
                         {/* Margin – owner only */}
                         {isOwner && (
                           <td className="px-4 py-3.5 text-right hidden md:table-cell">
-                            <span className={`inline-block text-[11px] font-black px-2 py-0.5 rounded-md border ${
+                            <span className={`inline-block text-[11px] font-bold tabular-nums px-2 py-0.5 rounded border ${
                               margin >= 30 ? 'bg-green-50 text-green-700 border-green-200'
                               : margin >= 15 ? 'bg-amber-50 text-amber-700 border-amber-200'
                               : 'bg-red-50 text-red-700 border-red-200'
@@ -1521,14 +1530,7 @@ export default function InventoryPage() {
                               </button>
                             )}
 
-                            {/* Movement history – disabled placeholder */}
-                            <button
-                              disabled
-                              title="Movement history (coming soon)"
-                              className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-200 cursor-not-allowed"
-                            >
-                              <ArrowUpDown size={14} />
-                            </button>
+                            {/* Movement history removed – audit: dead button should not be visible */}
 
                             {/* Staff view-only */}
                             {!isOwner && (
@@ -1558,7 +1560,7 @@ export default function InventoryPage() {
                                       {product.isUniversalFit && (
                                         <div className="flex items-center gap-2 bg-amber-50/90 rounded-lg px-3 py-2 border border-amber-200">
                                           <Sparkles size={13} className="text-amber-600 shrink-0" />
-                                          <p className="text-xs font-bold text-amber-900">Universal Fit — All Vehicles</p>
+                                          <p className="text-xs font-bold text-amber-900">Universal Fit — Compatible with all vehicles</p>
                                         </div>
                                       )}
                                       {product.fitments && product.fitments.length > 0 && (
@@ -1581,47 +1583,40 @@ export default function InventoryPage() {
                                   ) : (
                                     <div className="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200/60">
                                       <Info size={13} className="text-slate-400 shrink-0" />
-                                      <p className="text-xs text-slate-500 font-medium italic">No Fitment Configured</p>
+                                      <p className="text-xs text-slate-500 font-medium italic">No specific vehicles configured for this product.</p>
                                     </div>
                                   )}
                                 </div>
                                 <p className="text-[10px] text-slate-400 mt-3 pt-2 border-t border-slate-50 italic">* Fitments match against sales invoicing checklist.</p>
                               </div>
 
-                              {/* Col 2: Recent Activity */}
-                              <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+                              {/* Col 2: Recent Activity — honest empty state, no fake data */}
+                              <div className="bg-white rounded-xl p-4 border border-slate-200">
                                 <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100">
                                   <div className="w-6 h-6 rounded-md bg-blue-50 text-blue-600 flex items-center justify-center">
                                     <Activity size={13} />
                                   </div>
-                                  <h4 className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Recent Activity Ledger</h4>
+                                  <h4 className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Stock Movement</h4>
                                 </div>
-                                <div className="space-y-2.5 max-h-36 overflow-y-auto">
-                                  {[
-                                    { dot: 'bg-emerald-500', label: 'Stock adjustment manually performed', date: 'June 20, 2026', delta: '+10 units', color: 'text-emerald-600' },
-                                    { dot: 'bg-blue-500', label: 'Invoice INV-2026-004 checkout', date: 'June 18, 2026', delta: '-2 units', color: 'text-slate-600' },
-                                    { dot: 'bg-blue-500', label: 'Invoice INV-2026-001 checkout', date: 'June 12, 2026', delta: '-1 unit', color: 'text-slate-600' },
-                                  ].map((entry, i) => (
-                                    <div key={i} className="flex items-start gap-2.5">
-                                      <div className={`w-1.5 h-1.5 rounded-full ${entry.dot} mt-1.5 shrink-0`} />
-                                      <div className="flex-1 min-w-0">
-                                        <p className="text-[11px] font-semibold text-slate-700 leading-tight">{entry.label}</p>
-                                        <span className="text-[10px] text-slate-400">{entry.date}</span>
-                                      </div>
-                                      <span className={`text-[11px] font-extrabold font-mono shrink-0 ${entry.color}`}>{entry.delta}</span>
-                                    </div>
-                                  ))}
+                                <div className="flex flex-col items-center justify-center py-6 gap-2 text-center">
+                                  <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-200">
+                                    <rect x="4" y="8" width="24" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+                                    <path d="M4 13h24" stroke="currentColor" strokeWidth="1.5"/>
+                                    <path d="M10 6v4M22 6v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                                    <path d="M9 19h14M9 23h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                                  </svg>
+                                  <p className="text-[11px] font-medium text-slate-500">Full ledger in Stock Movement tab</p>
+                                  <p className="text-[10px] text-slate-400">Open the product to view real-time activity.</p>
                                 </div>
-                                <p className="text-[10px] text-slate-400 mt-3 pt-2 border-t border-slate-50 italic">AutoVault records checkout logs and manual audits automatically.</p>
                               </div>
 
                               {/* Col 3: Inventory Intelligence */}
-                              <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+                              <div className="bg-white rounded-xl p-4 border border-slate-200">
                                 <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100">
                                   <div className="w-6 h-6 rounded-md bg-violet-50 text-violet-600 flex items-center justify-center">
                                     <TrendingUp size={13} />
                                   </div>
-                                  <h4 className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Inventory Intelligence</h4>
+                                  <h4 className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Quick Intelligence</h4>
                                 </div>
                                 <div className="space-y-1.5 text-xs">
                                   {[
@@ -1817,26 +1812,23 @@ function KpiCard({
   const textBase = isDark ? "text-white" : "text-slate-800";
   const labelColor = isDark ? "text-slate-300" : "text-slate-500";
   const badgeEl = badge === "critical" ? (
-    <span className="text-[9px] font-black uppercase tracking-wider bg-red-100 text-red-700 border border-red-200 px-1.5 py-0.5 rounded-full">
+    <span className="text-[9px] font-bold uppercase tracking-wider bg-red-100 text-red-700 border border-red-200 px-1.5 py-0.5 rounded-full">
       Critical
     </span>
   ) : badge === "warning" ? (
-    <span className="text-[9px] font-black uppercase tracking-wider bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full">
+    <span className="text-[9px] font-bold uppercase tracking-wider bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full">
       Alert
     </span>
   ) : null;
 
   return (
     <div
-      className={`relative overflow-hidden rounded-2xl border ${borderColor} bg-gradient-to-br ${gradient} p-5 flex flex-col gap-3
-        shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all duration-200 cursor-default group`}
+      className={`relative overflow-hidden rounded-xl border ${borderColor} bg-gradient-to-br ${gradient} p-4 flex flex-col gap-3
+        transition-shadow duration-200 cursor-default hover:shadow-md`}
     >
-      {/* Decorative blob */}
-      <div className="absolute -right-4 -top-4 w-16 h-16 rounded-full bg-white/10 blur-xl pointer-events-none" />
-
       {/* Icon + badge row */}
       <div className="flex items-center justify-between">
-        <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${iconGradient} flex items-center justify-center text-white shadow-sm shrink-0 group-hover:scale-110 transition-transform duration-200`}>
+        <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${iconGradient} flex items-center justify-center text-white shrink-0`}>
           {icon}
         </div>
         {badgeEl}
@@ -1844,9 +1836,9 @@ function KpiCard({
 
       {/* Value */}
       <div>
-        <p className={`text-[11px] font-semibold uppercase tracking-wider mb-1 ${labelColor}`}>{label}</p>
-        <p className={`text-2xl font-black tracking-tight ${valueColor ?? textBase} ${
-          isRupee ? 'text-xl' : ''
+        <p className={`text-[10px] font-medium uppercase tracking-wider mb-1 ${labelColor}`}>{label}</p>
+        <p className={`text-xl font-bold tracking-tight ${valueColor ?? textBase} ${
+          isRupee ? 'text-lg' : ''
         }`}>
           {value}
         </p>

@@ -294,30 +294,30 @@ export default function ProductDetailsPage({
 
             {/* Lifecycle Badge */}
             {product.status === "Inactive" ? (
-              <span className="text-[10px] font-black uppercase tracking-wider bg-slate-100 text-slate-500 border border-slate-200 px-2.5 py-0.5 rounded-full">
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-500 border border-slate-200 px-2.5 py-0.5 rounded-full">
                 Inactive
               </span>
             ) : product.status === "Discontinued" ? (
-              <span className="text-[10px] font-black uppercase tracking-wider bg-red-100 text-red-700 border border-red-200 px-2.5 py-0.5 rounded-full animate-pulse">
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-red-100 text-red-700 border border-red-200 px-2.5 py-0.5 rounded-full">
                 Discontinued
               </span>
             ) : (
-              <span className="text-[10px] font-black uppercase tracking-wider bg-green-100 text-green-700 border border-green-200 px-2.5 py-0.5 rounded-full">
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-green-100 text-green-700 border border-green-200 px-2.5 py-0.5 rounded-full">
                 Active
               </span>
             )}
 
             {/* Stock status badge */}
             {outOfStock ? (
-              <span className="text-[10px] font-black uppercase tracking-wider bg-red-100 text-red-600 border border-red-200 px-2.5 py-0.5 rounded-full">
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-red-100 text-red-600 border border-red-200 px-2.5 py-0.5 rounded-full">
                 Out of Stock
               </span>
             ) : lowStock ? (
-              <span className="text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-700 border border-amber-200 px-2.5 py-0.5 rounded-full">
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-700 border border-amber-200 px-2.5 py-0.5 rounded-full">
                 Low Stock
               </span>
             ) : (
-              <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 rounded-full">
                 Healthy Stock
               </span>
             )}
@@ -348,59 +348,63 @@ export default function ProductDetailsPage({
       </div>
 
       {/* ── Main High-Density KPI Grid ── */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3.5">
-        {/* Current Stock */}
-        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col justify-between h-24">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {/* Current Stock — primary metric, given stronger treatment */}
+        <div className={`border p-4 rounded-xl flex flex-col justify-between h-24 ${
+          outOfStock ? 'bg-red-50 border-red-200' : lowStock ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'
+        }`}>
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Current Stock</span>
           <div className="flex items-baseline gap-1">
-            <span className="text-2xl font-black text-slate-800">{currentStock}</span>
-            <span className="text-slate-400 text-xs font-medium">units</span>
+            <span className={`text-2xl font-bold tabular-nums ${
+              outOfStock ? 'text-red-700' : lowStock ? 'text-amber-700' : 'text-slate-800'
+            }`}>{currentStock}</span>
+            <span className="text-slate-400 text-xs font-normal">units</span>
           </div>
         </div>
 
         {/* Opening Stock */}
-        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col justify-between h-24">
+        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Opening Stock</span>
           <div className="flex items-baseline gap-1">
-            <span className="text-2xl font-black text-slate-800">{openingStock}</span>
-            <span className="text-slate-400 text-xs font-medium">units</span>
+            <span className="text-xl font-bold text-slate-700 tabular-nums">{openingStock}</span>
+            <span className="text-slate-400 text-xs font-normal">units</span>
           </div>
         </div>
 
         {/* Reserved Stock */}
-        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col justify-between h-24">
+        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Reserved Stock</span>
           <div className="flex items-baseline gap-1">
-            <span className="text-2xl font-black text-slate-800">{reservedStock}</span>
-            <span className="text-slate-400 text-xs font-medium">units</span>
+            <span className="text-xl font-bold text-slate-500 tabular-nums">{reservedStock}</span>
+            <span className="text-slate-400 text-xs font-normal">units</span>
           </div>
         </div>
 
         {/* Available Stock */}
-        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col justify-between h-24">
+        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Available Stock</span>
           <div className="flex items-baseline gap-1">
-            <span className="text-2xl font-black text-slate-800">{availableStock}</span>
-            <span className="text-slate-400 text-xs font-medium">units</span>
+            <span className="text-xl font-bold text-slate-800 tabular-nums">{availableStock}</span>
+            <span className="text-slate-400 text-xs font-normal">units</span>
           </div>
         </div>
 
         {/* Inventory Value */}
-        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col justify-between h-24">
+        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Inventory Value</span>
           <div className="flex items-baseline gap-0.5">
-            <span className="text-xs font-black text-slate-500">₹</span>
-            <span className="text-2xl font-black text-slate-800">{inventoryValue.toLocaleString()}</span>
+            <span className="text-xs font-medium text-slate-400">₹</span>
+            <span className="text-xl font-bold text-slate-800 tabular-nums">{inventoryValue.toLocaleString()}</span>
           </div>
         </div>
 
         {/* Buy Price - Owner only */}
         {isOwner ? (
-          <div className="bg-slate-50/50 border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col justify-between h-24">
+          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Current Cost</span>
             <div className="flex items-baseline gap-0.5">
-              <span className="text-xs font-black text-slate-400">₹</span>
-              <span className="text-xl font-extrabold text-slate-700">{currentCost.toLocaleString()}</span>
+              <span className="text-xs font-medium text-slate-400">₹</span>
+              <span className="text-xl font-bold text-slate-700 tabular-nums">{currentCost.toLocaleString()}</span>
             </div>
           </div>
         ) : (
@@ -411,21 +415,21 @@ export default function ProductDetailsPage({
         )}
 
         {/* Sell Price */}
-        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col justify-between h-24">
+        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sell Price</span>
           <div className="flex items-baseline gap-0.5">
-            <span className="text-xs font-black text-slate-500">₹</span>
-            <span className="text-xl font-extrabold text-slate-800">{sellPrice.toLocaleString()}</span>
+            <span className="text-xs font-medium text-slate-400">₹</span>
+            <span className="text-xl font-bold text-slate-800 tabular-nums">{sellPrice.toLocaleString()}</span>
           </div>
         </div>
 
         {/* Unit Profit - Owner only */}
         {isOwner ? (
-          <div className="bg-slate-50/50 border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col justify-between h-24">
+          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Unit Profit</span>
             <div className="flex items-baseline gap-0.5">
-              <span className="text-xs font-black text-green-600">₹</span>
-              <span className="text-xl font-extrabold text-green-700">
+              <span className="text-xs font-medium text-green-600">₹</span>
+              <span className="text-xl font-bold text-green-700 tabular-nums">
                 {unitProfit >= 0 ? unitProfit.toLocaleString() : `(${Math.abs(unitProfit).toLocaleString()})`}
               </span>
             </div>
@@ -439,10 +443,10 @@ export default function ProductDetailsPage({
 
         {/* Margin % - Owner only */}
         {isOwner ? (
-          <div className="bg-slate-50/50 border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col justify-between h-24">
+          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Margin</span>
             <div className="flex items-baseline gap-0.5">
-              <span className={`text-xl font-extrabold ${marginPct >= 0 ? "text-green-750" : "text-red-600"}`}>
+              <span className={`text-xl font-bold tabular-nums ${marginPct >= 0 ? "text-green-700" : "text-red-600"}`}>
                 {Math.round(marginPct)}%
               </span>
             </div>
@@ -456,11 +460,11 @@ export default function ProductDetailsPage({
 
         {/* Capital Invested - Owner only */}
         {isOwner ? (
-          <div className="bg-slate-50/50 border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col justify-between h-24">
+          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Capital Invested</span>
             <div className="flex items-baseline gap-0.5">
-              <span className="text-xs font-black text-slate-450">₹</span>
-              <span className="text-xl font-extrabold text-slate-700">{capitalInvested.toLocaleString()}</span>
+              <span className="text-xs font-medium text-slate-400">₹</span>
+              <span className="text-xl font-bold text-slate-700 tabular-nums">{capitalInvested.toLocaleString()}</span>
             </div>
           </div>
         ) : (
@@ -476,21 +480,21 @@ export default function ProductDetailsPage({
         {/* Left Side (Col Span 9) */}
         <div className="lg:col-span-9 space-y-6">
           {/* Tabs bar */}
-          <div className="border-b border-slate-200 flex gap-2 overflow-x-auto text-sm font-semibold scrollbar-hide py-1">
+          <div className="border-b border-slate-200 flex gap-1 overflow-x-auto text-sm scrollbar-hide py-0.5">
             {[
               { id: "overview", label: "Overview" },
               { id: "stock", label: "Stock" },
+              { id: "movement", label: "Stock Movement" },
               { id: "sales", label: "Sales History" },
               { id: "purchases", label: "Purchase History" },
-              { id: "movement", label: "Stock Movement" },
               { id: "vehicles", label: "Compatible Vehicles" },
             ].map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`px-4 py-2 border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+                className={`px-3.5 py-2 border-b-2 text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${
                   activeTab === tab.id
-                    ? "border-navy-950 text-navy-950"
+                    ? "border-navy-950 text-navy-950 font-semibold"
                     : "border-transparent text-slate-450 hover:text-slate-700 hover:border-slate-300"
                 }`}
               >
@@ -553,10 +557,12 @@ export default function ProductDetailsPage({
                     </div>
 
                     {/* Restock Recommendation */}
-                    <div className="border border-slate-200 rounded-2xl p-4 flex flex-col justify-between">
+                    <div className="border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
                       <div>
                         <span className="text-xs text-slate-400 font-semibold block uppercase tracking-wider">Restock Recommendation</span>
-                        <p className={`text-lg font-black mt-2 ${restockQty > 0 ? "text-amber-600 animate-pulse" : "text-green-700"}`}>
+                        <p className={`text-lg font-bold mt-2 ${
+                          restockQty > 0 ? "text-amber-600" : "text-green-700"
+                        }`}>
                           {restockQty > 0 ? `Order ${restockQty} units` : "Adequate Stock"}
                         </p>
                       </div>
@@ -808,12 +814,21 @@ export default function ProductDetailsPage({
             {/* STOCK MOVEMENT TAB */}
             {activeTab === "movement" && (
               <div className="space-y-6">
-                <h3 className="text-base font-black text-slate-800">Stock Movement Ledger</h3>
+                <h3 className="text-base font-bold text-slate-800">Stock Movement Ledger</h3>
 
                 {stockMovements.length === 0 ? (
-                  <div className="py-12 text-center text-slate-400">
+                <div className="py-12 flex flex-col items-center justify-center text-center gap-3">
+                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-200">
+                    <rect x="6" y="12" width="36" height="27" rx="3" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+                    <path d="M6 19h36" stroke="currentColor" strokeWidth="1.5"/>
+                    <path d="M15 9v6M33 9v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                    <path d="M13 28h22M13 34h14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  </svg>
+                  <div>
                     <p className="text-sm font-bold text-slate-600">No movements recorded yet</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Movements appear here after stock adjustments, purchases, or sales.</p>
                   </div>
+                </div>
                 ) : (
                 <div className="relative border-l-2 border-slate-100 ml-4 pl-6 space-y-6">
                   {stockMovements.map((move, idx) => (
@@ -921,7 +936,7 @@ export default function ProductDetailsPage({
                       <Sparkles size={20} />
                     </div>
                     <div>
-                      <p className="text-sm font-black text-amber-950">Universal Fit — All Vehicles</p>
+                      <p className="text-sm font-black text-amber-950">Universal Fit — Compatible with all vehicles</p>
                       <p className="text-xs text-amber-700 font-medium mt-0.5">This product is compatible with all vehicle makes, brands, and models.</p>
                     </div>
                   </div>
@@ -963,7 +978,7 @@ export default function ProductDetailsPage({
                       <Info size={20} />
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-slate-700">No Fitment Configured</p>
+                      <p className="text-sm font-bold text-slate-700">No specific vehicles configured for this product.</p>
                       <p className="text-xs text-slate-400 mt-0.5">No specific vehicle compatibility rules have been added for this product.</p>
                     </div>
                   </div>
@@ -1014,16 +1029,22 @@ export default function ProductDetailsPage({
 
             {/* Notes Disclaimer (Local Only) */}
             <div className="space-y-2">
-              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">
-                Local Notes (Not Synced)
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
+                Local Notes
               </span>
               <textarea
                 placeholder="Write local memos or stock flags for reference..."
-                className="w-full min-h-[90px] border border-slate-200 rounded-xl p-3 text-xs bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-navy-600 transition-all placeholder:text-slate-400 resize-y"
+                className="w-full min-h-[90px] border border-slate-200 rounded-lg p-3 text-xs bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-navy-600/30 focus:border-navy-600 transition-all placeholder:text-slate-400 resize-y"
               />
-              <p className="text-[9px] text-slate-400 italic">
-                These notes reside inside this tab session only and will not be persisted to localStorage.
-              </p>
+              <div className="flex items-start gap-1.5 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-amber-600 shrink-0 mt-0.5">
+                  <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/>
+                  <path d="M6 4v3M6 8.5v.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                </svg>
+                <p className="text-[10px] text-amber-700 font-medium leading-snug">
+                  Not saved. Notes are session-only and lost on navigation.
+                </p>
+              </div>
             </div>
           </div>
         </div>

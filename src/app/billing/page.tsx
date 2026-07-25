@@ -887,7 +887,7 @@ export default function BillingPage() {
                           ) : compatStatus === "unconfigured" ? (
                             <span className="inline-flex items-center gap-1 font-medium text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
                               <Info size={11} className="text-slate-400" />
-                              Compatibility not configured
+                              No specific vehicles configured
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 font-bold text-amber-900 bg-amber-100/90 border border-amber-300 px-2 py-0.5 rounded-md">

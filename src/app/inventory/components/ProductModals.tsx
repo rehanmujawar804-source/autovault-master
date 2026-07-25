@@ -358,7 +358,7 @@ export function ProductFormModal({
             {form.fitments.length === 0 ? (
               <p className="text-xs text-slate-400 italic">
                 {form.isUniversalFit
-                  ? "Universal Fit is enabled. This product fits all vehicle makes and models."
+                  ? "Universal Fit is enabled. Compatible with all vehicles."
                   : "No specific vehicles configured for this product."}
               </p>
             ) : (

@@ -62,6 +62,7 @@ export default function CustomerProfilePage({
     showToast,
     getSalesReturnsByCustomer,
     getInvoiceOutstanding,
+    getCustomerOutstandingBalance,
     updateCustomer,
   } = useStore();
   const { loading, requireAuth } = useRole();
@@ -203,12 +204,10 @@ export default function CustomerProfilePage({
           (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
         )
       : [];
-    // Sum effective outstanding per invoice (subtracts active returns) — never use raw dueAmount
-    const debt = invList
-      .filter((inv) => !inv.voided)
-      .reduce((s, inv) => s + getInvoiceOutstanding(inv), 0);
+    // Authoritative dynamic customer debt calculation
+    const debt = customer ? getCustomerOutstandingBalance(customer.id) : 0;
     return [invList, debt] as const;
-  }, [customer, getInvoicesByCustomer, getInvoiceOutstanding]);
+  }, [customer, getInvoicesByCustomer, getCustomerOutstandingBalance]);
 
   const customerTotalSpent = useMemo(() => {
     if (!customer) return 0;

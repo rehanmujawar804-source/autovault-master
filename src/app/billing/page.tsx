@@ -40,7 +40,7 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function BillingPage() {
-  const { state, addInvoice, getNextInvoiceNumber, showToast, dispatch, createHoldBill, updateHoldBill, deleteHoldBill } = useStore();
+  const { state, addInvoice, getNextInvoiceNumber, showToast, dispatch, createHoldBill, updateHoldBill, deleteHoldBill, getCustomerOutstandingBalance } = useStore();
   const { loading, requireAuth } = useRole();
 
   useEffect(() => {
@@ -71,6 +71,7 @@ export default function BillingPage() {
   const posBrands = useMemo(() => {
     const set = new Set<string>();
     for (const product of state.products) {
+      if ((product.status || "Active") !== "Active" || product.status === "Discontinued") continue;
       for (const fit of product.fitments || []) {
         if (fit.brand) set.add(fit.brand.trim());
       }
@@ -82,6 +83,7 @@ export default function BillingPage() {
     const set = new Set<string>();
     if (!posVehicleBrand) return [];
     for (const product of state.products) {
+      if ((product.status || "Active") !== "Active" || product.status === "Discontinued") continue;
       for (const fit of product.fitments || []) {
         if (fit.brand && fit.brand.trim().toLowerCase() === posVehicleBrand.trim().toLowerCase() && fit.model) {
           set.add(fit.model.trim());
@@ -95,6 +97,7 @@ export default function BillingPage() {
     const set = new Set<string>();
     if (!posVehicleBrand || !posVehicleModel) return [];
     for (const product of state.products) {
+      if ((product.status || "Active") !== "Active" || product.status === "Discontinued") continue;
       for (const fit of product.fitments || []) {
         const sameBrand = fit.brand && fit.brand.trim().toLowerCase() === posVehicleBrand.trim().toLowerCase();
         const sameModel = fit.model && fit.model.trim().toLowerCase() === posVehicleModel.trim().toLowerCase();
@@ -356,7 +359,8 @@ export default function BillingPage() {
 
   // ── Dynamic categories ────────────────────────────────────────────────────
   const categories = useMemo(() => {
-    const cats = Array.from(new Set(state.products.map((p) => p.category))).sort();
+    const sellable = state.products.filter((p) => (p.status || "Active") === "Active" && p.status !== "Discontinued");
+    const cats = Array.from(new Set(sellable.map((p) => p.category))).sort();
     return ["All", ...cats];
   }, [state.products]);
 
@@ -364,7 +368,7 @@ export default function BillingPage() {
 
   // ── Filtered products ─────────────────────────────────────────────────────
   const filteredProducts = useMemo(() => {
-    let list = state.products.filter((p) => (p.status || "Active") === "Active");
+    let list = state.products.filter((p) => (p.status || "Active") === "Active" && p.status !== "Discontinued");
     if (selectedCategory !== "All") list = list.filter((p) => p.category === selectedCategory);
     const q = search.trim().toLowerCase();
     if (!q) return list;
@@ -388,7 +392,7 @@ export default function BillingPage() {
   // ── Cart helpers ──────────────────────────────────────────────────────────
   function addToCart(productId: string) {
     const product = state.products.find((p) => p.id === productId);
-    if (!product || product.stock === 0 || (product.status || "Active") !== "Active") return;
+    if (!product || product.stock === 0 || (product.status || "Active") !== "Active" || product.status === "Discontinued") return;
     setCart((prev) => {
       const existing = prev.find((i) => i.product.id === productId);
       if (existing) {
@@ -429,9 +433,9 @@ export default function BillingPage() {
         showToast(`Product "${item.product.name}" was removed from inventory.`, "error");
         return;
       }
-      if ((liveProduct.status || "Active") !== "Active") {
-        setValidationError(`Product "${liveProduct.name}" is ${liveProduct.status || "Inactive"} and cannot be sold.`);
-        showToast(`Product "${liveProduct.name}" is not active.`, "error");
+      if ((liveProduct.status || "Active") !== "Active" || liveProduct.status === "Discontinued") {
+        setValidationError(`Product "${liveProduct.name}" is ${liveProduct.status || "Inactive/Discontinued"} and cannot be sold.`);
+        showToast(`Product "${liveProduct.name}" is not active for sale.`, "error");
         return;
       }
       if (item.quantity > liveProduct.stock) {
@@ -1134,10 +1138,10 @@ export default function BillingPage() {
                       <p className="font-extrabold text-slate-800 text-sm">{customerName}</p>
                       <p className="text-xs text-slate-500">{customerPhone}</p>
                       {(() => {
-                        const c = state.customers.find((c) => c.id === selectedCustomerId);
-                        return c && c.debt > 0 ? (
+                        const currentDebt = selectedCustomerId ? getCustomerOutstandingBalance(selectedCustomerId) : 0;
+                        return currentDebt > 0 ? (
                           <span className="mt-1 inline-block text-[10px] bg-red-50 text-red-600 border border-red-100 px-2 py-0.5 rounded-full font-bold">
-                            ⚠ ₹{c.debt.toLocaleString()} debt
+                            ⚠ ₹{currentDebt.toLocaleString()} debt
                           </span>
                         ) : null;
                       })()}
@@ -1178,11 +1182,14 @@ export default function BillingPage() {
                                 <p className="text-sm font-bold text-slate-800">{c.name}</p>
                                 <p className="text-xs text-slate-500">{c.phone}</p>
                               </div>
-                              {c.debt > 0 && (
-                                <span className="text-[10px] bg-red-50 text-red-600 px-2 py-0.5 rounded-full font-bold border border-red-100">
-                                  ₹{c.debt.toLocaleString()} due
-                                </span>
-                              )}
+                              {(() => {
+                                const debt = getCustomerOutstandingBalance(c.id);
+                                return debt > 0 ? (
+                                  <span className="text-[10px] bg-red-50 text-red-600 px-2 py-0.5 rounded-full font-bold border border-red-100">
+                                    ₹{debt.toLocaleString()} due
+                                  </span>
+                                ) : null;
+                              })()}
                             </button>
                           ))
                         )}

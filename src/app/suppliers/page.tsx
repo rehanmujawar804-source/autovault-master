@@ -375,9 +375,6 @@ export default function SuppliersPage() {
     return { allocations, totalAllocated, unallocated };
   }, [lumpSumSupplier, lumpSumAmountInput, state.purchases, state.purchaseReturns, state.supplierPayments]);
 
-  // Block render until guard has resolved
-  if (loading || !isOwner) return null;
-
   const suppliers = state.suppliers || [];
   const purchases = state.purchases || [];
 
@@ -425,6 +422,9 @@ export default function SuppliersPage() {
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [suppliers, search, statusFilter]);
+
+  // Block render until guard has resolved — placed after all hooks to satisfy Rules of Hooks
+  if (loading || !isOwner) return null;
 
   function openAdd() { setEditingSupplier(null); setShowModal(true); }
   function openEdit(supplier: Supplier, e: React.MouseEvent) {

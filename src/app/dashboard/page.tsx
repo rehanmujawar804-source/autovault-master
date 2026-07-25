@@ -49,6 +49,7 @@ export default function DashboardPage() {
     getTotalOutstandingDebt,
     getInventoryValue,
     getInvoiceOutstanding,
+    getCustomerOutstandingBalance,
   } = useStore();
 
   const { isOwner, loading, requireAuth } = useRole();
@@ -117,17 +118,10 @@ export default function DashboardPage() {
       .sort((a, b) => b.qty - a.qty)
       .slice(0, 5);
 
-    // High debt customers — derived from invoice effective dues (not cached customer.debt)
-    const debtByCustomerId: Record<string, number> = {};
-    invoices.forEach((inv) => {
-      const effOutstanding = getInvoiceOutstanding(inv);
-      if (inv.customerId && effOutstanding > 0) {
-        debtByCustomerId[inv.customerId] = (debtByCustomerId[inv.customerId] ?? 0) + effOutstanding;
-      }
-    });
-    const highDebtCustomers = [...state.customers]
-      .filter((c) => (debtByCustomerId[c.id] ?? 0) > 0)
-      .map((c) => ({ ...c, debt: debtByCustomerId[c.id] ?? 0 }))
+    // High debt customers — derived from authoritative dynamic customer outstanding balance
+    const highDebtCustomers = state.customers
+      .map((c) => ({ ...c, debt: getCustomerOutstandingBalance(c.id) }))
+      .filter((c) => c.debt > 0)
       .sort((a, b) => b.debt - a.debt)
       .slice(0, 5);
 
@@ -347,7 +341,7 @@ export default function DashboardPage() {
                   </div>
                   <p className="text-xs text-red-650 mt-1.5 leading-relaxed">
                     A total of <span className="font-bold text-red-700">₹{totalDebt.toLocaleString()}</span> outstanding customer debt is recorded across{" "}
-                    <span className="font-bold text-red-700">{state.customers.filter((c) => c.debt > 0).length} accounts</span>.
+                    <span className="font-bold text-red-700">{state.customers.filter((c) => getCustomerOutstandingBalance(c.id) > 0).length} accounts</span>.
                   </p>
                 </div>
                 <Link

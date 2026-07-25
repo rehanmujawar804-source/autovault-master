@@ -3209,7 +3209,7 @@ interface ReturnPurchaseModalProps {
   addPurchaseReturn: (
     record: Omit<PurchaseReturn, "id" | "createdAt" | "originalPurchaseQuantity" | "originalPurchaseValue">,
     refundMethod: PaymentMethod | "Adjustment"
-  ) => void;
+  ) => boolean | void;
 }
 
 function ReturnPurchaseModal({
@@ -3245,9 +3245,11 @@ function ReturnPurchaseModal({
   }
 
   function validate(): string | null {
+    if (!product) return "Purchase return cannot be completed. The selected product no longer exists in inventory.";
     if (!reason.trim()) return "Please enter a reason for the return.";
     if (parsedQty <= 0 || !Number.isInteger(parsedQty)) return "Return quantity must be a whole positive number.";
     if (parsedQty > availableQty) return `Cannot return more than ${availableQty} unit(s) available on this purchase.`;
+    if (parsedQty > product.stock) return `Cannot complete purchase return: requested ${parsedQty} units, but only ${product.stock} units are currently in stock.`;
     if (parsedRefund < 0) return "Refund amount cannot be negative.";
     if (parsedRefund > returnTotal) return `Refund cannot exceed return value of ₹${returnTotal.toLocaleString()}.`;
     if (refundMethod !== "Adjustment" && parsedRefund === 0) return "Enter the refund amount, or choose 'Adjustment' if no money is returned.";
@@ -3259,7 +3261,7 @@ function ReturnPurchaseModal({
     if (err) { setError(err); return; }
     setError("");
 
-    addPurchaseReturn(
+    const isOk = addPurchaseReturn(
       {
         purchaseId: purchase.id,
         supplierId: purchase.supplierId,
@@ -3274,12 +3276,14 @@ function ReturnPurchaseModal({
       refundMethod
     );
 
-    showToast(
-      `Return recorded: ${parsedQty} unit(s) of ${product?.name ?? "product"}`,
-      "success"
-    );
-    setSuccess(true);
-    setTimeout(() => onClose(), 2000);
+    if (isOk !== false) {
+      showToast(
+        `Return recorded: ${parsedQty} unit(s) of ${product?.name ?? "product"}`,
+        "success"
+      );
+      setSuccess(true);
+      setTimeout(() => onClose(), 2000);
+    }
   }
 
   const REFUND_METHODS: { value: PaymentMethod | "Adjustment"; label: string; color: string }[] = [

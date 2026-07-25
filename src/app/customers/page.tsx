@@ -53,6 +53,7 @@ export default function CustomersPage() {
     getCustomerOutstandingInvoices,
     getDebtPaymentsByCustomer,
     getInvoiceOutstanding,
+    getCustomerOutstandingBalance,
     updateCustomer,
     showToast,
   } = useStore();
@@ -193,13 +194,11 @@ export default function CustomersPage() {
   // ── Derived stats (from invoice dues, not customer.debt cache) ────────────
   const stats = useMemo(() => {
     const customers = state.customers;
-    // Derive each customer's real debt from invoices
+    // Derive each customer's real debt using authoritative helper
     const debtByCustomer: Record<string, number> = {};
-    for (const inv of state.invoices) {
-      const effOutstanding = getInvoiceOutstanding(inv);
-      if (inv.customerId && effOutstanding > 0 && !inv.voided) {
-        debtByCustomer[inv.customerId] = (debtByCustomer[inv.customerId] ?? 0) + effOutstanding;
-      }
+    for (const c of customers) {
+      const bal = getCustomerOutstandingBalance(c.id);
+      if (bal > 0) debtByCustomer[c.id] = bal;
     }
     const totalDebt = Object.values(debtByCustomer).reduce((s, d) => s + d, 0);
     const highDebt = customers.filter((c) => (debtByCustomer[c.id] ?? 0) >= HIGH_DEBT_THRESHOLD);

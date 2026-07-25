@@ -222,36 +222,46 @@ export default function ProductDetailsPage({
       refUrl?: string;
     }> = [];
 
-    // Sales events (derived from invoices)
+    // Stored stock movements from state (Purchase, Adjustment, Opening Stock, Sales Return, Purchase Return, and Sale)
+    const stored = (state.stockMovements || []).filter((m) => m.productId === id);
+
+    // Track invoice numbers that ALREADY have a recorded "Sale" movement in state.stockMovements
+    const recordedSaleInvoices = new Set(
+      stored.filter((m) => m.type === "Sale").map((m) => m.reference)
+    );
+
+    // Backward compatibility: Synthesize sales events from invoices ONLY if not already recorded in state.stockMovements
     productSales.forEach((inv) => {
-      const item = inv.items.find((i) => i.productId === id);
-      if (item) {
-        list.push({
-          date: inv.date,
-          type: "Sale",
-          delta: -item.quantity,
-          desc: `Sold to ${inv.customer}`,
-          reference: inv.invoiceNumber,
-          refUrl: `/invoices/${inv.id}`,
-        });
+      if (!recordedSaleInvoices.has(inv.invoiceNumber)) {
+        const item = inv.items.find((i) => i.productId === id);
+        if (item) {
+          list.push({
+            date: inv.date,
+            type: "Sale",
+            delta: -item.quantity,
+            desc: `Sold to ${inv.customer}`,
+            reference: inv.invoiceNumber,
+            refUrl: `/invoices/${inv.id}`,
+          });
+        }
       }
     });
 
-    // Stored stock movements from state (Purchase, Adjustment, Opening Stock)
-    const stored = (state.stockMovements || []).filter((m) => m.productId === id);
     stored.forEach((m) => {
+      const matchingInv = m.type === "Sale" ? state.invoices.find((inv) => inv.invoiceNumber === m.reference) : undefined;
       list.push({
         date: m.date,
         type: m.type,
         delta: m.delta,
         desc: m.desc,
         reference: m.reference,
+        refUrl: matchingInv ? `/invoices/${matchingInv.id}` : undefined,
       });
     });
 
     // Sort newest first
     return list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [productSales, state.stockMovements, id]);
+  }, [productSales, state.stockMovements, state.invoices, id]);
 
   // Purchases from store for this product
   const productPurchases = useMemo(() => {
@@ -817,8 +827,10 @@ export default function ProductDetailsPage({
                             ? "border-emerald-500 text-emerald-500"
                             : move.type === "Purchase Return"
                             ? "border-rose-500 text-rose-500"
-                            : move.type === "Return"
+                            : move.type === "Return" || move.type === "Sales Return"
                             ? "border-violet-500 text-violet-500"
+                            : move.type === "Invoice Void"
+                            ? "border-purple-600 text-purple-600"
                             : move.type === "Opening Stock"
                             ? "border-green-600 text-green-600"
                             : move.type === "Adjustment"
@@ -834,8 +846,10 @@ export default function ProductDetailsPage({
                               ? "bg-emerald-500"
                               : move.type === "Purchase Return"
                               ? "bg-rose-500"
-                              : move.type === "Return"
+                              : move.type === "Return" || move.type === "Sales Return"
                               ? "bg-violet-500"
+                              : move.type === "Invoice Void"
+                              ? "bg-purple-600"
                               : move.type === "Opening Stock"
                               ? "bg-green-600"
                               : move.type === "Adjustment"
@@ -853,7 +867,8 @@ export default function ProductDetailsPage({
                               move.type === "Sale" ? "bg-blue-50 text-blue-600"
                               : move.type === "Purchase" ? "bg-emerald-50 text-emerald-700"
                               : move.type === "Purchase Return" ? "bg-rose-50 text-rose-700"
-                              : move.type === "Return" ? "bg-violet-50 text-violet-750"
+                              : move.type === "Return" || move.type === "Sales Return" ? "bg-violet-50 text-violet-750"
+                              : move.type === "Invoice Void" ? "bg-purple-50 text-purple-700"
                               : move.type === "Opening Stock" ? "bg-green-50 text-green-700"
                               : move.type === "Adjustment" ? "bg-amber-50 text-amber-700"
                               : "bg-slate-100 text-slate-500"

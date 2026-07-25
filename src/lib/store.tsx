@@ -518,10 +518,81 @@ function calcPaymentStatus(due: number, total: number): PaymentStatus {
 }
 
 // ─────────────────────────────────────────────
+//  REDUCER-LEVEL RBAC HARDENING
+// ─────────────────────────────────────────────
+
+/**
+ * Authoritative set of reducer action types restricted to Owner.
+ * Direct action dispatches targeting these types will be validated at the reducer boundary.
+ */
+const OWNER_ONLY_ACTIONS = new Set<Action["type"]>([
+  // Products Management
+  "ADD_PRODUCT",
+  "UPDATE_PRODUCT",
+  "ADJUST_STOCK",
+  "BULK_ASSIGN_FITMENT",
+  "BULK_REMOVE_FITMENT",
+
+  // Suppliers & Procurement
+  "ADD_SUPPLIER",
+  "UPDATE_SUPPLIER",
+  "ADD_PURCHASE",
+  "UPDATE_PURCHASE",
+  "RECORD_SUPPLIER_PAYMENT",
+  "RECORD_SUPPLIER_PAYMENT_FIFO",
+  "ADD_PURCHASE_RETURN",
+
+  // Purchase Orders
+  "CREATE_PURCHASE_ORDER",
+  "UPDATE_PURCHASE_ORDER",
+  "DELETE_PURCHASE_ORDER",
+  "MARK_PURCHASE_ORDER_SENT",
+  "MARK_PURCHASE_ORDER_CANCELLED",
+  "COMPLETE_PURCHASE_ORDER",
+  "CONFIRM_PURCHASE_ORDER",
+  "RECORD_PO_ACTIVITY",
+
+  // Financial Configuration & Danger Zone
+  "SET_OPENING_BALANCES",
+  "RECORD_BUSINESS_MONEY_IN",
+  "RESET_STORE",
+
+  // Owner-only Invoice / Debt Payment / Return Void & Modifies
+  "VOID_INVOICE",
+  "VOID_DEBT_PAYMENT",
+  "CANCEL_SALES_RETURN",
+  "MODIFY_SALES_RETURN",
+]);
+
+/**
+ * Pure authorization check for reducer actions.
+ * Centralized defense-in-depth security layer operating at the reducer dispatch boundary.
+ *
+ * NOTE: Role verification reads from localStorage ("role"). This acts as defense-in-depth
+ * at the dispatch boundary and is NOT a substitute for server-grade authentication.
+ */
+function isActionAuthorized(action: Action): boolean {
+  if (!OWNER_ONLY_ACTIONS.has(action.type)) {
+    return true; // Staff-permitted actions and internal utility actions pass through
+  }
+  if (typeof window === "undefined") {
+    return true; // SSR / initial server render
+  }
+  const currentRole = localStorage.getItem("role");
+  return currentRole === "owner";
+}
+
+// ─────────────────────────────────────────────
 //  REDUCER
 // ─────────────────────────────────────────────
 
 function reducer(state: AppState, action: Action): AppState {
+  // Reducer-level RBAC Guard: Block unauthorized staff dispatches of owner-only actions
+  if (!isActionAuthorized(action)) {
+    console.warn(`[AutoVault RBAC] Blocked unauthorized action dispatch: "${action.type}". User is not Owner.`);
+    return state;
+  }
+
   switch (action.type) {
 
     // ── Products ──────────────────────────────
@@ -739,10 +810,27 @@ function reducer(state: AppState, action: Action): AppState {
         });
       }
 
+      // Log StockMovements for sold items
+      const newInvoiceStockMovements = [...(state.stockMovements || [])];
+      inv.items.forEach((item) => {
+        if (item.quantity > 0) {
+          newInvoiceStockMovements.push({
+            id: generateUniqueId("sm"),
+            productId: item.productId,
+            type: "Sale" as const,
+            delta: -item.quantity,
+            date: inv.createdAt || (inv.date ? inv.date + "T12:00:00.000Z" : new Date().toISOString()),
+            desc: `Sold to ${inv.customer || "Walk-in Customer"}`,
+            reference: inv.invoiceNumber,
+          });
+        }
+      });
+
       return {
         ...state,
         invoices: newInvoices,
         products: newProducts,
+        stockMovements: newInvoiceStockMovements,
         customers: newCustomers,
         financeTransactions: newInvoiceFinanceTxs,
       };
@@ -1105,10 +1193,10 @@ function reducer(state: AppState, action: Action): AppState {
           movements.push({
             id: generateUniqueId("sm"),
             productId: item.productId,
-            type: "Adjustment" as const,
+            type: "Invoice Void" as const,
             delta: unreturnedQty,
             date: voidedAt,
-            desc: "Invoice Voided",
+            desc: "Stock Restored (Invoice Voided)",
             reference: invoice.invoiceNumber,
           });
         }
@@ -1382,12 +1470,32 @@ function reducer(state: AppState, action: Action): AppState {
     case "UPDATE_PURCHASE": {
       const { purchaseId, invoiceNumber, date, notes } = action;
       
+      const targetPurchase = (state.purchases || []).find((p) => p.id === purchaseId);
+      const origRef = targetPurchase ? (targetPurchase.invoiceNumber || targetPurchase.id) : purchaseId;
+
       // Update purchase fields
       const newPurchases = (state.purchases || []).map((p) =>
         p.id === purchaseId
           ? { ...p, invoiceNumber, date, notes }
           : p
       );
+
+      // Sync linked stock movement metadata (date and reference) without creating a new movement
+      const newStockMovements = (state.stockMovements || []).map((sm) => {
+        if (
+          sm.type === "Purchase" &&
+          targetPurchase &&
+          sm.productId === targetPurchase.productId &&
+          (sm.reference === origRef || sm.reference === invoiceNumber || sm.reference === purchaseId)
+        ) {
+          return {
+            ...sm,
+            date: date ? date + "T12:00:00.000Z" : sm.date,
+            reference: invoiceNumber || sm.reference,
+          };
+        }
+        return sm;
+      });
 
       // Sync upfront payment date if any
       const newPayments = (state.supplierPayments || []).map((sp) =>
@@ -1406,6 +1514,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         purchases: newPurchases,
+        stockMovements: newStockMovements,
         supplierPayments: newPayments,
         financeTransactions: newFinanceTransactions,
       };
@@ -2124,7 +2233,7 @@ function reducer(state: AppState, action: Action): AppState {
         newStockMovements.push({
           id: generateUniqueId("sm"),
           productId: ri.productId,
-          type: "Adjustment" as const,
+          type: "Sales Return" as const,
           delta: -ri.quantity,
           date: cancelledAt,
           desc: `Sales Return Cancelled — ${target.returnNumber}`,
@@ -2136,7 +2245,7 @@ function reducer(state: AppState, action: Action): AppState {
           newStockMovements.push({
             id: generateUniqueId("sm"),
             productId: exItem.productId,
-            type: "Adjustment" as const,
+            type: "Sales Return" as const,
             delta: exItem.quantity,
             date: cancelledAt,
             desc: `Exchange Replacement Cancelled — ${target.returnNumber}`,
@@ -2413,7 +2522,7 @@ interface StoreContextValue {
     note?: string;
     paidBy?: "Owner" | "Staff";
   }) => void;
-  addPurchaseReturn: (record: Omit<PurchaseReturn, "id" | "createdAt" | "originalPurchaseQuantity" | "originalPurchaseValue">, refundMethod: PaymentMethod | "Adjustment") => void;
+  addPurchaseReturn: (record: Omit<PurchaseReturn, "id" | "createdAt" | "originalPurchaseQuantity" | "originalPurchaseValue">, refundMethod: PaymentMethod | "Adjustment") => boolean;
   getSupplierPaymentsBySupplier: (supplierId: string) => SupplierPayment[];
   getSupplierPaymentsByPurchase: (purchaseId: string) => SupplierPayment[];
   getPurchaseReturnsByPurchase: (purchaseId: string) => PurchaseReturn[];
@@ -2445,6 +2554,7 @@ interface StoreContextValue {
   getInvoiceById: (id: string) => Invoice | undefined;
   getInvoicesByCustomer: (customerId: string) => Invoice[];
   getCustomerOutstandingInvoices: (customerId: string) => Invoice[];
+  getCustomerOutstandingBalance: (customerId: string) => number;
   getDebtPaymentsByInvoice: (invoiceId: string) => DebtPayment[];
   getDebtPaymentsByCustomer: (customerId: string) => DebtPayment[];
   getTotalRevenue: () => number;
@@ -2600,10 +2710,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function voidInvoice(invoiceId: string, reason: string, voidedBy: string) {
+    if (!isOwnerAllowed()) return;
     dispatch({ type: "VOID_INVOICE", invoiceId, reason, voidedBy });
   }
 
   function addProduct(product: Omit<Product, "id">) {
+    if (!isOwnerAllowed()) return;
     const duplicate = state.products.find(
       (p) => p.sku.trim().toLowerCase() === product.sku.trim().toLowerCase()
     );
@@ -2625,6 +2737,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function updateProduct(product: Product) {
+    if (!isOwnerAllowed()) return;
     const duplicate = state.products.find(
       (p) =>
         p.sku.trim().toLowerCase() === product.sku.trim().toLowerCase() &&
@@ -2645,6 +2758,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function adjustStock(productId: string, delta: number) {
+    if (!isOwnerAllowed()) return;
     dispatch({ type: "ADJUST_STOCK", productId, delta });
   }
 
@@ -2652,6 +2766,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     productIds: string[],
     fitment: VehicleFitment
   ): { processedCount: number; addedCount: number; skippedCount: number } {
+    if (!isOwnerAllowed()) return { processedCount: 0, addedCount: 0, skippedCount: 0 };
     const targetProducts = state.products.filter((p) => productIds.includes(p.id));
     let addedCount = 0;
     let skippedCount = 0;
@@ -2678,6 +2793,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     productIds: string[],
     fitment: VehicleFitment
   ): { processedCount: number; removedCount: number; skippedCount: number } {
+    if (!isOwnerAllowed()) return { processedCount: 0, removedCount: 0, skippedCount: 0 };
     const targetProducts = state.products.filter((p) => productIds.includes(p.id));
     let removedCount = 0;
     let skippedCount = 0;
@@ -2738,6 +2854,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function voidDebtPayment(paymentId: string, reason: string, voidedBy: string) {
+    if (!isOwnerAllowed()) return;
     dispatch({ type: "VOID_DEBT_PAYMENT", paymentId, reason, voidedBy });
   }
 
@@ -2834,6 +2951,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }
 
+  /** Calculates authoritative customer outstanding balance from non-voided invoices minus active returns */
+  function getCustomerOutstandingBalance(customerId: string): number {
+    return (state.invoices || [])
+      .filter((inv) => inv.customerId === customerId && !inv.voided)
+      .reduce((sum, inv) => sum + getInvoiceOutstanding(inv), 0);
+  }
+
   /** All repayment records for a specific invoice */
   function getDebtPaymentsByInvoice(invoiceId: string) {
     return (state.debtPayments ?? []).filter(
@@ -2877,7 +3001,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   function getNextInvoiceNumber() {
     const year = new Date().getFullYear();
-    const count = state.invoices.length + 1;
     const prefix = (() => {
       try {
         const raw = typeof window !== "undefined" ? localStorage.getItem("autovault_settings") : null;
@@ -2888,10 +3011,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return "INV";
       }
     })();
-    return `${prefix}-${year}-${String(count).padStart(4, "0")}`;
+
+    let maxSeq = 0;
+    const prefixYearRegex = new RegExp(`^${prefix}-${year}-(\\d+)$`, "i");
+    const anySeqRegex = new RegExp(`-${year}-(\\d+)$`, "i");
+
+    (state.invoices || []).forEach((inv) => {
+      if (!inv.invoiceNumber) return;
+      const matchPrefix = inv.invoiceNumber.match(prefixYearRegex);
+      if (matchPrefix) {
+        const num = parseInt(matchPrefix[1], 10);
+        if (!isNaN(num) && num > maxSeq) maxSeq = num;
+      } else {
+        const matchAny = inv.invoiceNumber.match(anySeqRegex);
+        if (matchAny) {
+          const num = parseInt(matchAny[1], 10);
+          if (!isNaN(num) && num > maxSeq) maxSeq = num;
+        }
+      }
+    });
+
+    const nextSeq = maxSeq + 1;
+    return `${prefix}-${year}-${String(nextSeq).padStart(4, "0")}`;
   }
 
-  // ── Procurement Role Guard ───────────────────────────────────────────────
+  // ── Role Guards ───────────────────────────────────────────────
   // Reads role directly from localStorage so the guard works even if called
   // programmatically (e.g. via DevTools) without going through the UI layer.
   function isProcurementAllowed(): boolean {
@@ -2899,6 +3043,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const role = localStorage.getItem("role");
     if (role !== "owner") {
       showToast("Access denied. Owner only.", "error");
+      return false;
+    }
+    return true;
+  }
+
+  function isOwnerAllowed(): boolean {
+    if (typeof window === "undefined") return true; // SSR — allow
+    const role = localStorage.getItem("role");
+    if (role !== "owner") {
+      showToast("Access denied. Owner authorization required.", "error");
       return false;
     }
     return true;
@@ -3026,6 +3180,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function updatePurchase(purchaseId: string, invoiceNumber: string, date: string, notes: string) {
+    if (!isProcurementAllowed()) return;
     dispatch({ type: "UPDATE_PURCHASE", purchaseId, invoiceNumber, date, notes });
   }
 
@@ -3060,11 +3215,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   function addPurchaseReturn(
     record: Omit<PurchaseReturn, "id" | "createdAt" | "originalPurchaseQuantity" | "originalPurchaseValue">,
     refundMethod: PaymentMethod | "Adjustment"
-  ) {
-    if (!isProcurementAllowed()) return;
+  ): boolean {
+    if (!isProcurementAllowed()) return false;
     const origPurchase = (state.purchases || []).find((p) => p.id === record.purchaseId);
-    const originalPurchaseQuantity = origPurchase ? origPurchase.quantity : 0;
-    const originalPurchaseValue = origPurchase ? (origPurchase.totalAmount ?? (origPurchase.buyPrice * origPurchase.quantity)) : 0;
+    if (!origPurchase) {
+      showToast("Purchase return failed: Selected purchase record was not found.", "error");
+      return false;
+    }
+
+    const availableQty = origPurchase.quantity - (origPurchase.returnedQuantity ?? 0);
+    if (record.quantity <= 0) {
+      showToast("Purchase return failed: Return quantity must be greater than 0.", "error");
+      return false;
+    }
+
+    if (record.quantity > availableQty) {
+      showToast(`Purchase return failed: Cannot return more than ${availableQty} unit(s) available on this purchase.`, "error");
+      return false;
+    }
+
+    const product = (state.products || []).find((p) => p.id === origPurchase.productId);
+    if (!product) {
+      showToast("Purchase return failed: Selected product no longer exists in inventory.", "error");
+      return false;
+    }
+
+    if (record.quantity > product.stock) {
+      showToast(
+        `Cannot complete purchase return: requested ${record.quantity} units, but only ${product.stock} units are currently in stock.`,
+        "error"
+      );
+      return false;
+    }
+
+    const originalPurchaseQuantity = origPurchase.quantity;
+    const originalPurchaseValue = origPurchase.totalAmount ?? (origPurchase.buyPrice * origPurchase.quantity);
 
     const returnRecord: PurchaseReturn = {
       ...record,
@@ -3074,6 +3259,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       originalPurchaseValue,
     };
     dispatch({ type: "ADD_PURCHASE_RETURN", returnRecord, refundMethod });
+    return true;
   }
 
   function getSupplierPaymentsBySupplier(supplierId: string) {
@@ -3330,10 +3516,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function cancelSalesReturn(returnId: string, reason: string, cancelledBy: string): void {
+    if (!isOwnerAllowed()) return;
     dispatch({ type: "CANCEL_SALES_RETURN", returnId, reason, voidedBy: cancelledBy });
   }
 
   function updateSalesReturn(returnId: string, refundAmount: number, notes: string): void {
+    if (!isOwnerAllowed()) return;
     dispatch({ type: "MODIFY_SALES_RETURN", returnId, refundAmount, notes });
   }
 
@@ -3445,6 +3633,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         getInvoiceById,
         getInvoicesByCustomer,
         getCustomerOutstandingInvoices,
+        getCustomerOutstandingBalance,
         getDebtPaymentsByInvoice,
         getDebtPaymentsByCustomer,
         getTotalRevenue,

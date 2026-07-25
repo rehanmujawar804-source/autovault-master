@@ -151,7 +151,8 @@ export type StockMovementType =
   | "Adjustment"
   | "Return"
   | "Import"
-  | "Sales Return";
+  | "Sales Return"
+  | "Invoice Void";
 
 export interface StockMovement {
   id: string;

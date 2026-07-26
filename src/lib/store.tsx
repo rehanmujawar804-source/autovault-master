@@ -649,7 +649,16 @@ function reducer(state: AppState, action: Action): AppState {
     }
 
     case "UPDATE_PRODUCT": {
-      const normalizedProd = normalizeProduct(action.product);
+      const existingProduct = state.products.find((p) => p.id === action.product.id);
+      const stockToKeep = existingProduct ? existingProduct.stock : action.product.stock;
+      const createdAtToKeep = existingProduct
+        ? (action.product.createdAt || existingProduct.createdAt)
+        : action.product.createdAt;
+      const normalizedProd = normalizeProduct({
+        ...action.product,
+        stock: stockToKeep,
+        createdAt: createdAtToKeep,
+      });
       return {
         ...state,
         products: state.products.map((p) =>

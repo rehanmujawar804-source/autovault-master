@@ -5,7 +5,7 @@ import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import type { Invoice, PaymentMethod, PaymentStatus } from "@/types";
 import Link from "next/link";
-import { formatInvoiceDate, formatRepaymentDate } from "@/lib/dateUtils";
+import { formatInvoiceDate, formatRepaymentDate, sortInvoicesDescending } from "@/lib/dateUtils";
 import {
   Search,
   FileText,
@@ -105,9 +105,7 @@ export default function InvoicesPage() {
 
   // ── Filtered invoices ─────────────────────────────────────────────────────
   const filtered = useMemo(() => {
-    let list = [...state.invoices].sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-    );
+    let list = sortInvoicesDescending(state.invoices);
     if (filter !== "All") {
       list = list.filter((i) => i.paymentStatus === filter);
     }

@@ -5,6 +5,7 @@ import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { formatDateOnlyIST, formatInvoiceDate, sortInvoicesDescending } from "@/lib/dateUtils";
 import {
   ArrowLeft,
   Pencil,
@@ -86,11 +87,12 @@ export default function ProductDetailsPage({
     }
   }, [tabParam]);
 
-  // Dynamic Sales Filtering for this product
+  // Dynamic Sales Filtering for this product (newest first)
   const productSales = useMemo(() => {
-    return state.invoices.filter(
+    const list = state.invoices.filter(
       (inv) => !inv.voided && inv.items.some((item) => item.productId === id)
     );
+    return sortInvoicesDescending(list);
   }, [state.invoices, id]);
 
   const salesStats = useMemo(() => {
@@ -101,10 +103,7 @@ export default function ProductDetailsPage({
     let lastInvNo = "—";
     let lastInvId = "";
 
-    // Sort invoices chronologically (newest first for recent display, oldest first for computations)
-    const sortedSales = [...productSales].sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
-    );
+    // Calculate total units sold across non-voided invoices
 
     productSales.forEach((inv) => {
       inv.items.forEach((item) => {
@@ -123,9 +122,9 @@ export default function ProductDetailsPage({
       units -= item.quantity;
     });
 
-    if (sortedSales.length > 0) {
-      const lastInv = sortedSales[sortedSales.length - 1];
-      lastDate = lastInv.date;
+    if (productSales.length > 0) {
+      const lastInv = productSales[0];
+      lastDate = formatInvoiceDate(lastInv);
       lastCust = lastInv.customer;
       lastInvNo = lastInv.invoiceNumber;
       lastInvId = lastInv.id;
@@ -719,7 +718,7 @@ export default function ProductDetailsPage({
                                   <ExternalLink size={10} />
                                 </Link>
                               </td>
-                              <td className="px-4 py-3">{formatDisplayDate(inv.date)}</td>
+                              <td className="px-4 py-3 font-medium text-slate-600">{formatInvoiceDate(inv)}</td>
                               <td className="px-4 py-3 font-semibold">{inv.customer}</td>
                               <td className="px-4 py-3 text-center font-bold text-slate-800">{item.quantity}</td>
                               <td className="px-4 py-3 text-right">₹{item.price.toLocaleString()}</td>

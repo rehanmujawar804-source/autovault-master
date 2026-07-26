@@ -53,22 +53,61 @@ export function formatDateOnlyIST(dateStr: string): string {
 }
 
 /**
- * Formats an invoice date.
- * - Uses `createdAt` ISO string if available.
- * - Falls back to timestamp in `id` if numeric (historical invoices).
- * - Falls back to `date` YYYY-MM-DD.
+ * Extracts a numeric epoch timestamp (ms) for an invoice used in strict chronological sorting.
+ * Prefers `createdAt` ISO timestamp, falls back to `date`, then numeric ID timestamp.
+ */
+export function getInvoiceSortTime(invoice: Invoice): number {
+  if (invoice.createdAt) {
+    const t = new Date(invoice.createdAt).getTime();
+    if (!isNaN(t)) return t;
+  }
+  if (invoice.date) {
+    const t = new Date(invoice.date).getTime();
+    if (!isNaN(t)) return t;
+  }
+  if (invoice.id && invoice.id.startsWith("inv-")) {
+    const timestampStr = invoice.id.replace("inv-", "");
+    const timestamp = parseInt(timestampStr, 10);
+    if (!isNaN(timestamp) && timestamp > 1000000000000) {
+      return timestamp;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Sorts a copy of an invoice array in strict NEWEST -> OLDEST order.
+ * Primary sort: Epoch timestamp descending.
+ * Secondary sort: Invoice number/ID descending (deterministic tie-breaker).
+ */
+export function sortInvoicesDescending<T extends Invoice>(invoices: T[]): T[] {
+  return [...invoices].sort((a, b) => {
+    const timeA = getInvoiceSortTime(a);
+    const timeB = getInvoiceSortTime(b);
+    if (timeB !== timeA) {
+      return timeB - timeA;
+    }
+    const refA = a.invoiceNumber || a.id || "";
+    const refB = b.invoiceNumber || b.id || "";
+    return refB.localeCompare(refA);
+  });
+}
+
+/**
+ * Formats an invoice date + time.
+ * - If timestamp contains date and time (e.g. ISO string or createdAt), formats with Date + Time (e.g. `26 Jul 2026, 06:42 PM`).
+ * - If historical record contains date only (e.g. `2026-07-26`), formats Date only (e.g. `26 Jul 2026`) without fabricating a time.
  */
 export function formatInvoiceDate(invoice: Invoice): string {
   // 1. Check for createdAt timestamp
   if (invoice.createdAt) {
-    return formatDateTimeIST(invoice.createdAt);
+    return formatStockMovementDate(invoice.createdAt);
   }
 
   // 2. Check for numeric timestamp in ID
   if (invoice.id && invoice.id.startsWith("inv-")) {
     const timestampStr = invoice.id.replace("inv-", "");
     const timestamp = parseInt(timestampStr, 10);
-    // UUIDs won't be > 1e12 and are not valid numbers representing dates in this range
     if (!isNaN(timestamp) && timestamp > 1000000000000) {
       return formatDateTimeIST(new Date(timestamp));
     }
@@ -76,7 +115,7 @@ export function formatInvoiceDate(invoice: Invoice): string {
 
   // 3. Fallback to invoice date
   if (invoice.date) {
-    return formatDateOnlyIST(invoice.date);
+    return formatStockMovementDate(invoice.date);
   }
 
   return "";

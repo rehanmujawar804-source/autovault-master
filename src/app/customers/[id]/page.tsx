@@ -4,7 +4,7 @@ import { use, useMemo, useState, useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
-import { formatInvoiceDate } from "@/lib/dateUtils";
+import { formatInvoiceDate, sortInvoicesDescending } from "@/lib/dateUtils";
 import { calculateRevenue } from "@/lib/revenueUtils";
 import {
   ArrowLeft,
@@ -200,9 +200,7 @@ export default function CustomerProfilePage({
   // Derive real debt from invoice effective outstanding (after returns)
   const [invoices, derivedDebt] = useMemo(() => {
     const invList = customer
-      ? getInvoicesByCustomer(customer.id).sort(
-          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-        )
+      ? sortInvoicesDescending(getInvoicesByCustomer(customer.id))
       : [];
     // Authoritative dynamic customer debt calculation
     const debt = customer ? getCustomerOutstandingBalance(customer.id) : 0;

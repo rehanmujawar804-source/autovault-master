@@ -28,7 +28,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import type { PaymentStatus } from "@/types";
-import { todayLocalStr, formatInvoiceDate, toLocalDateStr } from "@/lib/dateUtils";
+import { todayLocalStr, formatInvoiceDate, toLocalDateStr, sortInvoicesDescending } from "@/lib/dateUtils";
 import { calculateRevenue } from "@/lib/revenueUtils";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -86,9 +86,7 @@ export default function DashboardPage() {
     const todaysRevenue = calculateRevenue(todaysInvoices, todaysSalesReturns);
 
     // Recent invoices (last 5, newest first)
-    const recentInvoices = [...invoices]
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-      .slice(0, 5);
+    const recentInvoices = sortInvoicesDescending(invoices).slice(0, 5);
 
     // Top products by quantity sold
     const soldMap: Record<string, { name: string; qty: number; revenue: number }> = {};

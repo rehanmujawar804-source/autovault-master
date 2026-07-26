@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import type { Product, VehicleFitment } from "@/types";
+import type { Product, VehicleFitment, RecentImportReport } from "@/types";
 import {
   serializeFitmentsForCSV,
   parseFitmentsFromCSV,
@@ -586,3 +586,107 @@ export async function parseSpreadsheetFile(
 
   return results;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. BLANK SAMPLE TEMPLATE GENERATOR
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateBlankXLSXImportTemplate(): Promise<Blob> {
+  return generateXLSXWorkbook([]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. IMPORT CHANGE REPORT GENERATOR (XLSX)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateImportChangeReportXLSX(
+  report: RecentImportReport
+): Promise<Blob> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "AutoVault";
+  workbook.created = new Date();
+
+  // ── Sheet 1: Import Summary ───────────────────────────────────────────────
+  const sheet1 = workbook.addWorksheet("Import Summary");
+  sheet1.columns = [{ width: 32 }, { width: 40 }];
+
+  sheet1.addRow(["AUTOVAULT IMPORT CHANGE REPORT", "SUMMARY"]);
+  const titleCell = sheet1.getRow(1).getCell(1);
+  titleCell.font = { name: "Arial", size: 14, bold: true, color: { argb: "FF0F172A" } };
+
+  sheet1.addRow([]);
+  sheet1.addRow(["METRIC", "VALUE"]);
+  const headerRow = sheet1.getRow(3);
+  headerRow.height = 22;
+  headerRow.eachCell((cell) => {
+    cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
+  });
+
+  const summaryData: Array<[string, string | number]> = [
+    ["Import Date / Time", new Date(report.date).toLocaleString()],
+    ["Imported Filename", report.fileName],
+    ["Total Rows Processed", report.totalRows],
+    ["Products Added", report.addedCount],
+    ["Products Updated", report.updatedCount],
+    ["Products Unchanged", report.unchangedCount],
+    ["Errors / Skipped Rows", report.errorCount],
+    ["Stock Increased Count", report.stockIncreasedCount],
+    ["Stock Decreased Count", report.stockDecreasedCount],
+  ];
+
+  summaryData.forEach(([label, value]) => {
+    const row = sheet1.addRow([label, value]);
+    row.getCell(1).font = { name: "Arial", size: 10, bold: true, color: { argb: "FF334155" } };
+    row.getCell(2).font = { name: "Arial", size: 10, color: { argb: "FF0F172A" } };
+  });
+
+  // ── Sheet 2: Detailed Changes ─────────────────────────────────────────────
+  const sheet2 = workbook.addWorksheet("Detailed Changes", {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
+
+  sheet2.columns = [
+    { header: "SKU", key: "sku", width: 18 },
+    { header: "Product Name", key: "productName", width: 32 },
+    { header: "Action", key: "action", width: 14 },
+    { header: "Field", key: "field", width: 22 },
+    { header: "Previous Value", key: "previousValue", width: 25 },
+    { header: "New Value", key: "newValue", width: 25 },
+    { header: "Change", key: "change", width: 25 },
+  ];
+
+  const header2 = sheet2.getRow(1);
+  header2.height = 24;
+  header2.eachCell((cell) => {
+    cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
+    cell.alignment = { vertical: "middle", horizontal: "left" };
+  });
+
+  report.changes.forEach((c) => {
+    const row = sheet2.addRow({
+      sku: c.sku,
+      productName: c.productName,
+      action: c.action,
+      field: c.field,
+      previousValue: c.previousValue,
+      newValue: c.newValue,
+      change: c.change,
+    });
+    row.height = 20;
+
+    const actionCell = row.getCell("action");
+    if (c.action === "ADDED") {
+      actionCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF047857" } };
+    } else {
+      actionCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF1D4ED8" } };
+    }
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+

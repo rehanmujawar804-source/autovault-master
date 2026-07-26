@@ -449,5 +449,26 @@ export interface SalesReturn {
   cancelledBy?: string;
   cancelledAt?: string;
 }
+export interface ImportReportChangeItem {
+  sku: string;
+  productName: string;
+  action: "ADDED" | "UPDATED";
+  field: string;
+  previousValue: string;
+  newValue: string;
+  change: string;
+}
 
-
+export interface RecentImportReport {
+  id: string;
+  date: string; // ISO timestamp
+  fileName: string;
+  totalRows: number;
+  addedCount: number;
+  updatedCount: number;
+  unchangedCount: number;
+  errorCount: number;
+  stockIncreasedCount: number;
+  stockDecreasedCount: number;
+  changes: ImportReportChangeItem[];
+}

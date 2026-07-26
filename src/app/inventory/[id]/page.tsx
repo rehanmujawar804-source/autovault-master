@@ -373,15 +373,6 @@ export default function ProductDetailsPage({
           </div>
         </div>
 
-        {/* Reserved Stock */}
-        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Reserved Stock</span>
-          <div className="flex items-baseline gap-1">
-            <span className="text-xl font-bold text-slate-500 tabular-nums">{reservedStock}</span>
-            <span className="text-slate-400 text-xs font-normal">units</span>
-          </div>
-        </div>
-
         {/* Available Stock */}
         <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Available Stock</span>

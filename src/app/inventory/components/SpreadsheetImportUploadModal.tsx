@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, DragEvent, ChangeEvent } from "react";
+import { useState, useRef, useEffect, DragEvent, ChangeEvent } from "react";
 import {
   X,
   FileSpreadsheet,
@@ -11,6 +11,10 @@ import {
   RefreshCw,
   ArrowRight,
 } from "lucide-react";
+import type { RecentImportReport } from "@/types";
+import { getRecentImportReports } from "@/lib/recentImportReports";
+import { generateImportChangeReportXLSX } from "@/lib/spreadsheetUtils";
+import { useStore } from "@/lib/store";
 
 interface SpreadsheetImportUploadModalProps {
   isOpen: boolean;
@@ -25,11 +29,41 @@ export function SpreadsheetImportUploadModal({
   onContinue,
   onDownloadTemplate,
 }: SpreadsheetImportUploadModalProps) {
+  const { showToast } = useStore();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [recentReports, setRecentReports] = useState<RecentImportReport[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setRecentReports(getRecentImportReports());
+      setSelectedFile(null);
+      setErrorMessage(null);
+      setIsDragging(false);
+    }
+  }, [isOpen]);
+
+  async function handleDownloadReportXLSX(report: RecentImportReport) {
+    try {
+      const blob = await generateImportChangeReportXLSX(report);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const cleanName = report.fileName.replace(/\.[^/.]+$/, "");
+      const dateStr = new Date(report.date).toISOString().slice(0, 10);
+      link.download = `AutoVault_Import_Report_${cleanName}_${dateStr}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast("Detailed XLSX import change report downloaded", "success");
+    } catch {
+      showToast("Failed to generate XLSX import report.", "error");
+    }
+  }
 
   if (!isOpen) return null;
 
@@ -91,7 +125,11 @@ export function SpreadsheetImportUploadModal({
 
   function handleContinue() {
     if (!selectedFile) return;
-    onContinue(selectedFile);
+    const fileToProcess = selectedFile;
+    setSelectedFile(null);
+    setErrorMessage(null);
+    setIsDragging(false);
+    onContinue(fileToProcess);
   }
 
   function formatFileSize(bytes: number): string {
@@ -107,7 +145,7 @@ export function SpreadsheetImportUploadModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden border border-slate-200 animate-in fade-in-50 zoom-in-95 duration-150">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200 animate-in fade-in-50 zoom-in-95 duration-150">
         {/* Hidden Native File Input */}
         <input
           ref={fileInputRef}
@@ -118,7 +156,7 @@ export function SpreadsheetImportUploadModal({
         />
 
         {/* ── Modal Header ── */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-slate-50/80">
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-slate-50/80 shrink-0">
           <div>
             <div className="flex items-center gap-2">
               <FileSpreadsheet className="text-navy-950" size={20} />
@@ -150,7 +188,7 @@ export function SpreadsheetImportUploadModal({
         </div>
 
         {/* ── Modal Body / Dropzone ── */}
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
           {!selectedFile ? (
             /* ── Dropzone State (No File Selected) ── */
             <div
@@ -244,6 +282,79 @@ export function SpreadsheetImportUploadModal({
             </div>
           )}
 
+          {/* ── Recent Import Reports Section (Max 5) ── */}
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs uppercase tracking-wider">
+                <FileSpreadsheet size={14} className="text-navy-950" />
+                Recent Import Reports (Latest 5)
+              </div>
+              <span className="text-[10px] text-slate-400 font-mono font-semibold">Session & Local Storage</span>
+            </div>
+
+            {recentReports.length === 0 ? (
+              <p className="text-xs text-slate-400 italic py-2 text-center bg-white rounded-xl border border-slate-200/60">
+                No recent import reports available.
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {recentReports.map((rep) => (
+                  <div
+                    key={rep.id}
+                    className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-xs transition-colors hover:border-slate-300"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-slate-900 text-xs truncate max-w-[200px]" title={rep.fileName}>
+                          {rep.fileName}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {new Date(rep.date).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+                        </span>
+                      </div>
+
+                      {/* Summary Metrics Badges */}
+                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap text-[10px] font-mono">
+                        <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-bold">
+                          {rep.totalRows} rows
+                        </span>
+                        <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded font-extrabold">
+                          +{rep.addedCount} Added
+                        </span>
+                        <span className="bg-blue-50 text-blue-800 border border-blue-200 px-1.5 py-0.5 rounded font-extrabold">
+                          {rep.updatedCount} Updated
+                        </span>
+                        <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
+                          {rep.unchangedCount} Same
+                        </span>
+                        {rep.errorCount > 0 && (
+                          <span className="bg-red-50 text-red-700 border border-red-200 px-1.5 py-0.5 rounded font-extrabold">
+                            {rep.errorCount} Errors
+                          </span>
+                        )}
+                        {(rep.stockIncreasedCount > 0 || rep.stockDecreasedCount > 0) && (
+                          <span className="bg-purple-50 text-purple-800 border border-purple-200 px-1.5 py-0.5 rounded">
+                            Stock: +{rep.stockIncreasedCount} / -{rep.stockDecreasedCount}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadReportXLSX(rep)}
+                      className="shrink-0 flex items-center gap-1 text-[11px] font-bold text-navy-950 hover:text-navy-800 bg-slate-100 hover:bg-slate-200/80 border border-slate-200 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                      title="Download detailed change report in XLSX format"
+                    >
+                      <Download size={12} className="text-slate-600" />
+                      <span>Detailed Report (.xlsx)</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* ── How Stock Import Works Explanation ── */}
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs text-slate-600 space-y-1.5">
             <div className="flex items-center gap-1.5 font-bold text-slate-800 text-[11px] uppercase tracking-wider">
@@ -262,7 +373,7 @@ export function SpreadsheetImportUploadModal({
         </div>
 
         {/* ── Modal Footer ── */}
-        <div className="p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+        <div className="p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
           <div className="text-xs text-slate-500 font-medium">
             {selectedFile ? (
               <span className="text-emerald-700 font-bold flex items-center gap-1">

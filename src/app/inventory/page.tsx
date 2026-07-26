@@ -9,7 +9,9 @@ import { BulkFitmentModal } from "./components/BulkFitmentModals";
 import { CSVImportPreviewModal, type CSVImportRowResult } from "./components/CSVImportPreviewModal";
 import { SpreadsheetImportUploadModal } from "./components/SpreadsheetImportUploadModal";
 import { formatFitmentDisplay, serializeFitmentsForCSV, parseFitmentsFromCSV } from "@/lib/fitmentUtils";
-import { generateXLSXWorkbook, generateCSVText, parseSpreadsheetFile } from "@/lib/spreadsheetUtils";
+import { generateXLSXWorkbook, generateCSVText, parseSpreadsheetFile, generateBlankXLSXImportTemplate } from "@/lib/spreadsheetUtils";
+import { saveRecentImportReport } from "@/lib/recentImportReports";
+import type { RecentImportReport, ImportReportChangeItem } from "@/types";
 import Link from "next/link";
 import {
   Search,
@@ -23,6 +25,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  CheckSquare,
   Upload,
   Download,
   TrendingUp,
@@ -379,9 +382,19 @@ export default function InventoryPage() {
 
   // ── Multi-select state & logic (Phase 2C Owner-Only) ──────────────────────
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
   const [showBulkRemoveModal, setShowBulkRemoveModal] = useState(false);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
+
+  function toggleSelectionMode() {
+    if (isSelectionMode) {
+      setSelectedProductIds([]);
+      setIsSelectionMode(false);
+    } else {
+      setIsSelectionMode(true);
+    }
+  }
 
   const selectedSet = useMemo(() => new Set(selectedProductIds), [selectedProductIds]);
 
@@ -577,7 +590,7 @@ export default function InventoryPage() {
 
   async function handleDownloadSampleTemplate() {
     try {
-      const blob = await generateXLSXWorkbook(state.products);
+      const blob = await generateBlankXLSXImportTemplate();
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -586,7 +599,7 @@ export default function InventoryPage() {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      showToast("Sample XLSX import template downloaded", "success");
+      showToast("Blank XLSX import template downloaded", "success");
     } catch {
       showToast("Failed to download template.", "error");
     }
@@ -1006,6 +1019,28 @@ export default function InventoryPage() {
               ))}
             </select>
 
+            {/* Selection Mode Toggle Button (Owner Only) */}
+            {isOwner && (
+              <button
+                type="button"
+                onClick={toggleSelectionMode}
+                title={isSelectionMode ? "Exit Selection Mode (Clear Selection)" : "Enable Selection Mode"}
+                className={`h-8 px-2.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer border ${
+                  isSelectionMode
+                    ? "bg-navy-950 text-white border-navy-950 shadow-xs"
+                    : "bg-slate-50/80 text-slate-600 hover:bg-slate-100 border-slate-200"
+                }`}
+              >
+                <CheckSquare size={13} className={isSelectionMode ? "text-yellow-400" : "text-slate-500"} />
+                <span>{isSelectionMode ? "Exit Selection" : "Select"}</span>
+                {isSelectionMode && selectedProductIds.length > 0 && (
+                  <span className="bg-yellow-400 text-navy-950 text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                    {selectedProductIds.length}
+                  </span>
+                )}
+              </button>
+            )}
+
             {hasActiveFilters && (
               <button
                 onClick={resetFilters}
@@ -1115,8 +1150,8 @@ export default function InventoryPage() {
               {/* ── Sticky professional header ── */}
               <thead className="sticky top-0 z-10 shadow-[0_1px_0_0_theme(colors.slate.200)]">
                 <tr className="bg-slate-50/95 backdrop-blur-sm border-b border-slate-200">
-                  {/* Select All Checkbox – Owner Only */}
-                  {isOwner && (
+                  {/* Select All Checkbox – Owner Only (Selection Mode Active) */}
+                  {isOwner && isSelectionMode && (
                     <th className="w-10 pl-4 pr-1 py-3 text-center">
                       <input
                         type="checkbox"
@@ -1215,8 +1250,8 @@ export default function InventoryPage() {
                       <tr
                         className={`border-b border-slate-100 border-l-4 ${accentColor} ${rowBg} hover:bg-slate-50/80 transition-colors duration-100 group`}
                       >
-                        {/* Row selection checkbox – Owner Only */}
-                        {isOwner && (
+                        {/* Row selection checkbox – Owner Only (Selection Mode Active) */}
+                        {isOwner && isSelectionMode && (
                           <td className="pl-4 pr-1 py-3.5 w-10 text-center" onClick={(e) => e.stopPropagation()}>
                             <input
                               type="checkbox"
@@ -1623,7 +1658,237 @@ export default function InventoryPage() {
         }}
         onConfirm={(payload) => {
           try {
+            const beforeProducts = state.products; // Baseline snapshot of current inventory before import
             bulkImportProducts(payload);
+
+            // Compute and record lightweight Recent Import Report
+            const timestamp = new Date().toISOString();
+            const changes: ImportReportChangeItem[] = [];
+
+            let stockIncreasedCount = 0;
+            let stockDecreasedCount = 0;
+            let productsWithChangesCount = 0;
+
+            // 1. Added Products
+            payload.productsToAdd.forEach((p) => {
+              changes.push({
+                sku: p.sku,
+                productName: p.name,
+                action: "ADDED",
+                field: "Product",
+                previousValue: "—",
+                newValue: p.name,
+                change: "New Product",
+              });
+
+              if (p.stock > 0) {
+                stockIncreasedCount++;
+                changes.push({
+                  sku: p.sku,
+                  productName: p.name,
+                  action: "ADDED",
+                  field: "Initial Stock",
+                  previousValue: "—",
+                  newValue: String(p.stock),
+                  change: `+${p.stock} (Opening Stock)`,
+                });
+              }
+
+              if (p.sellPrice > 0) {
+                changes.push({
+                  sku: p.sku,
+                  productName: p.name,
+                  action: "ADDED",
+                  field: "Sell Price",
+                  previousValue: "—",
+                  newValue: `₹${p.sellPrice.toLocaleString()}`,
+                  change: "—",
+                });
+              }
+            });
+
+            // 2. Updated Products (diff against baseline beforeProducts)
+            payload.productsToUpdate.forEach((afterProd) => {
+              const beforeProd = beforeProducts.find(
+                (b) => b.id === afterProd.id || b.sku.trim().toLowerCase() === afterProd.sku.trim().toLowerCase()
+              );
+
+              if (!beforeProd) return;
+
+              let hasChange = false;
+
+              // Name
+              if (beforeProd.name.trim() !== afterProd.name.trim()) {
+                hasChange = true;
+                changes.push({
+                  sku: afterProd.sku,
+                  productName: afterProd.name,
+                  action: "UPDATED",
+                  field: "Product Name",
+                  previousValue: beforeProd.name,
+                  newValue: afterProd.name,
+                  change: "—",
+                });
+              }
+
+              // Brand
+              if ((beforeProd.brand || "").trim() !== (afterProd.brand || "").trim()) {
+                hasChange = true;
+                changes.push({
+                  sku: afterProd.sku,
+                  productName: afterProd.name,
+                  action: "UPDATED",
+                  field: "Brand",
+                  previousValue: beforeProd.brand || "—",
+                  newValue: afterProd.brand || "—",
+                  change: "—",
+                });
+              }
+
+              // Category
+              if ((beforeProd.category || "").trim() !== (afterProd.category || "").trim()) {
+                hasChange = true;
+                changes.push({
+                  sku: afterProd.sku,
+                  productName: afterProd.name,
+                  action: "UPDATED",
+                  field: "Category",
+                  previousValue: beforeProd.category || "—",
+                  newValue: afterProd.category || "—",
+                  change: "—",
+                });
+              }
+
+              // Stock
+              if (beforeProd.stock !== afterProd.stock) {
+                hasChange = true;
+                const delta = afterProd.stock - beforeProd.stock;
+                if (delta > 0) stockIncreasedCount++;
+                if (delta < 0) stockDecreasedCount++;
+
+                changes.push({
+                  sku: afterProd.sku,
+                  productName: afterProd.name,
+                  action: "UPDATED",
+                  field: "Stock",
+                  previousValue: String(beforeProd.stock),
+                  newValue: String(afterProd.stock),
+                  change: delta > 0 ? `+${delta}` : `${delta}`,
+                });
+              }
+
+              // Current Price
+              if (beforeProd.currentCost !== afterProd.currentCost) {
+                hasChange = true;
+                const diff = afterProd.currentCost - beforeProd.currentCost;
+                changes.push({
+                  sku: afterProd.sku,
+                  productName: afterProd.name,
+                  action: "UPDATED",
+                  field: "Current Price",
+                  previousValue: `₹${beforeProd.currentCost.toLocaleString()}`,
+                  newValue: `₹${afterProd.currentCost.toLocaleString()}`,
+                  change: diff > 0 ? `+₹${diff.toLocaleString()}` : `-₹${Math.abs(diff).toLocaleString()}`,
+                });
+              }
+
+              // Sell Price
+              if (beforeProd.sellPrice !== afterProd.sellPrice) {
+                hasChange = true;
+                const diff = afterProd.sellPrice - beforeProd.sellPrice;
+                changes.push({
+                  sku: afterProd.sku,
+                  productName: afterProd.name,
+                  action: "UPDATED",
+                  field: "Sell Price",
+                  previousValue: `₹${beforeProd.sellPrice.toLocaleString()}`,
+                  newValue: `₹${afterProd.sellPrice.toLocaleString()}`,
+                  change: diff > 0 ? `+₹${diff.toLocaleString()}` : `-₹${Math.abs(diff).toLocaleString()}`,
+                });
+              }
+
+              // Low Stock Threshold
+              if (beforeProd.lowStockThreshold !== afterProd.lowStockThreshold) {
+                hasChange = true;
+                changes.push({
+                  sku: afterProd.sku,
+                  productName: afterProd.name,
+                  action: "UPDATED",
+                  field: "Low Stock Threshold",
+                  previousValue: String(beforeProd.lowStockThreshold),
+                  newValue: String(afterProd.lowStockThreshold),
+                  change: "—",
+                });
+              }
+
+              // Status
+              if ((beforeProd.status || "Active") !== (afterProd.status || "Active")) {
+                hasChange = true;
+                changes.push({
+                  sku: afterProd.sku,
+                  productName: afterProd.name,
+                  action: "UPDATED",
+                  field: "Status",
+                  previousValue: beforeProd.status || "Active",
+                  newValue: afterProd.status || "Active",
+                  change: `${beforeProd.status || "Active"} → ${afterProd.status || "Active"}`,
+                });
+              }
+
+              // Universal Fit
+              if ((beforeProd.isUniversalFit ?? false) !== (afterProd.isUniversalFit ?? false)) {
+                hasChange = true;
+                changes.push({
+                  sku: afterProd.sku,
+                  productName: afterProd.name,
+                  action: "UPDATED",
+                  field: "Universal Fit",
+                  previousValue: beforeProd.isUniversalFit ? "Yes" : "No",
+                  newValue: afterProd.isUniversalFit ? "Yes" : "No",
+                  change: "—",
+                });
+              }
+
+              // Compatible Vehicles
+              const beforeFit = serializeFitmentsForCSV(beforeProd.fitments);
+              const afterFit = serializeFitmentsForCSV(afterProd.fitments);
+              if (beforeFit !== afterFit) {
+                hasChange = true;
+                changes.push({
+                  sku: afterProd.sku,
+                  productName: afterProd.name,
+                  action: "UPDATED",
+                  field: "Compatible Vehicles",
+                  previousValue: beforeFit || "None",
+                  newValue: afterFit || "None",
+                  change: "—",
+                });
+              }
+
+              if (hasChange) {
+                productsWithChangesCount++;
+              }
+            });
+
+            const errorCount = parsedCSVRows.filter((r) => r.type === "ERROR").length;
+            const unchangedCount = Math.max(0, payload.productsToUpdate.length - productsWithChangesCount);
+
+            const report: RecentImportReport = {
+              id: `imp-${Date.now()}`,
+              date: timestamp,
+              fileName: importFileName,
+              totalRows: parsedCSVRows.length,
+              addedCount: payload.productsToAdd.length,
+              updatedCount: payload.productsToUpdate.length,
+              unchangedCount,
+              errorCount,
+              stockIncreasedCount,
+              stockDecreasedCount,
+              changes,
+            };
+
+            saveRecentImportReport(report);
+
             showToast(
               `Import completed! ${payload.productsToAdd.length} products added, ${payload.productsToUpdate.length} products updated.`,
               "success"

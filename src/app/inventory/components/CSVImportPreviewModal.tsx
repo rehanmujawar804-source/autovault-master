@@ -124,7 +124,7 @@ export function CSVImportPreviewModal({
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-slate-50/80">
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-slate-50/80 shrink-0">
           <div>
             <div className="flex items-center gap-2">
               <FileSpreadsheet className="text-navy-950" size={20} />
@@ -143,7 +143,7 @@ export function CSVImportPreviewModal({
         </div>
 
         {/* Summary Cards */}
-        <div className="p-5 bg-white border-b border-slate-200 space-y-4">
+        <div className="p-5 bg-white border-b border-slate-200 space-y-4 shrink-0">
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-center">
               <span className="text-xs font-semibold text-slate-500 block uppercase tracking-wider">Total Rows</span>
@@ -362,7 +362,7 @@ export function CSVImportPreviewModal({
         </div>
 
         {/* Footer Actions */}
-        <div className="p-5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="p-5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
           <div className="text-xs text-slate-500">
             {validCount > 0 ? (
               <span>

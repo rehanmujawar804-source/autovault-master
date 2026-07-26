@@ -6,6 +6,7 @@ import type { Purchase, SupplierPayment, PaymentMethod, PurchaseLineItem, Purcha
 import { useRole } from "@/hooks/useRole";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { formatPurchaseDate, sortPurchasesDescending } from "@/lib/dateUtils";
 import {
   ArrowLeft,
   Truck,
@@ -1538,7 +1539,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
   }, []);
 
   const supplier = useMemo(() => (state.suppliers || []).find((s) => s.id === id), [state.suppliers, id]);
-  const purchases = useMemo(() => (state.purchases || []).filter((p) => p.supplierId === id).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()), [state.purchases, id]);
+  const purchases = useMemo(() => sortPurchasesDescending((state.purchases || []).filter((p) => p.supplierId === id)), [state.purchases, id]);
   const products = state.products || [];
 
   // Products this supplier has supplied (via purchases)
@@ -1573,8 +1574,8 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
     }, 0);
 
     const lastPurchaseVal = purchases[0] ? (purchases[0].totalAmount ?? (purchases[0].buyPrice * purchases[0].quantity)) : 0;
-    const lastPurchaseDate = purchases[0]?.date ?? null;
-    const lastPurchase = purchases[0] ? `₹${lastPurchaseVal.toLocaleString()} (${formatDate(lastPurchaseDate)})` : "—";
+    const lastPurchaseDate = purchases[0] ? formatPurchaseDate(purchases[0]) : null;
+    const lastPurchase = purchases[0] ? `₹${lastPurchaseVal.toLocaleString()} (${lastPurchaseDate})` : "—";
 
     const averagePurchase = totalPurchases > 0 ? lifetimePurchase / totalPurchases : 0;
 
@@ -1994,7 +1995,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                       return (
                         <tr key={pur.id} className="hover:bg-slate-50/70 transition-colors">
                           <td className="px-4 py-3 text-xs font-mono text-slate-400">{pur.invoiceNumber || "—"}</td>
-                          <td className="px-4 py-3 text-xs text-slate-600 whitespace-nowrap">{formatDate(pur.date)}</td>
+                          <td className="px-4 py-3 text-xs text-slate-600 font-medium whitespace-nowrap">{formatPurchaseDate(pur)}</td>
                           <td className="px-4 py-3 text-xs font-semibold text-slate-700">
                             {product ? (
                               <Link href={`/inventory/${product.id}`} className="hover:text-navy-700 hover:underline">{product.name}</Link>
@@ -2062,7 +2063,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
         {/* ── PAYMENTS TAB ── */}
         {activeTab === "payments" && isOwner && (() => {
           const supplierPayments = getSupplierPaymentsBySupplier(id);
-          const purchasesWithTimeline = purchases.slice().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          const purchasesWithTimeline = sortPurchasesDescending(purchases);
 
           return (
             <div className="space-y-6">
@@ -2281,9 +2282,9 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
 
         {/* ── PURCHASE ORDERS TAB ── */}
         {activeTab === "purchase_orders" && (() => {
-          const pos = (state.purchaseOrders || [])
-            .filter((po) => po.supplierId === id)
-            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          const pos = sortPurchasesDescending(
+            (state.purchaseOrders || []).filter((po) => po.supplierId === id)
+          );
 
           return (
             <div className="space-y-4">
@@ -2354,7 +2355,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                           <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                             <div>
                               <p className="text-slate-400 font-medium">Created</p>
-                              <p className="font-bold text-slate-700 mt-0.5">{formatDate(po.createdAt)}</p>
+                              <p className="font-bold text-slate-700 mt-0.5">{formatPurchaseDate(po)}</p>
                             </div>
                             <div>
                               <p className="text-slate-400 font-medium">Expected Delivery</p>

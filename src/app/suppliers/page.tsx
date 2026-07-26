@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
+import { formatPurchaseDate, sortPurchasesDescending } from "@/lib/dateUtils";
 import {
   Truck,
   Plus,
@@ -394,11 +395,11 @@ export default function SuppliersPage() {
     for (const s of suppliers) {
       const sp = purchases.filter((p) => p.supplierId === s.id);
       const productIds = new Set(sp.map((p) => p.productId));
-      const sorted = [...sp].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const sorted = sortPurchasesDescending(sp);
       const outstanding = getSupplierOutstandingBalance(s.id);
       map[s.id] = {
         productCount: productIds.size,
-        lastPurchaseDate: sorted[0]?.date ?? null,
+        lastPurchaseDate: sorted[0] ? formatPurchaseDate(sorted[0]) : null,
         outstandingBalance: outstanding,
       };
     }
@@ -722,7 +723,7 @@ export default function SuppliersPage() {
                           <tr key={item.purchase.id} className={item.allocated > 0 ? "bg-green-50/40" : ""}>
                             <td className="p-2 font-medium text-slate-800">
                               {item.purchase.invoiceNumber}
-                              <span className="block text-[10px] text-slate-400">{formatDate(item.purchase.date)}</span>
+                              <span className="block text-[10px] text-slate-400">{formatPurchaseDate(item.purchase)}</span>
                             </td>
                             <td className="p-2 text-right font-medium text-slate-700">₹{item.effectiveDue.toLocaleString()}</td>
                             <td className="p-2 text-right font-bold text-green-600">

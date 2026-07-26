@@ -165,3 +165,69 @@ export function todayLocalStr(): string {
   return toLocalDateStr(new Date());
 }
 
+/**
+ * Extracts a numeric epoch timestamp (ms) for a purchase, purchase order, or purchase return
+ * used in strict chronological sorting.
+ * Prefers `createdAt` ISO timestamp, falls back to `date`, then numeric ID timestamp.
+ */
+export function getPurchaseSortTime(purchase: { createdAt?: string; date?: string; id?: string }): number {
+  if (purchase.createdAt) {
+    const t = new Date(purchase.createdAt).getTime();
+    if (!isNaN(t)) return t;
+  }
+  if (purchase.date) {
+    const t = new Date(purchase.date).getTime();
+    if (!isNaN(t)) return t;
+  }
+  if (purchase.id && (purchase.id.startsWith("pur-") || purchase.id.startsWith("po-") || purchase.id.startsWith("pr-"))) {
+    const timestampStr = purchase.id.replace(/^(pur-|po-|pr-)/, "");
+    const timestamp = parseInt(timestampStr, 10);
+    if (!isNaN(timestamp) && timestamp > 1000000000000) {
+      return timestamp;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Sorts a copy of a purchase (or PO/PR) array in strict NEWEST -> OLDEST order.
+ * Primary sort: Epoch timestamp descending.
+ * Secondary sort: Invoice number / PO number / Return number / ID descending (deterministic tie-breaker).
+ */
+export function sortPurchasesDescending<T extends { createdAt?: string; date?: string; id?: string; invoiceNumber?: string; poNumber?: string; returnNumber?: string }>(
+  items: T[]
+): T[] {
+  return [...items].sort((a, b) => {
+    const timeA = getPurchaseSortTime(a);
+    const timeB = getPurchaseSortTime(b);
+    if (timeB !== timeA) {
+      return timeB - timeA;
+    }
+    const refA = a.invoiceNumber || a.poNumber || a.returnNumber || a.id || "";
+    const refB = b.invoiceNumber || b.poNumber || b.returnNumber || b.id || "";
+    return refB.localeCompare(refA);
+  });
+}
+
+/**
+ * Formats a purchase, purchase order, or purchase return date + time.
+ * - If timestamp contains date and time (e.g. ISO string or createdAt), formats with Date + Time (e.g. `26 Jul 2026, 06:42 PM`).
+ * - If historical record contains date only (e.g. `2026-07-26`), formats Date only (e.g. `26 Jul 2026`) without fabricating a time.
+ */
+export function formatPurchaseDate(purchase: { createdAt?: string; date?: string; id?: string }): string {
+  if (purchase.createdAt) {
+    return formatStockMovementDate(purchase.createdAt);
+  }
+  if (purchase.date) {
+    return formatStockMovementDate(purchase.date);
+  }
+  if (purchase.id && (purchase.id.startsWith("pur-") || purchase.id.startsWith("po-") || purchase.id.startsWith("pr-"))) {
+    const timestampStr = purchase.id.replace(/^(pur-|po-|pr-)/, "");
+    const timestamp = parseInt(timestampStr, 10);
+    if (!isNaN(timestamp) && timestamp > 1000000000000) {
+      return formatDateTimeIST(new Date(timestamp));
+    }
+  }
+  return "";
+}
+

@@ -5,7 +5,7 @@ import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { formatDateOnlyIST, formatInvoiceDate, sortInvoicesDescending } from "@/lib/dateUtils";
+import { formatDateOnlyIST, formatInvoiceDate, formatPurchaseDate, sortInvoicesDescending, sortPurchasesDescending } from "@/lib/dateUtils";
 import {
   ArrowLeft,
   Pencil,
@@ -281,10 +281,9 @@ export default function ProductDetailsPage({
     });
   }, [productSales, state.stockMovements, state.invoices, id]);
 
-  // Purchases from store for this product
+  // Purchases from store for this product (newest first)
   const productPurchases = useMemo(() => {
-    return (state.purchases || []).filter((p) => p.productId === id)
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return sortPurchasesDescending((state.purchases || []).filter((p) => p.productId === id));
   }, [state.purchases, id]);
 
   return (
@@ -789,7 +788,7 @@ export default function ProductDetailsPage({
                           const supplier = state.suppliers?.find(s => s.id === pur.supplierId);
                           return (
                             <tr key={pur.id} className="hover:bg-slate-50/70 transition-colors">
-                              <td className="px-4 py-3 text-xs text-slate-600">{formatDisplayDate(pur.date)}</td>
+                              <td className="px-4 py-3 text-xs text-slate-600 font-medium">{formatPurchaseDate(pur)}</td>
                               <td className="px-4 py-3 text-xs font-semibold text-slate-700">
                                 {supplier ? (
                                   <Link href={`/suppliers/${supplier.id}`} className="hover:text-navy-700 hover:underline">

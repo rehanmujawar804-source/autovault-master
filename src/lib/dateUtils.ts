@@ -107,8 +107,22 @@ export function toLocalDateStr(date: Date | string): string {
 }
 
 /**
+ * Formats a stock movement timestamp.
+ * - If it's a full ISO timestamp (contains 'T' or time info), formats with date and time (e.g. "26 Jul 2026, 06:42 PM").
+ * - If it's date-only (e.g. "2026-07-26"), formats date only ("26 Jul 2026") without inventing a fake historical time.
+ */
+export function formatStockMovementDate(dateStr: string): string {
+  if (!dateStr || dateStr === "—") return "—";
+  if (dateStr.includes("T") || dateStr.length > 10) {
+    return formatDateTimeIST(dateStr);
+  }
+  return formatDateOnlyIST(dateStr);
+}
+
+/**
  * Returns today's local date string in YYYY-MM-DD format in Asia/Kolkata timezone.
  */
 export function todayLocalStr(): string {
   return toLocalDateStr(new Date());
 }
+

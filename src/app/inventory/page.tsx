@@ -11,6 +11,7 @@ import { SpreadsheetImportUploadModal } from "./components/SpreadsheetImportUplo
 import { formatFitmentDisplay, serializeFitmentsForCSV, parseFitmentsFromCSV } from "@/lib/fitmentUtils";
 import { generateXLSXWorkbook, generateCSVText, parseSpreadsheetFile, generateBlankXLSXImportTemplate } from "@/lib/spreadsheetUtils";
 import { saveRecentImportReport } from "@/lib/recentImportReports";
+import { formatStockMovementDate } from "@/lib/dateUtils";
 import type { RecentImportReport, ImportReportChangeItem } from "@/types";
 import Link from "next/link";
 import {
@@ -1245,7 +1246,7 @@ export default function InventoryPage() {
                     : <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />Discontinued</span>;
 
                   return (
-                    <Fragment key={product.id}>
+                    <Fragment key={product.id || `product-row-${rowIndex}`}>
                       {/* ── Main row ── */}
                       <tr
                         className={`border-b border-slate-100 border-l-4 ${accentColor} ${rowBg} hover:bg-slate-50/80 transition-colors duration-100 group`}
@@ -1461,25 +1462,8 @@ export default function InventoryPage() {
                                 <p className="text-[10px] text-slate-400 mt-3 pt-2 border-t border-slate-50 italic">* Fitments match against sales invoicing checklist.</p>
                               </div>
 
-                              {/* Col 2: Recent Activity — honest empty state, no fake data */}
-                              <div className="bg-white rounded-xl p-4 border border-slate-200">
-                                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100">
-                                  <div className="w-6 h-6 rounded-md bg-blue-50 text-blue-600 flex items-center justify-center">
-                                    <Activity size={13} />
-                                  </div>
-                                  <h4 className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Stock Movement</h4>
-                                </div>
-                                <div className="flex flex-col items-center justify-center py-6 gap-2 text-center">
-                                  <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-200">
-                                    <rect x="4" y="8" width="24" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-                                    <path d="M4 13h24" stroke="currentColor" strokeWidth="1.5"/>
-                                    <path d="M10 6v4M22 6v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                                    <path d="M9 19h14M9 23h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                                  </svg>
-                                  <p className="text-[11px] font-medium text-slate-500">Full ledger in Stock Movement tab</p>
-                                  <p className="text-[10px] text-slate-400">Open the product to view real-time activity.</p>
-                                </div>
-                              </div>
+                              {/* Col 2: Recent Activity — Live Stock Movement Summary */}
+                              <ProductExpandedMovementSummary product={product} />
 
                               {/* Col 3: Inventory Intelligence */}
                               <div className="bg-white rounded-xl p-4 border border-slate-200">
@@ -1976,6 +1960,141 @@ function KpiCard({
         }`}>
           {value}
         </p>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  EXPANDED ROW STOCK MOVEMENT LIVE SUMMARY
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ProductExpandedMovementSummary({ product }: { product: Product }) {
+  const { state } = useStore();
+
+  const latestMovement = useMemo(() => {
+    const list: Array<{
+      id?: string;
+      date: string;
+      type: string;
+      delta: number;
+      desc: string;
+      reference: string;
+      note?: string;
+    }> = [];
+
+    const stored = (state.stockMovements || []).filter((m) => m.productId === product.id);
+    const recordedSaleInvoices = new Set(
+      stored.filter((m) => m.type === "Sale").map((m) => m.reference)
+    );
+
+    (state.invoices || []).forEach((inv) => {
+      if (!inv.voided && !recordedSaleInvoices.has(inv.invoiceNumber)) {
+        const item = inv.items.find((i) => i.productId === product.id);
+        if (item) {
+          list.push({
+            id: `synth-sale-${inv.id}`,
+            date: inv.createdAt || (inv.date ? (inv.date.includes("T") ? inv.date : inv.date + "T12:00:00.000Z") : new Date().toISOString()),
+            type: "Sale",
+            delta: -item.quantity,
+            desc: `Sold to ${inv.customer || "Walk-in Customer"}`,
+            reference: inv.invoiceNumber,
+          });
+        }
+      }
+    });
+
+    stored.forEach((m) => {
+      list.push({
+        id: m.id,
+        date: m.date,
+        type: m.type,
+        delta: m.delta,
+        desc: m.desc,
+        reference: m.reference,
+        note: m.note,
+      });
+    });
+
+    list.sort((a, b) => {
+      const timeA = new Date(a.date).getTime();
+      const timeB = new Date(b.date).getTime();
+      if (timeB !== timeA) return timeB - timeA;
+      const idA = a.id || "";
+      const idB = b.id || "";
+      return idB.localeCompare(idA);
+    });
+
+    return list[0] || null;
+  }, [state.stockMovements, state.invoices, product.id]);
+
+  return (
+    <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex flex-col justify-between">
+      <div>
+        <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-md bg-blue-50 text-blue-600 flex items-center justify-center">
+              <Activity size={13} />
+            </div>
+            <h4 className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Latest Stock Movement</h4>
+          </div>
+          {latestMovement && (
+            <span className="text-[10px] text-slate-400 font-semibold">
+              {formatStockMovementDate(latestMovement.date)}
+            </span>
+          )}
+        </div>
+
+        {latestMovement ? (
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${
+                latestMovement.type === "Sale" ? "bg-blue-50 text-blue-700 border-blue-200"
+                : latestMovement.type === "Purchase" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                : latestMovement.type === "Purchase Return" ? "bg-rose-50 text-rose-700 border-rose-200"
+                : latestMovement.type === "Sales Return" ? "bg-violet-50 text-violet-750 border-violet-200"
+                : latestMovement.type === "Invoice Void" ? "bg-purple-50 text-purple-700 border-purple-200"
+                : latestMovement.type === "Opening Stock" ? "bg-green-50 text-green-700 border-green-200"
+                : latestMovement.type === "Adjustment" ? "bg-amber-50 text-amber-700 border-amber-200"
+                : "bg-slate-100 text-slate-600 border-slate-200"
+              }`}>
+                {latestMovement.type}
+              </span>
+              <span className={`text-xs font-black px-2 py-0.5 rounded ${
+                latestMovement.delta > 0 ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"
+              }`}>
+                {latestMovement.delta > 0 ? `+${latestMovement.delta}` : latestMovement.delta} units
+              </span>
+            </div>
+
+            <div className="text-xs space-y-1">
+              <p className="font-semibold text-slate-800 line-clamp-1">{latestMovement.desc}</p>
+              <p className="text-[11px] text-slate-500">
+                <span className="text-slate-400">Ref:</span> <span className="font-mono font-medium text-slate-700">{latestMovement.reference}</span>
+              </p>
+            </div>
+
+            {latestMovement.note && (
+              <div className="mt-2 text-xs bg-amber-50/80 border border-amber-200 text-amber-900 px-2.5 py-1.5 rounded-lg flex items-start gap-1.5">
+                <span className="font-bold text-amber-800 uppercase tracking-wider text-[9px] mt-0.5 shrink-0">Note:</span>
+                <span className="font-medium text-slate-700 line-clamp-2">{latestMovement.note}</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="py-4 text-center">
+            <p className="text-xs text-slate-500 font-medium italic">No stock movements recorded yet.</p>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 pt-3 border-t border-slate-100">
+        <Link
+          href={`/inventory/${product.id}?tab=movement`}
+          className="inline-flex items-center gap-1.5 text-xs font-bold text-navy-600 hover:text-navy-800 transition-colors"
+        >
+          View Full Stock Movement Ledger &rarr;
+        </Link>
       </div>
     </div>
   );

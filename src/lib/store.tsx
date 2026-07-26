@@ -250,13 +250,15 @@ export function generateUniqueId(prefix: string): string {
 }
 
 /** Normalizes a product ensuring all standard properties are set properly and Universal Fit invariant is strictly enforced */
-export function normalizeProduct(product: Partial<Product> & { id: string; name: string; sku: string }): Product {
+export function normalizeProduct(product: Partial<Product> & { id?: string; name: string; sku: string }): Product {
   const fallbackTimestamp = new Date().toISOString();
   const legacyP = product as any;
   const isUniversal = product.isUniversalFit ?? false;
+  const rawId = (product.id || "").trim();
+  const validId = rawId !== "" ? rawId : generateUniqueId("p");
   return {
     ...product,
-    id: product.id,
+    id: validId,
     name: product.name,
     sku: product.sku,
     brand: product.brand || "",
@@ -636,7 +638,9 @@ function reducer(state: AppState, action: Action): AppState {
           productId: normalizedProd.id,
           type: "Opening Stock",
           delta: normalizedProd.stock,
-          date: normalizedProd.createdAt || new Date().toISOString(),
+          date: (normalizedProd.createdAt && normalizedProd.createdAt.includes("T"))
+            ? normalizedProd.createdAt
+            : new Date().toISOString(),
           desc: "Opening stock record declared at creation",
           reference: "SYSTEM-INIT",
         });
@@ -670,7 +674,22 @@ function reducer(state: AppState, action: Action): AppState {
     case "BULK_IMPORT_PRODUCTS": {
       const timestamp = new Date().toISOString();
       const movements = [...(state.stockMovements || [])];
-      const normalizedToAdd = action.productsToAdd.map(normalizeProduct);
+      
+      const existingIds = new Set(state.products.map((p) => p.id).filter((id) => Boolean(id && id.trim())));
+
+      const normalizedToAdd = action.productsToAdd.map((p) => {
+        let normalized = normalizeProduct(p);
+        if (!p.id || !p.id.trim() || existingIds.has(normalized.id)) {
+          let newId = generateUniqueId("p");
+          while (existingIds.has(newId)) {
+            newId = generateUniqueId("p");
+          }
+          normalized = { ...normalized, id: newId };
+        }
+        existingIds.add(normalized.id);
+        return normalized;
+      });
+
       const normalizedToUpdate = action.productsToUpdate.map(normalizeProduct);
 
       // Record Opening Stock for new products with stock > 0
@@ -681,7 +700,7 @@ function reducer(state: AppState, action: Action): AppState {
             productId: p.id,
             type: "Opening Stock",
             delta: p.stock,
-            date: p.createdAt || timestamp,
+            date: (p.createdAt && p.createdAt.includes("T")) ? p.createdAt : timestamp,
             desc: "Opening stock declared at spreadsheet import",
             reference: "SYSTEM-INIT",
           });
@@ -908,6 +927,9 @@ function reducer(state: AppState, action: Action): AppState {
 
       // Log StockMovements for sold items
       const newInvoiceStockMovements = [...(state.stockMovements || [])];
+      const invoiceMovementTimestamp = (inv.createdAt && inv.createdAt.includes("T"))
+        ? inv.createdAt
+        : new Date().toISOString();
       inv.items.forEach((item) => {
         if (item.quantity > 0) {
           newInvoiceStockMovements.push({
@@ -915,7 +937,7 @@ function reducer(state: AppState, action: Action): AppState {
             productId: item.productId,
             type: "Sale" as const,
             delta: -item.quantity,
-            date: inv.createdAt || (inv.date ? inv.date + "T12:00:00.000Z" : new Date().toISOString()),
+            date: invoiceMovementTimestamp,
             desc: `Sold to ${inv.customer || "Walk-in Customer"}`,
             reference: inv.invoiceNumber,
           });
@@ -1357,21 +1379,43 @@ function reducer(state: AppState, action: Action): AppState {
       return INITIAL_STATE;
 
     case "HYDRATE_STORE": {
+      const knownProductIds = new Set<string>();
+      const legacyIdRemap = new Map<string, string>();
+
       const products = (action.state.products || []).map((p) => {
         const legacyP = p as any;
-        return {
+        const rawId = (p.id || "").trim();
+        let validId = rawId;
+
+        if (!validId || knownProductIds.has(validId)) {
+          let newId = generateUniqueId("p");
+          while (knownProductIds.has(newId)) {
+            newId = generateUniqueId("p");
+          }
+          if (rawId) {
+            legacyIdRemap.set(rawId, newId);
+          }
+          validId = newId;
+        }
+        knownProductIds.add(validId);
+
+        return normalizeProduct({
           ...p,
+          id: validId,
           status: p.status || "Active",
           currentCost: p.currentCost ?? legacyP.buyPrice ?? 0,
-        };
+        });
       });
+
       const purchases = (action.state.purchases || []).map((pur) => {
         const totalAmount = pur.totalAmount ?? (pur.quantity * pur.buyPrice);
         const amountPaid = pur.amountPaid ?? (pur.paymentStatus === "Paid" ? totalAmount : 0);
         const dueAmount = pur.dueAmount ?? (totalAmount - amountPaid);
         const paymentStatus = pur.paymentStatus ?? (dueAmount === 0 ? "Paid" : (amountPaid > 0 ? "Partial" : "Credit"));
+        const remappedProdId = legacyIdRemap.get(pur.productId) || pur.productId;
         return {
           ...pur,
+          productId: remappedProdId,
           totalAmount,
           amountPaid,
           dueAmount,
@@ -1379,20 +1423,32 @@ function reducer(state: AppState, action: Action): AppState {
           returnedQuantity: pur.returnedQuantity ?? 0,
         };
       });
+
       const invoices = (action.state.invoices || []).map((inv: Invoice) => {
         return {
           ...inv,
           voided: inv.voided ?? false,
           items: (inv.items || []).map((item, idx) => {
-            const prod = products.find((p) => p.id === item.productId);
+            const remappedProdId = legacyIdRemap.get(item.productId) || item.productId;
+            const prod = products.find((p) => p.id === remappedProdId);
             return {
               ...item,
+              productId: remappedProdId,
               id: item.id || `inv-item-${inv.id}-${idx}`,
               costPrice: item.costPrice ?? prod?.currentCost ?? 0,
             };
           }),
         };
       });
+
+      const stockMovements = (action.state.stockMovements || []).map((sm) => {
+        const remappedProdId = legacyIdRemap.get(sm.productId) || sm.productId;
+        return {
+          ...sm,
+          productId: remappedProdId,
+        };
+      });
+
       return {
         ...action.state,
         products,
@@ -1400,7 +1456,7 @@ function reducer(state: AppState, action: Action): AppState {
         invoices,
         debtPayments: action.state.debtPayments ?? [],
         suppliers: action.state.suppliers ?? [],
-        stockMovements: action.state.stockMovements ?? [],
+        stockMovements,
         supplierPayments: action.state.supplierPayments ?? [],
         financeAccounts: action.state.financeAccounts?.length
           ? action.state.financeAccounts
@@ -1462,12 +1518,15 @@ function reducer(state: AppState, action: Action): AppState {
 
       // Create Stock Movement
       const supplierName = state.suppliers?.find((s) => s.id === purchase.supplierId)?.name || "Supplier";
+      const purchaseMovementTimestamp = (purchase.createdAt && purchase.createdAt.includes("T"))
+        ? purchase.createdAt
+        : new Date().toISOString();
       const movement: StockMovement = {
         id: generateUniqueId("sm"),
         productId: purchase.productId,
         type: "Purchase",
         delta: purchase.quantity,
-        date: purchase.date + "T12:00:00.000Z",
+        date: purchaseMovementTimestamp,
         desc: `Purchased from ${supplierName}`,
         reference: purchase.invoiceNumber || purchase.id,
       };
@@ -1808,12 +1867,15 @@ function reducer(state: AppState, action: Action): AppState {
 
       // 3. Stock Movement (type: "Purchase Return", negative delta)
       const supplierName = (state.suppliers || []).find((s) => s.id === origPurchase.supplierId)?.name || "Supplier";
+      const returnMovementTimestamp = (returnRecord.createdAt && returnRecord.createdAt.includes("T"))
+        ? returnRecord.createdAt
+        : new Date().toISOString();
       const movement: StockMovement = {
         id: generateUniqueId("sm"),
         productId: origPurchase.productId,
         type: "Purchase Return" as const,
         delta: -returnRecord.quantity,
-        date: returnRecord.createdAt,
+        date: returnMovementTimestamp,
         desc: `Returned to ${supplierName}. Reason: ${returnRecord.reason}`,
         reference: returnRecord.id,
       };
@@ -2118,7 +2180,9 @@ function reducer(state: AppState, action: Action): AppState {
     // ── Sales Return Reducers (Sprint 5.0) ───────────────────────────────────
     case "ADD_SALES_RETURN": {
       const { salesReturn } = action;
-      const now = salesReturn.createdAt;
+      const now = (salesReturn.createdAt && salesReturn.createdAt.includes("T"))
+        ? salesReturn.createdAt
+        : new Date().toISOString();
 
       // 1. Append the new sales return record
       const newSalesReturns = [...(state.salesReturns || []), salesReturn];

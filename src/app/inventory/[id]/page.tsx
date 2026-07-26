@@ -4,6 +4,7 @@ import { use, useMemo, useState, useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   Pencil,
@@ -31,7 +32,7 @@ import {
 import type { Invoice, InvoiceItem } from "@/types";
 import { ProductFormModal, AdjustStockModal } from "../components/ProductModals";
 import { calculateRevenue } from "@/lib/revenueUtils";
-import { toLocalDateStr } from "@/lib/dateUtils";
+import { toLocalDateStr, formatStockMovementDate } from "@/lib/dateUtils";
 
 // Custom date formatter helper
 function formatDisplayDate(dateStr?: string) {
@@ -71,10 +72,19 @@ export default function ProductDetailsPage({
   const [showEditModal, setShowEditModal] = useState(false);
   const [showAdjustModal, setShowAdjustModal] = useState(false);
 
+  const searchParams = useSearchParams();
+  const tabParam = searchParams?.get("tab");
+
   // Active Tab
   const [activeTab, setActiveTab] = useState<
     "overview" | "stock" | "sales" | "purchases" | "movement" | "vehicles"
   >("overview");
+
+  useEffect(() => {
+    if (tabParam && ["overview", "stock", "sales", "purchases", "movement", "vehicles"].includes(tabParam)) {
+      setActiveTab(tabParam as any);
+    }
+  }, [tabParam]);
 
   // Dynamic Sales Filtering for this product
   const productSales = useMemo(() => {
@@ -261,8 +271,15 @@ export default function ProductDetailsPage({
       });
     });
 
-    // Sort newest first
-    return list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    // Sort newest first with deterministic tie-breaker
+    return list.sort((a, b) => {
+      const timeA = new Date(a.date).getTime();
+      const timeB = new Date(b.date).getTime();
+      if (timeB !== timeA) return timeB - timeA;
+      const idA = (a as any).id || "";
+      const idB = (b as any).id || "";
+      return idB.localeCompare(idA);
+    });
   }, [productSales, state.stockMovements, state.invoices, id]);
 
   // Purchases from store for this product
@@ -883,7 +900,7 @@ export default function ProductDetailsPage({
                             }`}>{move.type}</span>
                             <span className="font-black text-slate-750">{move.desc}</span>
                           </div>
-                          <span className="text-slate-400 text-[10px]">{formatDisplayDate(move.date)}</span>
+                          <span className="text-slate-400 text-[10px]">{formatStockMovementDate(move.date)}</span>
                         </div>
                         <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
                           <span className="text-[10px] text-slate-550">

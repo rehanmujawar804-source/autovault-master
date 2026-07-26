@@ -4,6 +4,7 @@ import { useState } from "react";
 import { X, CheckCircle, AlertCircle, RefreshCw, PlusCircle, AlertTriangle, FileSpreadsheet } from "lucide-react";
 import type { Product, VehicleFitment } from "@/types";
 import { formatFitmentDisplay } from "@/lib/fitmentUtils";
+import { generateUniqueId } from "@/lib/store";
 
 export interface CSVImportRowResult {
   rowNumber: number;
@@ -65,7 +66,7 @@ export function CSVImportPreviewModal({
     const timestamp = new Date().toISOString();
 
     const productsToAdd: Product[] = newRows.map((r) => ({
-      id: "", // Will be assigned in reducer/store
+      id: generateUniqueId("p"),
       name: r.name,
       sku: r.sku,
       brand: r.brand,

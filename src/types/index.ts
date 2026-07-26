@@ -162,6 +162,7 @@ export interface StockMovement {
   date: string; // ISO timestamp
   desc: string;
   reference: string;
+  note?: string;
 }
 
 // ── Invoice ───────────────────────────────────

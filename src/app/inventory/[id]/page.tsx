@@ -219,6 +219,7 @@ export default function ProductDetailsPage({
       delta: number;
       desc: string;
       reference: string;
+      note?: string;
       refUrl?: string;
     }> = [];
 
@@ -255,6 +256,7 @@ export default function ProductDetailsPage({
         delta: m.delta,
         desc: m.desc,
         reference: m.reference,
+        note: m.note,
         refUrl: matchingInv ? `/invoices/${matchingInv.id}` : undefined,
       });
     });
@@ -918,6 +920,12 @@ export default function ProductDetailsPage({
                             {move.delta > 0 ? `+${move.delta}` : move.delta} units
                           </span>
                         </div>
+                        {move.note && (
+                          <div className="mt-2 text-xs bg-amber-50/70 border border-amber-200/80 text-amber-900 px-2.5 py-1.5 rounded-lg flex items-start gap-1.5">
+                            <span className="font-bold text-amber-800 uppercase tracking-wider text-[9px] mt-0.5 shrink-0">Reason:</span>
+                            <span className="font-medium text-slate-700">{move.note}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}

@@ -240,3 +240,104 @@ export function removeFitmentFromList(
 
   return { fitments: updated, removedCount };
 }
+
+/**
+ * Serializes an array of VehicleFitment objects into a clean, unambiguous CSV string.
+ * Uses pipe delimiters between fields: Brand | Model | YearFrom | YearTo
+ * Multiple fitments are separated by semicolons (`; `).
+ * Example output: "Land Rover | Range Rover | 2021 | 2021; Maruti Suzuki | Swift Dzire | 2018 | 2022"
+ */
+export function serializeFitmentsForCSV(fitments?: VehicleFitment[]): string {
+  if (!fitments || fitments.length === 0) return "";
+
+  return fitments
+    .map((f) => {
+      const brand = toTitleCase(f.brand);
+      const model = toTitleCase(f.model);
+      const parsed = parseFitmentBoundary(f);
+      const yearFrom = parsed.fromYear > 0 ? String(parsed.fromYear) : (f.year || "").trim();
+      const yearTo = parsed.toYear > 0 ? String(parsed.toYear) : (f.yearTo || f.year || "").trim();
+
+      return `${brand} | ${model} | ${yearFrom} | ${yearTo}`;
+    })
+    .join("; ");
+}
+
+/**
+ * Robustly parses a vehicle fitment string from CSV into VehicleFitment[].
+ * Supports:
+ *  1. Pipe format: "Brand | Model | YearFrom | YearTo" or "Brand | Model | Year"
+ *  2. Parenthetical range format: "Brand Model (2018-2022)" or "Brand Model (2021)"
+ *  3. Legacy space format fallback: "Brand Model 2018-2022" or "Brand Model 2021"
+ */
+export function parseFitmentsFromCSV(rawString: string): VehicleFitment[] {
+  if (!rawString || !rawString.trim()) return [];
+
+  const fitments: VehicleFitment[] = [];
+  const items = rawString.split(";").map((s) => s.trim()).filter(Boolean);
+
+  for (const item of items) {
+    // 1. Pipe-delimited format: Brand | Model | YearFrom | YearTo (or YearFrom)
+    if (item.includes("|")) {
+      const parts = item.split("|").map((s) => s.trim());
+      if (parts.length >= 3) {
+        const brand = toTitleCase(parts[0]);
+        const model = toTitleCase(parts[1]);
+        const year = parts[2];
+        const yearToRaw = parts[3] || parts[2];
+        const yearTo = yearToRaw !== year ? yearToRaw : undefined;
+        if (brand && model && year) {
+          fitments.push({ brand, model, year, ...(yearTo ? { yearTo } : {}) });
+          continue;
+        }
+      }
+    }
+
+    // 2. Parenthetical range format: "Brand Model (2018-2022)" or "Brand Model (2021)"
+    const matchParen = item.match(/^(.*?)\s*\((.*?)\)$/);
+    if (matchParen) {
+      const namePart = matchParen[1].trim();
+      const yearPart = matchParen[2].trim();
+      let fromYear = yearPart;
+      let toYear: string | undefined = undefined;
+
+      if (yearPart.includes("-") || yearPart.includes("–")) {
+        const yParts = yearPart.split(/[-–]/).map((s) => s.trim());
+        fromYear = yParts[0];
+        if (yParts[1] && yParts[1] !== fromYear) {
+          toYear = yParts[1];
+        }
+      }
+
+      const words = namePart.split(/\s+/);
+      if (words.length >= 2) {
+        const brand = toTitleCase(words[0]);
+        const model = toTitleCase(words.slice(1).join(" "));
+        fitments.push({ brand, model, year: fromYear, ...(toYear ? { yearTo: toYear } : {}) });
+        continue;
+      }
+    }
+
+    // 3. Fallback: space-separated "Brand Model Year" or "Brand Model YearFrom-YearTo"
+    const parts = item.split(/\s+/);
+    if (parts.length >= 3) {
+      const brand = toTitleCase(parts[0]);
+      const lastPart = parts[parts.length - 1];
+      const model = toTitleCase(parts.slice(1, parts.length - 1).join(" "));
+
+      if (lastPart.includes("-") || lastPart.includes("–")) {
+        const yParts = lastPart.split(/[-–]/).map((s) => s.trim());
+        const year = yParts[0];
+        const yearTo = yParts[1] !== year ? yParts[1] : undefined;
+        fitments.push({ brand, model, year, ...(yearTo ? { yearTo } : {}) });
+      } else {
+        fitments.push({ brand, model, year: lastPart });
+      }
+    } else if (parts.length === 2) {
+      fitments.push({ brand: toTitleCase(parts[0]), model: toTitleCase(parts[1]), year: "—" });
+    }
+  }
+
+  return fitments;
+}
+

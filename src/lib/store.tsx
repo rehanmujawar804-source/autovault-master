@@ -128,9 +128,15 @@ type Action =
   // Products
   | { type: "ADD_PRODUCT"; product: Product }
   | { type: "UPDATE_PRODUCT"; product: Product }
-  | { type: "ADJUST_STOCK"; productId: string; delta: number }
+  | { type: "ADJUST_STOCK"; productId: string; delta: number; note: string }
   | { type: "BULK_ASSIGN_FITMENT"; productIds: string[]; fitment: VehicleFitment }
   | { type: "BULK_REMOVE_FITMENT"; productIds: string[]; fitment: VehicleFitment }
+  | {
+      type: "BULK_IMPORT_PRODUCTS";
+      productsToAdd: Product[];
+      productsToUpdate: Product[];
+      stockAdjustments: Array<{ productId: string; delta: number }>;
+    }
 
   // Customers
   | { type: "ADD_CUSTOMER"; customer: Customer }
@@ -243,10 +249,11 @@ export function generateUniqueId(prefix: string): string {
   return `${prefix}-${Date.now()}-${rand}`;
 }
 
-/** Normalizes a product ensuring all standard properties are set properly */
+/** Normalizes a product ensuring all standard properties are set properly and Universal Fit invariant is strictly enforced */
 export function normalizeProduct(product: Partial<Product> & { id: string; name: string; sku: string }): Product {
   const fallbackTimestamp = new Date().toISOString();
   const legacyP = product as any;
+  const isUniversal = product.isUniversalFit ?? false;
   return {
     ...product,
     id: product.id,
@@ -259,8 +266,8 @@ export function normalizeProduct(product: Partial<Product> & { id: string; name:
     sellPrice: product.sellPrice ?? 0,
     lowStockThreshold: product.lowStockThreshold ?? 5,
     status: product.status || "Active",
-    fitments: product.fitments || [],
-    isUniversalFit: product.isUniversalFit ?? false,
+    isUniversalFit: isUniversal,
+    fitments: isUniversal ? [] : (product.fitments || []),
     createdAt: product.createdAt || fallbackTimestamp,
     updatedAt: product.updatedAt || fallbackTimestamp,
   };
@@ -437,6 +444,29 @@ const MIGRATIONS: StoreMigration[] = [
       };
     },
   },
+  {
+    id: "m004-normalize-universal-fit-invariant",
+    description:
+      "Enforces that Universal Fit products (isUniversalFit === true) have an empty fitments array ([]). " +
+      "Legacy specific fitments are cleared for Universal Fit products while preserving Product IDs, createdAt, " +
+      "invoices, purchases, and all other historical records intact.",
+    run(inputState) {
+      const log: string[] = [];
+      const repairedProducts = (inputState.products || []).map((p) => {
+        if (p.isUniversalFit && p.fitments && p.fitments.length > 0) {
+          log.push(
+            `Normalized product "${p.name}" (SKU: ${p.sku} | ID: ${p.id}): Cleared ${p.fitments.length} specific fitment(s) because product is Universal Fit.`
+          );
+          return normalizeProduct({ ...p, fitments: [] });
+        }
+        return normalizeProduct(p);
+      });
+      return {
+        state: { ...inputState, products: repairedProducts },
+        log,
+      };
+    },
+  },
 ];
 
 /**
@@ -598,36 +628,91 @@ function reducer(state: AppState, action: Action): AppState {
     // ── Products ──────────────────────────────
 
     case "ADD_PRODUCT": {
+      const normalizedProd = normalizeProduct(action.product);
       const movements = [...(state.stockMovements || [])];
-      if (action.product.stock > 0) {
+      if (normalizedProd.stock > 0) {
         movements.push({
           id: generateUniqueId("sm"),
-          productId: action.product.id,
+          productId: normalizedProd.id,
           type: "Opening Stock",
-          delta: action.product.stock,
-          date: action.product.createdAt || new Date().toISOString(),
+          delta: normalizedProd.stock,
+          date: normalizedProd.createdAt || new Date().toISOString(),
           desc: "Opening stock record declared at creation",
           reference: "SYSTEM-INIT",
         });
       }
       return {
         ...state,
-        products: [...state.products, action.product],
+        products: [...state.products, normalizedProd],
         stockMovements: movements,
       };
     }
 
-    case "UPDATE_PRODUCT":
+    case "UPDATE_PRODUCT": {
+      const normalizedProd = normalizeProduct(action.product);
       return {
         ...state,
         products: state.products.map((p) =>
-          p.id === action.product.id ? action.product : p
+          p.id === normalizedProd.id ? normalizedProd : p
         ),
       };
+    }
+
+    case "BULK_IMPORT_PRODUCTS": {
+      const timestamp = new Date().toISOString();
+      const movements = [...(state.stockMovements || [])];
+      const normalizedToAdd = action.productsToAdd.map(normalizeProduct);
+      const normalizedToUpdate = action.productsToUpdate.map(normalizeProduct);
+
+      // Record Opening Stock for new products with stock > 0
+      for (const p of normalizedToAdd) {
+        if (p.stock > 0) {
+          movements.push({
+            id: generateUniqueId("sm"),
+            productId: p.id,
+            type: "Opening Stock",
+            delta: p.stock,
+            date: p.createdAt || timestamp,
+            desc: "Opening stock declared at spreadsheet import",
+            reference: "SYSTEM-INIT",
+          });
+        }
+      }
+
+      // Record Stock Adjustments for existing products whose stock changed
+      for (const adj of action.stockAdjustments) {
+        if (adj.delta !== 0) {
+          movements.push({
+            id: generateUniqueId("sm"),
+            productId: adj.productId,
+            type: "Import",
+            delta: adj.delta,
+            date: timestamp,
+            desc: `Spreadsheet bulk stock update (${adj.delta > 0 ? "+" : ""}${adj.delta})`,
+            reference: "SPREADSHEET-IMPORT",
+          });
+        }
+      }
+
+      const updateMap = new Map<string, Product>();
+      for (const p of normalizedToUpdate) {
+        updateMap.set(p.id, p);
+      }
+
+      const updatedProducts = state.products.map((p) => updateMap.get(p.id) || p);
+      const finalProducts = [...updatedProducts, ...normalizedToAdd];
+
+      return {
+        ...state,
+        products: finalProducts,
+        stockMovements: movements,
+      };
+    }
 
     case "ADJUST_STOCK": {
       const originalProd = state.products.find(p => p.id === action.productId);
       const movements = [...(state.stockMovements || [])];
+      const trimmedNote = (action.note || "").trim();
       if (originalProd && action.delta !== 0) {
         movements.push({
           id: generateUniqueId("sm"),
@@ -637,6 +722,7 @@ function reducer(state: AppState, action: Action): AppState {
           date: new Date().toISOString(),
           desc: `Manual stock adjustment (${action.delta > 0 ? "+" : ""}${action.delta})`,
           reference: "MANUAL-ADJ",
+          note: trimmedNote || undefined,
         });
       }
       return {
@@ -657,6 +743,7 @@ function reducer(state: AppState, action: Action): AppState {
 
       const updatedProducts = state.products.map((p) => {
         if (!targetIdSet.has(p.id)) return p;
+        if (p.isUniversalFit) return p; // Universal Fit products cannot have specific fitments assigned
 
         const result = addOrMergeFitment(p.fitments || [], fitment);
         if (result.isRedundant) return p;
@@ -2476,7 +2563,12 @@ interface StoreContextValue {
   voidInvoice: (invoiceId: string, reason: string, voidedBy: string) => void;
   addProduct: (product: Omit<Product, "id">) => void;
   updateProduct: (product: Product) => void;
-  adjustStock: (productId: string, delta: number) => void;
+  adjustStock: (productId: string, delta: number, note: string) => void;
+  bulkImportProducts: (payload: {
+    productsToAdd: Product[];
+    productsToUpdate: Product[];
+    stockAdjustments: Array<{ productId: string; delta: number }>;
+  }) => void;
   addCustomer: (customer: Omit<Customer, "id">) => void;
   updateCustomer: (customer: Customer) => void;
   recordDebtPayment: (payment: Omit<DebtPayment, "id">) => void;
@@ -2757,9 +2849,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }
 
-  function adjustStock(productId: string, delta: number) {
+  function adjustStock(productId: string, delta: number, note: string) {
     if (!isOwnerAllowed()) return;
-    dispatch({ type: "ADJUST_STOCK", productId, delta });
+    const trimmedNote = (note || "").trim();
+    if (!trimmedNote) {
+      showToast("A valid reason or note is required for manual stock adjustments.", "error");
+      return;
+    }
+    dispatch({ type: "ADJUST_STOCK", productId, delta, note: trimmedNote });
+  }
+
+  function bulkImportProducts(payload: {
+    productsToAdd: Product[];
+    productsToUpdate: Product[];
+    stockAdjustments: Array<{ productId: string; delta: number }>;
+  }) {
+    if (!isOwnerAllowed()) return;
+    dispatch({ type: "BULK_IMPORT_PRODUCTS", ...payload });
   }
 
   function bulkAssignFitment(
@@ -3587,6 +3693,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         addProduct,
         updateProduct,
         adjustStock,
+        bulkImportProducts,
         bulkAssignFitment,
         bulkRemoveFitment,
         addCustomer,

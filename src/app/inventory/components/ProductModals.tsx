@@ -266,16 +266,18 @@ export function ProductFormModal({
               </select>
             </div>
 
-            <div>
-              <FieldLabel>Initial Stock</FieldLabel>
-              <input
-                type="number"
-                min="0"
-                value={form.stock}
-                onChange={(e) => setField("stock", Number(e.target.value))}
-                className={INPUT}
-              />
-            </div>
+            {!editingProduct && (
+              <div>
+                <FieldLabel>Initial Stock</FieldLabel>
+                <input
+                  type="number"
+                  min="0"
+                  value={form.stock}
+                  onChange={(e) => setField("stock", Number(e.target.value))}
+                  className={INPUT}
+                />
+              </div>
+            )}
 
             {editingProduct && (
               <div>
@@ -344,7 +346,28 @@ export function ProductFormModal({
                 id="isUniversalFitToggle"
                 type="checkbox"
                 checked={form.isUniversalFit ?? false}
-                onChange={(e) => setField("isUniversalFit", e.target.checked)}
+                onChange={(e) => {
+                  const isChecked = e.target.checked;
+                  if (isChecked) {
+                    if (form.fitments.length > 0) {
+                      showToast("Universal Fit enabled. Specific vehicle fitments have been cleared.", "info");
+                    }
+                    setForm((prev) => ({
+                      ...prev,
+                      isUniversalFit: true,
+                      fitments: [],
+                    }));
+                    setNewFitBrand("");
+                    setNewFitModel("");
+                    setNewFitYear("");
+                    setNewFitYearTo("");
+                  } else {
+                    setForm((prev) => ({
+                      ...prev,
+                      isUniversalFit: false,
+                    }));
+                  }
+                }}
                 className="w-4.5 h-4.5 text-navy-950 rounded border-slate-300 focus:ring-navy-600/30 cursor-pointer accent-navy-950"
               />
             </div>
@@ -355,11 +378,16 @@ export function ProductFormModal({
               Vehicle Compatibility (Fitment)
             </h3>
 
-            {form.fitments.length === 0 ? (
+            {form.isUniversalFit ? (
+              <div className="bg-purple-50 border border-purple-200 text-purple-900 text-xs p-3 rounded-xl flex items-start gap-2">
+                <AlertCircle size={15} className="text-purple-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Universal Fit is enabled.</strong> This product automatically applies to all vehicle makes and models. Specific vehicle fitments cannot coexist with Universal Fit.
+                </span>
+              </div>
+            ) : form.fitments.length === 0 ? (
               <p className="text-xs text-slate-400 italic">
-                {form.isUniversalFit
-                  ? "Universal Fit is enabled. Compatible with all vehicles."
-                  : "No specific vehicles configured for this product."}
+                No specific vehicles configured for this product.
               </p>
             ) : (
               <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-2 bg-slate-50 rounded-xl border border-slate-200/60">
@@ -386,123 +414,130 @@ export function ProductFormModal({
               </div>
             )}
 
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-bold text-slate-600">
-                  Add Compatible Vehicle Model
-                </p>
-                <span className="text-[11px] text-slate-400 font-medium">
-                  Leave Year To empty for a single-year fitment.
-                </span>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <div>
-                  <input
-                    type="text"
-                    placeholder="Brand (Honda)"
-                    value={newFitBrand}
-                    onChange={(e) => setNewFitBrand(e.target.value)}
-                    className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
-                  />
+            {!form.isUniversalFit && (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-slate-600">
+                    Add Compatible Vehicle Model
+                  </p>
+                  <span className="text-[11px] text-slate-400 font-medium">
+                    Leave Year To empty for a single-year fitment.
+                  </span>
                 </div>
-                <div>
-                  <input
-                    type="text"
-                    placeholder="Model (City)"
-                    value={newFitModel}
-                    onChange={(e) => setNewFitModel(e.target.value)}
-                    className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
-                  />
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Brand (Honda)"
+                      value={newFitBrand}
+                      onChange={(e) => setNewFitBrand(e.target.value)}
+                      className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Model (City)"
+                      value={newFitModel}
+                      onChange={(e) => setNewFitModel(e.target.value)}
+                      className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Year From (2018)"
+                      value={newFitYear}
+                      onChange={(e) => setNewFitYear(e.target.value)}
+                      className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Year To (2022)"
+                      value={newFitYearTo}
+                      onChange={(e) => setNewFitYearTo(e.target.value)}
+                      className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <input
-                    type="text"
-                    placeholder="Year From (2018)"
-                    value={newFitYear}
-                    onChange={(e) => setNewFitYear(e.target.value)}
-                    className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
-                  />
-                </div>
-                <div>
-                  <input
-                    type="text"
-                    placeholder="Year To (2022)"
-                    value={newFitYearTo}
-                    onChange={(e) => setNewFitYearTo(e.target.value)}
-                    className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
-                  />
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const brand = toTitleCase(newFitBrand);
-                  const model = toTitleCase(newFitModel);
-                  const year = newFitYear.trim();
-                  const yearToRaw = newFitYearTo.trim();
-
-                  if (!brand || !model || !year) {
-                    showToast("Please fill in Brand, Model, and Year to add fitment.", "error");
-                    return;
-                  }
-
-                  const YEAR_REGEX = /^\d{4}$/;
-                  if (!YEAR_REGEX.test(year)) {
-                    showToast("Year must be a valid 4-digit year (e.g. 2018).", "error");
-                    return;
-                  }
-
-                  let yearTo: string | undefined = undefined;
-                  if (yearToRaw) {
-                    if (!YEAR_REGEX.test(yearToRaw)) {
-                      showToast("Year To must be a valid 4-digit year (e.g. 2022).", "error");
+                <button
+                  type="button"
+                  className="w-full bg-navy-950 hover:bg-navy-800 text-white text-xs py-2 rounded-lg font-semibold transition-colors cursor-pointer"
+                  onClick={() => {
+                    if (form.isUniversalFit) {
+                      showToast("Cannot add specific fitments to a Universal Fit product.", "error");
                       return;
                     }
-                    if (Number(yearToRaw) < Number(year)) {
-                      showToast("Year To must be greater than or equal to Year.", "error");
+
+                    const brand = toTitleCase(newFitBrand);
+                    const model = toTitleCase(newFitModel);
+                    const year = newFitYear.trim();
+                    const yearToRaw = newFitYearTo.trim();
+
+                    if (!brand || !model || !year) {
+                      showToast("Please fill in Brand, Model, and Year to add fitment.", "error");
                       return;
                     }
-                    if (yearToRaw !== year) {
-                      yearTo = yearToRaw;
+
+                    const YEAR_REGEX = /^\d{4}$/;
+                    if (!YEAR_REGEX.test(year)) {
+                      showToast("Year must be a valid 4-digit year (e.g. 2018).", "error");
+                      return;
                     }
-                  }
 
-                  const newFitment: VehicleFitment = {
-                    brand,
-                    model,
-                    year,
-                    ...(yearTo ? { yearTo } : {}),
-                  };
+                    let yearTo: string | undefined = undefined;
+                    if (yearToRaw) {
+                      if (!YEAR_REGEX.test(yearToRaw)) {
+                        showToast("Year To must be a valid 4-digit year (e.g. 2022).", "error");
+                        return;
+                      }
+                      if (Number(yearToRaw) < Number(year)) {
+                        showToast("Year To must be greater than or equal to Year.", "error");
+                        return;
+                      }
+                      if (yearToRaw !== year) {
+                        yearTo = yearToRaw;
+                      }
+                    }
 
-                  const result = addOrMergeFitment(form.fitments, newFitment);
+                    const newFitment: VehicleFitment = {
+                      brand,
+                      model,
+                      year,
+                      ...(yearTo ? { yearTo } : {}),
+                    };
 
-                  if (result.isRedundant) {
-                    showToast("This vehicle fitment is already covered by an existing range.", "info");
-                    return;
-                  }
+                    const result = addOrMergeFitment(form.fitments, newFitment);
 
-                  setForm((prev) => ({
-                    ...prev,
-                    fitments: result.fitments,
-                  }));
+                    if (result.isRedundant) {
+                      showToast("This vehicle fitment is already covered by an existing range.", "info");
+                      return;
+                    }
 
-                  if (result.wasMerged) {
-                    showToast("Vehicle fitment range updated and merged successfully.", "success");
-                  } else {
-                    showToast("Vehicle fitment added.", "success");
-                  }
+                    setForm((prev) => ({
+                      ...prev,
+                      fitments: result.fitments,
+                    }));
 
-                  setNewFitBrand("");
-                  setNewFitModel("");
-                  setNewFitYear("");
-                  setNewFitYearTo("");
-                }}
-                className="w-full bg-navy-950 hover:bg-navy-800 text-white text-xs py-2 rounded-lg font-semibold transition-colors cursor-pointer"
-              >
-                + Add Compatible Vehicle
-              </button>
+                    if (result.wasMerged) {
+                      showToast("Vehicle fitment range updated and merged successfully.", "success");
+                    } else {
+                      showToast("Vehicle fitment added.", "success");
+                    }
+
+                    setNewFitBrand("");
+                    setNewFitModel("");
+                    setNewFitYear("");
+                    setNewFitYearTo("");
+                  }}
+                >
+                  + Add Compatible Vehicle
+                </button>
             </div>
-          </div>
+          )}
+        </div>
         </div>
 
         <div className="flex gap-3 px-5 pb-5">
@@ -537,9 +572,11 @@ export function AdjustStockModal({
 }: AdjustStockModalProps) {
   const { adjustStock, showToast } = useStore();
   const [stockDelta, setStockDelta] = useState("");
+  const [reasonNote, setReasonNote] = useState("");
 
   useEffect(() => {
     setStockDelta("");
+    setReasonNote("");
   }, [isOpen, product]);
 
   if (!isOpen || !product) return null;
@@ -548,7 +585,12 @@ export function AdjustStockModal({
     if (!product) return;
     const delta = Number(stockDelta);
     if (isNaN(delta) || delta <= 0 || !Number.isInteger(delta)) {
-      showToast("Please enter a valid positive whole number.", "error");
+      showToast("Please enter a valid positive whole number for stock quantity.", "error");
+      return;
+    }
+    const trimmedNote = reasonNote.trim();
+    if (!trimmedNote) {
+      showToast("Please provide a reason or note for this stock adjustment.", "error");
       return;
     }
     if (direction === "remove" && delta > product.stock) {
@@ -556,7 +598,7 @@ export function AdjustStockModal({
       return;
     }
     try {
-      adjustStock(product.id, direction === "add" ? delta : -delta);
+      adjustStock(product.id, direction === "add" ? delta : -delta, trimmedNote);
       showToast(`Adjusted stock for "${product.name}" successfully!`, "success");
       onClose();
     } catch (err) {
@@ -585,7 +627,7 @@ export function AdjustStockModal({
           </div>
 
           <div>
-            <FieldLabel>Quantity to Add or Remove</FieldLabel>
+            <FieldLabel>Quantity to Add or Remove *</FieldLabel>
             <input
               type="number"
               min="1"
@@ -594,6 +636,17 @@ export function AdjustStockModal({
               onChange={(e) => setStockDelta(e.target.value)}
               className={INPUT}
               autoFocus
+            />
+          </div>
+
+          <div>
+            <FieldLabel>Reason / Note *</FieldLabel>
+            <input
+              type="text"
+              placeholder="e.g. Stock count correction, damaged item, customer return..."
+              value={reasonNote}
+              onChange={(e) => setReasonNote(e.target.value)}
+              className={INPUT}
             />
           </div>
 
@@ -617,15 +670,17 @@ export function AdjustStockModal({
 
         <div className="flex gap-3 px-5 pb-5">
           <button
+            type="button"
             onClick={() => handleStockAdjust("remove")}
-            disabled={!stockDelta || Number(stockDelta) <= 0}
+            disabled={!stockDelta || Number(stockDelta) <= 0 || !reasonNote.trim()}
             className="flex-1 bg-red-500 hover:bg-red-600 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
           >
             &minus; Remove
           </button>
           <button
+            type="button"
             onClick={() => handleStockAdjust("add")}
-            disabled={!stockDelta || Number(stockDelta) <= 0}
+            disabled={!stockDelta || Number(stockDelta) <= 0 || !reasonNote.trim()}
             className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
           >
             + Add

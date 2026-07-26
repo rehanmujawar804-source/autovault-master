@@ -6,7 +6,10 @@ import { useRole } from "@/hooks/useRole";
 import type { Product, VehicleFitment } from "@/types";
 import { ProductFormModal, AdjustStockModal } from "./components/ProductModals";
 import { BulkFitmentModal } from "./components/BulkFitmentModals";
-import { formatFitmentDisplay } from "@/lib/fitmentUtils";
+import { CSVImportPreviewModal, type CSVImportRowResult } from "./components/CSVImportPreviewModal";
+import { SpreadsheetImportUploadModal } from "./components/SpreadsheetImportUploadModal";
+import { formatFitmentDisplay, serializeFitmentsForCSV, parseFitmentsFromCSV } from "@/lib/fitmentUtils";
+import { generateXLSXWorkbook, generateCSVText, parseSpreadsheetFile } from "@/lib/spreadsheetUtils";
 import Link from "next/link";
 import {
   Search,
@@ -33,6 +36,7 @@ import {
   ArrowUpDown,
   Sparkles,
   Trash2,
+  FileSpreadsheet,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,7 +89,7 @@ type ProductForm = typeof EMPTY_FORM;
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function InventoryPage() {
-  const { state, addProduct, updateProduct, adjustStock, getInventoryValue, showToast } =
+  const { state, addProduct, updateProduct, adjustStock, bulkImportProducts, getInventoryValue, showToast } =
     useStore();
   const { isOwner, loading, requireAuth } = useRole();
 
@@ -108,6 +112,13 @@ export default function InventoryPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [stockModal, setStockModal] = useState<Product | null>(null);
+
+  // ── CSV / XLSX Import Preview Modal & Export State ──────────────────────
+  const [isImportUploadOpen, setIsImportUploadOpen] = useState(false);
+  const [csvPreviewOpen, setCsvPreviewOpen] = useState(false);
+  const [parsedCSVRows, setParsedCSVRows] = useState<CSVImportRowResult[]>([]);
+  const [importFileName, setImportFileName] = useState("autovault_inventory.xlsx");
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
   // ── Expandable Product Row State ──────────────────────────────────────────
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
@@ -514,315 +525,136 @@ export default function InventoryPage() {
 
   // Modals are managed externally by imported modal components
 
-  // ── Import / Export CSV ───────────────────────────────────────────────────
-  function handleExportCSV() {
-    const headers = [
-      "Name",
-      "SKU",
-      "Brand",
-      "Category",
-      "Stock",
-      "Buy Price",
-      "Sell Price",
-      "Low Stock Threshold",
-      "Compatible Vehicles"
-    ];
-
-    const rows = state.products.map((p) => {
-      const fitmentString = (p.fitments || [])
-        .map((f) => `${f.brand} ${f.model} ${f.year}`)
-        .join("; ");
-
-      const escape = (val: string | number) => {
-        const text = String(val);
-        if (text.includes(",") || text.includes('"') || text.includes("\n")) {
-          return `"${text.replace(/"/g, '""')}"`;
-        }
-        return text;
-      };
-
-      return [
-        escape(p.name),
-        escape(p.sku),
-        escape(p.brand),
-        escape(p.category),
-        p.stock,
-        p.currentCost,
-        p.sellPrice,
-        p.lowStockThreshold,
-        escape(fitmentString)
-      ].join(",");
-    });
-
-    const csvContent = [headers.join(","), ...rows].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", "autovault_inventory.csv");
-    link.style.visibility = "hidden";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  }
-
-  function parseCSVLine(line: string): string[] {
-    const result: string[] = [];
-    let cell = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (c === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          cell += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-      } else if (c === ',' && !inQuotes) {
-        result.push(cell.trim());
-        cell = "";
-      } else {
-        cell += c;
-      }
+  // ── Import / Export Spreadsheet (XLSX & CSV) ─────────────────────────────
+  async function handleExportXLSX() {
+    try {
+      const blob = await generateXLSXWorkbook(state.products);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `autovault_inventory_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast("Inventory workbook exported to Excel (.xlsx)", "success");
+    } catch {
+      showToast("Failed to export XLSX file.", "error");
     }
-    result.push(cell.trim());
-    return result;
   }
 
-  function handleImportCSV(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  function handleExportCSV() {
+    try {
+      const csvContent = generateCSVText(state.products);
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `autovault_inventory_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast("Inventory exported to CSV (.csv)", "success");
+    } catch {
+      showToast("Failed to export CSV file.", "error");
+    }
+  }
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      let text = event.target?.result as string;
-      if (!text) return;
+  async function handleContinueToPreview(file: File) {
+    setIsImportUploadOpen(false);
+    setImportFileName(file.name);
 
-      // Strip UTF-8 BOM if present
-      if (text.startsWith("\uFEFF")) {
-        text = text.substring(1);
-      }
+    try {
+      const results = await parseSpreadsheetFile(file, state.products);
+      setParsedCSVRows(results);
+      setCsvPreviewOpen(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to parse uploaded spreadsheet.";
+      showToast(msg, "error");
+    }
+  }
 
-      const lines: string[] = [];
-      let currentLine = "";
-      let inQuotes = false;
-
-      for (let i = 0; i < text.length; i++) {
-        const char = text[i];
-        if (char === '"') {
-          inQuotes = !inQuotes;
-          currentLine += char;
-        } else if (char === "\n" && !inQuotes) {
-          lines.push(currentLine.trim());
-          currentLine = "";
-        } else if (char === "\r") {
-          // ignore
-        } else {
-          currentLine += char;
-        }
-      }
-      if (currentLine) {
-        lines.push(currentLine.trim());
-      }
-
-      if (lines.length === 0) {
-        alert("Empty or invalid CSV file.");
-        return;
-      }
-
-      const firstRowCells = parseCSVLine(lines[0]);
-      const headers = firstRowCells.map((h) => h.toLowerCase());
-
-      const findHeaderIndex = (aliases: string[]) => {
-        for (const alias of aliases) {
-          const idx = headers.indexOf(alias.toLowerCase());
-          if (idx !== -1) return idx;
-        }
-        return -1;
-      };
-
-      let idxName = findHeaderIndex(["name", "product name", "product", "title"]);
-      let idxSKU = findHeaderIndex(["sku", "sku code", "code", "item code"]);
-      let idxBrand = findHeaderIndex(["brand", "make", "manufacturer"]);
-      let idxCategory = findHeaderIndex(["category", "type", "group"]);
-      let idxStock = findHeaderIndex(["stock", "qty", "quantity", "units", "count"]);
-      let idxBuy = findHeaderIndex(["buy price", "buy", "cost", "purchase price", "cost price", "buyprice"]);
-      let idxSell = findHeaderIndex(["sell price", "sell", "price", "selling price", "rate", "sellprice"]);
-      let idxThreshold = findHeaderIndex(["low stock threshold", "threshold", "low stock", "alert qty", "alert"]);
-      let idxFitments = findHeaderIndex(["compatible vehicles", "compatibility", "vehicles", "fitment", "fitments", "cars"]);
-
-      let hasHeaders = true;
-      let startRowIdx = 1;
-
-      // If key columns are not found, check if it's a headerless CSV matching our standard positions
-      if (idxName === -1 || idxSKU === -1 || idxSell === -1) {
-        const looksLikeData = firstRowCells.length >= 2;
-        if (looksLikeData) {
-          hasHeaders = false;
-          startRowIdx = 0;
-          idxName = 0;
-          idxSKU = 1;
-          idxBrand = 2;
-          idxCategory = 3;
-          idxStock = 4;
-          idxBuy = 5;
-          idxSell = 6;
-          idxThreshold = 7;
-          idxFitments = 8;
-        } else {
-          alert("CSV must contain columns matching 'Name', 'SKU', and 'Sell Price', or be structured in standard order.");
-          return;
-        }
-      }
-
-      let importedCount = 0;
-      let duplicateCount = 0;
-      let invalidCount = 0;
-
-      const cleanNumber = (val: string) => {
-        if (!val) return 0;
-        const clean = val.replace(/[₹$,\s]/g, "");
-        return Number(clean) || 0;
-      };
-
-      for (let i = startRowIdx; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line) continue;
-
-        const cells = parseCSVLine(line);
-
-        const sku = cells[idxSKU] || "";
-        const name = cells[idxName] || "";
-
-        if (!sku || !name) {
-          invalidCount++;
-          continue;
-        }
-
-        const brand = idxBrand !== -1 ? cells[idxBrand] || "" : "";
-        const category = idxCategory !== -1 ? cells[idxCategory] || "" : "";
-        const stock = idxStock !== -1 ? cleanNumber(cells[idxStock]) : 0;
-        const buyPrice = idxBuy !== -1 ? cleanNumber(cells[idxBuy]) : 0;
-        const sellPrice = idxSell !== -1 ? cleanNumber(cells[idxSell]) : 0;
-        const lowStockThreshold = idxThreshold !== -1 ? cleanNumber(cells[idxThreshold]) || 5 : 5;
-
-        const fitmentsRaw = idxFitments !== -1 ? cells[idxFitments] || "" : "";
-        const fitments: VehicleFitment[] = [];
-        if (fitmentsRaw) {
-          fitmentsRaw.split(";").forEach((item) => {
-            const trimmed = item.trim();
-            if (!trimmed) return;
-            const parts = trimmed.split(" ");
-            if (parts.length >= 3) {
-              const year = parts[parts.length - 1];
-              const brand = parts[0];
-              const model = parts.slice(1, parts.length - 1).join(" ");
-              fitments.push({ brand, model, year });
-            } else if (parts.length === 2) {
-              fitments.push({ brand: parts[0], model: parts[1], year: "—" });
-            }
-          });
-        }
-
-        // ── SKU format check ──────────────────────────────────────────────
-        if (!SKU_REGEX.test(sku.trim())) {
-          showToast(
-            `Row skipped: SKU "${sku}" contains invalid characters or wrong length (3–40 chars, alphanumeric/hyphen/underscore only).`,
-            "error"
-          );
-          invalidCount++;
-          continue;
-        }
-
-        const duplicate = state.products.find(
-          (p) => p.sku.trim().toLowerCase() === sku.trim().toLowerCase()
-        );
-
-        if (duplicate) {
-          showToast(
-            `Row skipped: SKU "${sku}" already exists for "${duplicate.name}". Duplicate SKU rejected.`,
-            "error"
-          );
-          duplicateCount++;
-          continue;
-        }
-
-        // ── Status: validate, default Active ─────────────────────────────
-        let idxStatus = -1;
-        const headersCopy = firstRowCells.map((h) => h.toLowerCase());
-        for (const alias of ["status", "product status", "state"]) {
-          const idx = headersCopy.indexOf(alias);
-          if (idx !== -1) { idxStatus = idx; break; }
-        }
-        let importStatus: "Active" | "Inactive" | "Discontinued" = "Active";
-        if (idxStatus !== -1 && cells[idxStatus]) {
-          const rawStatus = cells[idxStatus].trim();
-          if (["Active", "Inactive", "Discontinued"].includes(rawStatus)) {
-            importStatus = rawStatus as "Active" | "Inactive" | "Discontinued";
-          } else {
-            showToast(
-              `Row "${name}": Invalid status "${rawStatus}" — defaulting to Active.`,
-              "error"
-            );
-          }
-        }
-
-        addProduct({
-          name,
-          sku,
-          brand,
-          category,
-          status: importStatus,
-          stock,
-          currentCost: buyPrice,
-          sellPrice,
-          lowStockThreshold,
-          fitments,
-        });
-
-        importedCount++;
-      }
-
-      alert(
-        `Import completed successfully!\n\nSummary:\n- Successfully Imported: ${importedCount} products\n- Skipped (Duplicate SKU): ${duplicateCount}\n- Skipped (Invalid SKU/Name): ${invalidCount}`
-      );
-      e.target.value = "";
-    };
-    reader.readAsText(file);
+  async function handleDownloadSampleTemplate() {
+    try {
+      const blob = await generateXLSXWorkbook(state.products);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `autovault_products_template.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast("Sample XLSX import template downloaded", "success");
+    } catch {
+      showToast("Failed to download template.", "error");
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="w-full max-w-full min-w-0 space-y-6">
-      {/* Hidden file input for CSV Import */}
-      <input
-        type="file"
-        id="csv-import-input"
-        accept=".csv"
-        onChange={handleImportCSV}
-        className="hidden"
-      />
 
-      {/* ── Page Header with action buttons moved here per audit ── */}
+      {/* ── Page Header with action buttons ── */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h1 className="text-2xl font-bold text-navy-950">Inventory</h1>
         {isOwner && (
           <div className="flex items-center gap-2 shrink-0">
+            {/* Export Dropdown Menu (Primary: XLSX, Secondary: CSV) */}
+            <div className="relative">
+              <button
+                onClick={() => setShowExportMenu((prev) => !prev)}
+                className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 transition-colors cursor-pointer shadow-xs"
+              >
+                <FileSpreadsheet size={14} className="text-emerald-600" />
+                Export
+                <ChevronDown size={12} className="text-slate-400" />
+              </button>
+              {showExportMenu && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setShowExportMenu(false)} />
+                  <div className="absolute right-0 mt-1.5 z-40 w-52 bg-white border border-slate-200 rounded-xl shadow-xl py-1 text-xs animate-in fade-in-50 zoom-in-95 duration-100">
+                    <button
+                      onClick={() => {
+                        setShowExportMenu(false);
+                        handleExportXLSX();
+                      }}
+                      className="w-full flex items-center justify-between px-3.5 py-2.5 text-left font-bold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2">
+                        <FileSpreadsheet size={15} className="text-emerald-600" />
+                        Export XLSX
+                      </span>
+                      <span className="text-[9px] font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
+                        Primary
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowExportMenu(false);
+                        handleExportCSV();
+                      }}
+                      className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left font-medium text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer border-t border-slate-100"
+                    >
+                      <Download size={14} className="text-slate-400" />
+                      Export CSV
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Import Button (Supports .xlsx, .xls, .csv) */}
             <button
-              onClick={handleExportCSV}
-              className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 transition-colors cursor-pointer"
+              onClick={() => setIsImportUploadOpen(true)}
+              className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 transition-colors cursor-pointer shadow-xs"
             >
-              <Download size={13} />
-              Export
+              <Upload size={13} className="text-navy-950" />
+              Import Spreadsheet
             </button>
-            <button
-              onClick={() => document.getElementById("csv-import-input")?.click()}
-              className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 transition-colors cursor-pointer"
-            >
-              <Upload size={13} />
-              Import
-            </button>
+
+            {/* Add Product Button */}
             <button
               onClick={() => { setEditingProduct(null); setShowModal(true); }}
               className="flex items-center gap-1.5 h-9 px-4 rounded-lg text-xs font-bold text-navy-950 bg-yellow-400 hover:bg-yellow-300 border border-yellow-300 transition-colors cursor-pointer shadow-sm"
@@ -1241,7 +1073,7 @@ export default function InventoryPage() {
               <div className="text-center">
                 <p className="text-sm font-bold text-slate-700">Warehouse is Empty</p>
                 <p className="text-xs text-slate-400 mt-1.5 max-w-[280px] mx-auto leading-relaxed">
-                  No products added yet. Use <strong className="text-slate-500">Import</strong> to upload a CSV or add your first product manually.
+                  No products added yet. Use <strong className="text-slate-500">Import</strong> to upload a CSV or XLSX spreadsheet or add your first product manually.
                 </p>
               </div>
               {isOwner && (
@@ -1770,6 +1602,39 @@ export default function InventoryPage() {
         onClose={() => setShowBulkRemoveModal(false)}
         selectedProducts={selectedProductsList}
         onSuccess={() => setSelectedProductIds([])}
+      />
+
+      {/* ── Spreadsheet Import Upload Modal ── */}
+      <SpreadsheetImportUploadModal
+        isOpen={isImportUploadOpen}
+        onClose={() => setIsImportUploadOpen(false)}
+        onContinue={handleContinueToPreview}
+        onDownloadTemplate={handleDownloadSampleTemplate}
+      />
+
+      {/* ── CSV Import Preview Modal ── */}
+      <CSVImportPreviewModal
+        isOpen={csvPreviewOpen}
+        fileName={importFileName}
+        parsedRows={parsedCSVRows}
+        onClose={() => {
+          setCsvPreviewOpen(false);
+          setParsedCSVRows([]);
+        }}
+        onConfirm={(payload) => {
+          try {
+            bulkImportProducts(payload);
+            showToast(
+              `Import completed! ${payload.productsToAdd.length} products added, ${payload.productsToUpdate.length} products updated.`,
+              "success"
+            );
+          } catch {
+            showToast("Failed to apply CSV import.", "error");
+          } finally {
+            setCsvPreviewOpen(false);
+            setParsedCSVRows([]);
+          }
+        }}
       />
     </div>
   );

@@ -157,7 +157,7 @@ export function BulkFitmentModal({
             <div className="flex items-start gap-2 bg-amber-50 border border-amber-200/80 text-amber-900 text-xs p-3 rounded-xl">
               <Sparkles size={14} className="shrink-0 mt-0.5 text-amber-600" />
               <span>
-                Note: 1 or more selected products are marked as <strong>Universal Fit</strong>. Adding explicit fitments does not disable Universal Fit.
+                Note: 1 or more selected products are marked as <strong>Universal Fit</strong>. Universal Fit products are compatible with all vehicles and will be skipped during specific fitment assignment.
               </span>
             </div>
           )}

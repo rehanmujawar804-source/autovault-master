@@ -142,26 +142,48 @@ export function ProductFormModal({
     }
 
     if (editingProduct) {
-      const editCost = form.currentCost === "" ? 0 : Number(form.currentCost);
-      const editSellPrice = form.sellPrice === "" ? 0 : Number(form.sellPrice);
-      const editStock = form.stock === "" ? 0 : Number(form.stock);
-      const editLowStock = form.lowStockThreshold === "" ? 5 : Number(form.lowStockThreshold);
+      const trimmedCategory = form.category.trim();
+      if (!trimmedCategory) {
+        setFormError("Category is required.");
+        return;
+      }
 
+      if (!form.status || !PRODUCT_STATUSES.includes(form.status)) {
+        setFormError("Status is required.");
+        return;
+      }
+
+      if (form.currentCost === "" || form.currentCost === null || form.currentCost === undefined || isNaN(Number(form.currentCost))) {
+        setFormError("Current cost is required.");
+        return;
+      }
+      const editCost = Number(form.currentCost);
       if (editCost < 0) {
         setFormError("Current cost cannot be negative.");
         return;
       }
+
+      if (form.sellPrice === "" || form.sellPrice === null || form.sellPrice === undefined || isNaN(Number(form.sellPrice))) {
+        setFormError("Sell price is required.");
+        return;
+      }
+      const editSellPrice = Number(form.sellPrice);
       if (editSellPrice < 0) {
         setFormError("Sell price cannot be negative.");
         return;
       }
 
-      if (!Number.isInteger(editStock) || editStock < 0) {
-        setFormError("Stock must be a whole number (0 or more).");
+      if (form.lowStockThreshold === "" || form.lowStockThreshold === null || form.lowStockThreshold === undefined || isNaN(Number(form.lowStockThreshold))) {
+        setFormError("Low stock alert is required.");
         return;
       }
-      if (!Number.isInteger(editLowStock) || editLowStock < 1) {
-        setFormError("Low stock threshold must be a whole number of at least 1.");
+      const editLowStock = Number(form.lowStockThreshold);
+      if (editLowStock < 0) {
+        setFormError("Low stock alert cannot be negative.");
+        return;
+      }
+      if (!Number.isInteger(editLowStock)) {
+        setFormError("Low stock alert must be a whole number.");
         return;
       }
 
@@ -178,10 +200,11 @@ export function ProductFormModal({
           name: trimmedName,
           sku: editingProduct.sku,
           brand: form.brand.trim(),
-          category: form.category.trim(),
+          category: trimmedCategory,
+          status: form.status,
           currentCost: editCost,
           sellPrice: editSellPrice,
-          stock: editStock,
+          stock: editingProduct.stock,
           lowStockThreshold: editLowStock,
         });
         showToast(`"${trimmedName}" updated successfully.`, "success");
@@ -366,7 +389,7 @@ export function ProductFormModal({
 
             {editingProduct && (
               <div>
-                <FieldLabel>Current Cost (₹) — Manual Fallback</FieldLabel>
+                <FieldLabel>Current Cost (₹) * — Manual Fallback</FieldLabel>
                 <input
                   type="number"
                   min="0"

@@ -128,6 +128,7 @@ type Action =
   // Products
   | { type: "ADD_PRODUCT"; product: Product }
   | { type: "UPDATE_PRODUCT"; product: Product }
+  | { type: "DELETE_PRODUCT"; productId: string }
   | { type: "ADJUST_STOCK"; productId: string; delta: number; note: string }
   | { type: "BULK_ASSIGN_FITMENT"; productIds: string[]; fitment: VehicleFitment }
   | { type: "BULK_REMOVE_FITMENT"; productIds: string[]; fitment: VehicleFitment }
@@ -549,6 +550,48 @@ function calcPaymentStatus(due: number, total: number): PaymentStatus {
   return "Debt";
 }
 
+/**
+ * Pure safety check function determining whether a product can be permanently deleted.
+ * Enforces zero protected business activity rule:
+ * Returns false if product has any sales invoice (active or voided), sales return,
+ * exchange replacement item, purchase, purchase order, or purchase return.
+ */
+export function isProductSafeToDelete(productId: string, state: AppState): boolean {
+  if (!productId || !state) return false;
+
+  // 1. Sales Invoices (active & voided)
+  const hasInvoice = (state.invoices || []).some((inv) =>
+    (inv.items || []).some((item) => item.productId === productId)
+  );
+  if (hasInvoice) return false;
+
+  // 2. Sales Returns & Exchange Items (all statuses)
+  const hasSalesReturn = (state.salesReturns || []).some(
+    (sr) =>
+      (sr.items || []).some((item) => item.productId === productId) ||
+      (sr.exchangeItems || []).some((ex) => ex.productId === productId)
+  );
+  if (hasSalesReturn) return false;
+
+  // 3. Purchases
+  const hasPurchase = (state.purchases || []).some((p) => p.productId === productId);
+  if (hasPurchase) return false;
+
+  // 4. Purchase Orders (all statuses)
+  const hasPO = (state.purchaseOrders || []).some((po) =>
+    (po.items || []).some((item) => item.productId === productId)
+  );
+  if (hasPO) return false;
+
+  // 5. Purchase Returns
+  const hasPurchaseReturn = (state.purchaseReturns || []).some(
+    (pr) => pr.productId === productId
+  );
+  if (hasPurchaseReturn) return false;
+
+  return true;
+}
+
 // ─────────────────────────────────────────────
 //  REDUCER-LEVEL RBAC HARDENING
 // ─────────────────────────────────────────────
@@ -561,6 +604,7 @@ const OWNER_ONLY_ACTIONS = new Set<Action["type"]>([
   // Products Management
   "ADD_PRODUCT",
   "UPDATE_PRODUCT",
+  "DELETE_PRODUCT",
   "ADJUST_STOCK",
   "BULK_ASSIGN_FITMENT",
   "BULK_REMOVE_FITMENT",
@@ -668,6 +712,42 @@ function reducer(state: AppState, action: Action): AppState {
         products: state.products.map((p) =>
           p.id === normalizedProd.id ? normalizedProd : p
         ),
+      };
+    }
+
+    case "DELETE_PRODUCT": {
+      const { productId } = action;
+
+      // Defense-in-depth: Final reducer boundary safety check
+      if (!isProductSafeToDelete(productId, state)) {
+        console.warn(`[AutoVault Security] Aborted DELETE_PRODUCT dispatch for "${productId}". Product has protected business activity.`);
+        return state;
+      }
+
+      // 1. Remove product from master products array
+      const newProducts = state.products.filter((p) => p.id !== productId);
+
+      // 2. Remove exclusive inventory-only stock movements for this product
+      const newStockMovements = (state.stockMovements || []).filter(
+        (sm) => sm.productId !== productId
+      );
+
+      // 3. Remove items from holdBills and remove any HoldBill that becomes completely empty
+      const newHoldBills = (state.holdBills || [])
+        .map((hb) => {
+          const filteredItems = (hb.items || []).filter((item) => item.product.id !== productId);
+          return {
+            ...hb,
+            items: filteredItems,
+          };
+        })
+        .filter((hb) => hb.items.length > 0);
+
+      return {
+        ...state,
+        products: newProducts,
+        stockMovements: newStockMovements,
+        holdBills: newHoldBills,
       };
     }
 
@@ -2636,6 +2716,8 @@ interface StoreContextValue {
   voidInvoice: (invoiceId: string, reason: string, voidedBy: string) => void;
   addProduct: (product: Omit<Product, "id">) => void;
   updateProduct: (product: Product) => void;
+  deleteProduct: (productId: string) => boolean;
+  isProductSafeToDelete: (productId: string) => boolean;
   adjustStock: (productId: string, delta: number, note: string) => void;
   bulkImportProducts: (payload: {
     productsToAdd: Product[];
@@ -2920,6 +3002,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         updatedAt: timestamp,
       },
     });
+  }
+
+  function isProductSafeToDeleteHelper(productId: string): boolean {
+    return isProductSafeToDelete(productId, state);
+  }
+
+  function deleteProduct(productId: string): boolean {
+    if (!isOwnerAllowed()) {
+      showToast("Only the Owner can delete products.", "error");
+      return false;
+    }
+    // CHECK 2: Double safety check immediately before dispatch
+    if (!isProductSafeToDelete(productId, state)) {
+      showToast("This product can no longer be deleted because protected business activity was found.", "error");
+      return false;
+    }
+    dispatch({ type: "DELETE_PRODUCT", productId });
+    return true;
   }
 
   function adjustStock(productId: string, delta: number, note: string) {
@@ -3809,6 +3909,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         getSupplierMonthlyPurchase,
         getLowStockProducts,
         getOutOfStockProducts,
+        deleteProduct,
+        isProductSafeToDelete: isProductSafeToDeleteHelper,
         getCustomerById,
         getInvoiceById,
         getInvoicesByCustomer,

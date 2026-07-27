@@ -4,12 +4,15 @@ import { use, useMemo, useState, useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { formatDateOnlyIST, formatInvoiceDate, formatPurchaseDate, sortInvoicesDescending, sortPurchasesDescending } from "@/lib/dateUtils";
 import {
   ArrowLeft,
   Pencil,
   Layers,
+  Trash2,
+  AlertTriangle,
+  X,
   DollarSign,
   Package,
   Calendar,
@@ -57,8 +60,9 @@ export default function ProductDetailsPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const { state, showToast } = useStore();
+  const { state, showToast, deleteProduct, isProductSafeToDelete } = useStore();
   const { isOwner, loading, requireAuth } = useRole();
+  const router = useRouter();
 
   useEffect(() => {
     if (!loading) requireAuth();
@@ -72,6 +76,26 @@ export default function ProductDetailsPage({
   // Modal triggers
   const [showEditModal, setShowEditModal] = useState(false);
   const [showAdjustModal, setShowAdjustModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+  // CHECK 1: Fail-safe safety check determining whether Delete Product button should be visible
+  const isDeletable = useMemo(() => {
+    if (!product || !isOwner) return false;
+    return isProductSafeToDelete(product.id);
+  }, [product, isOwner, isProductSafeToDelete, state]);
+
+  function handleConfirmDelete() {
+    if (!product) return;
+    // deleteProduct performs CHECK 2 (second safety check) immediately before state dispatch
+    const success = deleteProduct(product.id);
+    if (success) {
+      showToast("Product permanently deleted.", "success");
+      setShowDeleteModal(false);
+      router.push("/inventory");
+    } else {
+      setShowDeleteModal(false);
+    }
+  }
 
   const searchParams = useSearchParams();
   const tabParam = searchParams?.get("tab");
@@ -141,84 +165,12 @@ export default function ProductDetailsPage({
     };
   }, [productSales, state.salesReturns, state.invoices, id]);
 
-  if (!product) {
-    return (
-      <div className="py-20 flex flex-col items-center gap-4">
-        <div className="w-20 h-20 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center shadow-sm">
-          <AlertCircle size={36} className="text-red-500" />
-        </div>
-        <div className="text-center">
-          <p className="text-base font-bold text-slate-700">Product Not Found</p>
-          <p className="text-sm text-slate-400 mt-1 max-w-xs mx-auto leading-relaxed">
-            The product identifier does not exist or may have been updated.
-          </p>
-        </div>
-        <Link
-          href="/inventory"
-          className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-all cursor-pointer shadow"
-        >
-          Back to Inventory
-        </Link>
-      </div>
-    );
-  }
-
-  // 10 Core Product KPI Cards values
-  const currentStock = product.stock;
-  const reservedStock = 0;
-  const availableStock = currentStock - reservedStock;
-  const currentCost = product.currentCost;
-  const sellPrice = product.sellPrice;
-  const unitProfit = sellPrice - currentCost;
-  const marginPct = sellPrice > 0 ? ((sellPrice - currentCost) / sellPrice) * 100 : 0;
-  const inventoryValue = currentStock * sellPrice;
-  const capitalInvested = currentStock * currentCost;
-
   // Opening stock = sum of all "Opening Stock" movements for this product
   const openingStock = useMemo(() => {
     return (state.stockMovements || [])
       .filter((m) => m.productId === id && m.type === "Opening Stock")
       .reduce((sum, m) => sum + m.delta, 0);
   }, [state.stockMovements, id]);
-
-  // Intelligence calculations
-  const lowStock = currentStock <= product.lowStockThreshold;
-  const outOfStock = currentStock === 0;
-
-  // Stock health pct vs threshold
-  const stockHealthPct =
-    product.lowStockThreshold > 0
-      ? Math.round((currentStock / product.lowStockThreshold) * 100)
-      : 100;
-
-  const daysSinceLastSale = (() => {
-    if (salesStats.lastSoldDate === "—") return "—";
-    try {
-      const lastDate = new Date(salesStats.lastSoldDate);
-      const diffTime = Math.abs(Date.now() - lastDate.getTime());
-      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-      return diffDays;
-    } catch {
-      return "—";
-    }
-  })();
-
-  // Deterministic velocity flag
-  const velocity =
-    salesStats.totalUnitsSold === 0
-      ? "Dead Stock"
-      : salesStats.totalUnitsSold <= 5
-      ? "Slow Moving"
-      : salesStats.totalUnitsSold <= 20
-      ? "Medium Moving"
-      : "Fast Moving";
-
-  // Deterministic restock recommendation
-  const restockQty = lowStock ? product.lowStockThreshold * 2 : 0;
-
-  // Deterministic profitability rating
-  const profitability =
-    marginPct > 40 ? "High" : marginPct >= 20 ? "Medium" : "Low";
 
   // Pull real stock movements from store for this product, merging with sale events
   const stockMovements = useMemo(() => {
@@ -286,6 +238,79 @@ export default function ProductDetailsPage({
     return sortPurchasesDescending((state.purchases || []).filter((p) => p.productId === id));
   }, [state.purchases, id]);
 
+  // Safe early return ONLY AFTER all 18 hooks have executed unconditionally
+  if (!product) {
+    return (
+      <div className="py-20 flex flex-col items-center gap-4">
+        <div className="w-20 h-20 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center shadow-sm">
+          <AlertCircle size={36} className="text-red-500" />
+        </div>
+        <div className="text-center">
+          <p className="text-base font-bold text-slate-700">Product Not Found</p>
+          <p className="text-sm text-slate-400 mt-1 max-w-xs mx-auto leading-relaxed">
+            The product identifier does not exist or may have been updated.
+          </p>
+        </div>
+        <Link
+          href="/inventory"
+          className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-all cursor-pointer shadow"
+        >
+          Back to Inventory
+        </Link>
+      </div>
+    );
+  }
+
+  // 10 Core Product KPI Cards values
+  const currentStock = product.stock;
+  const reservedStock = 0;
+  const availableStock = currentStock - reservedStock;
+  const currentCost = product.currentCost;
+  const sellPrice = product.sellPrice;
+  const unitProfit = sellPrice - currentCost;
+  const marginPct = sellPrice > 0 ? ((sellPrice - currentCost) / sellPrice) * 100 : 0;
+  const inventoryValue = currentStock * sellPrice;
+  const capitalInvested = currentStock * currentCost;
+
+  // Intelligence calculations
+  const lowStock = currentStock <= product.lowStockThreshold;
+  const outOfStock = currentStock === 0;
+
+  // Stock health pct vs threshold
+  const stockHealthPct =
+    product.lowStockThreshold > 0
+      ? Math.round((currentStock / product.lowStockThreshold) * 100)
+      : 100;
+
+  const daysSinceLastSale = (() => {
+    if (salesStats.lastSoldDate === "—") return "—";
+    try {
+      const lastDate = new Date(salesStats.lastSoldDate);
+      const diffTime = Math.abs(Date.now() - lastDate.getTime());
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      return diffDays;
+    } catch {
+      return "—";
+    }
+  })();
+
+  // Deterministic velocity flag
+  const velocity =
+    salesStats.totalUnitsSold === 0
+      ? "Dead Stock"
+      : salesStats.totalUnitsSold <= 5
+      ? "Slow Moving"
+      : salesStats.totalUnitsSold <= 20
+      ? "Medium Moving"
+      : "Fast Moving";
+
+  // Deterministic restock recommendation
+  const restockQty = lowStock ? product.lowStockThreshold * 2 : 0;
+
+  // Deterministic profitability rating
+  const profitability =
+    marginPct > 40 ? "High" : marginPct >= 20 ? "Medium" : "Low";
+
   return (
     <div className="space-y-6">
       {/* ── Header Toolbar ── */}
@@ -345,6 +370,15 @@ export default function ProductDetailsPage({
         <div className="flex items-center gap-2">
           {isOwner && (
             <>
+              {isDeletable && (
+                <button
+                  onClick={() => setShowDeleteModal(true)}
+                  className="flex items-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all cursor-pointer shadow-sm active:scale-98"
+                >
+                  <Trash2 size={14} />
+                  Delete Product
+                </button>
+              )}
               <button
                 onClick={() => setShowAdjustModal(true)}
                 className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors cursor-pointer border border-slate-200"
@@ -367,14 +401,12 @@ export default function ProductDetailsPage({
       {/* ── Main High-Density KPI Grid ── */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {/* Current Stock — primary metric, given stronger treatment */}
-        <div className={`border p-4 rounded-xl flex flex-col justify-between h-24 ${
-          outOfStock ? 'bg-red-50 border-red-200' : lowStock ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'
-        }`}>
+        <div className={`border p-4 rounded-xl flex flex-col justify-between h-24 ${outOfStock ? 'bg-red-50 border-red-200' : lowStock ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'
+          }`}>
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Current Stock</span>
           <div className="flex items-baseline gap-1">
-            <span className={`text-2xl font-bold tabular-nums ${
-              outOfStock ? 'text-red-700' : lowStock ? 'text-amber-700' : 'text-slate-800'
-            }`}>{currentStock}</span>
+            <span className={`text-2xl font-bold tabular-nums ${outOfStock ? 'text-red-700' : lowStock ? 'text-amber-700' : 'text-slate-800'
+              }`}>{currentStock}</span>
             <span className="text-slate-400 text-xs font-normal">units</span>
           </div>
         </div>
@@ -500,11 +532,10 @@ export default function ProductDetailsPage({
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`px-3.5 py-2 border-b-2 text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${
-                  activeTab === tab.id
+                className={`px-3.5 py-2 border-b-2 text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${activeTab === tab.id
                     ? "border-navy-950 text-navy-950 font-semibold"
                     : "border-transparent text-slate-450 hover:text-slate-700 hover:border-slate-300"
-                }`}
+                  }`}
               >
                 {tab.label}
               </button>
@@ -568,9 +599,8 @@ export default function ProductDetailsPage({
                     <div className="border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
                       <div>
                         <span className="text-xs text-slate-400 font-semibold block uppercase tracking-wider">Restock Recommendation</span>
-                        <p className={`text-lg font-bold mt-2 ${
-                          restockQty > 0 ? "text-amber-600" : "text-green-700"
-                        }`}>
+                        <p className={`text-lg font-bold mt-2 ${restockQty > 0 ? "text-amber-600" : "text-green-700"
+                          }`}>
                           {restockQty > 0 ? `Order ${restockQty} units` : "Adequate Stock"}
                         </p>
                       </div>
@@ -726,13 +756,12 @@ export default function ProductDetailsPage({
                               </td>
                               <td className="px-4 py-3 text-center">
                                 <span
-                                  className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${
-                                    inv.paymentStatus === "Paid"
+                                  className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${inv.paymentStatus === "Paid"
                                       ? "bg-green-50 text-green-700 border-green-200"
                                       : inv.paymentStatus === "Partial"
-                                      ? "bg-orange-50 text-orange-700 border-orange-200"
-                                      : "bg-red-50 text-red-600 border-red-200"
-                                  }`}
+                                        ? "bg-orange-50 text-orange-700 border-orange-200"
+                                        : "bg-red-50 text-red-600 border-red-200"
+                                    }`}
                                 >
                                   {inv.paymentStatus}
                                 </span>
@@ -801,11 +830,10 @@ export default function ProductDetailsPage({
                               <td className="px-4 py-3 text-xs text-right font-bold text-slate-800">₹{(pur.buyPrice * pur.quantity).toLocaleString()}</td>
                               <td className="px-4 py-3 text-xs font-mono text-slate-500">{pur.invoiceNumber || "—"}</td>
                               <td className="px-4 py-3 text-center">
-                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                                  pur.paymentStatus === "Paid"
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${pur.paymentStatus === "Paid"
                                     ? "bg-green-50 text-green-700 border-green-200"
                                     : "bg-amber-50 text-amber-700 border-amber-200"
-                                }`}>
+                                  }`}>
                                   {pur.paymentStatus}
                                 </span>
                               </td>
@@ -825,117 +853,113 @@ export default function ProductDetailsPage({
                 <h3 className="text-base font-bold text-slate-800">Stock Movement Ledger</h3>
 
                 {stockMovements.length === 0 ? (
-                <div className="py-12 flex flex-col items-center justify-center text-center gap-3">
-                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-200">
-                    <rect x="6" y="12" width="36" height="27" rx="3" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-                    <path d="M6 19h36" stroke="currentColor" strokeWidth="1.5"/>
-                    <path d="M15 9v6M33 9v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                    <path d="M13 28h22M13 34h14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                  </svg>
-                  <div>
-                    <p className="text-sm font-bold text-slate-600">No movements recorded yet</p>
-                    <p className="text-xs text-slate-400 mt-0.5">Movements appear here after stock adjustments, purchases, or sales.</p>
-                  </div>
-                </div>
-                ) : (
-                <div className="relative border-l-2 border-slate-100 ml-4 pl-6 space-y-6">
-                  {stockMovements.map((move, idx) => (
-                    <div key={idx} className="relative">
-                      {/* Node Circle */}
-                      <span
-                        className={`absolute -left-[31px] top-1.5 w-4 h-4 rounded-full border-2 bg-white flex items-center justify-center ${
-                          move.type === "Sale"
-                            ? "border-blue-500 text-blue-500"
-                            : move.type === "Purchase"
-                            ? "border-emerald-500 text-emerald-500"
-                            : move.type === "Purchase Return"
-                            ? "border-rose-500 text-rose-500"
-                            : move.type === "Return" || move.type === "Sales Return"
-                            ? "border-violet-500 text-violet-500"
-                            : move.type === "Invoice Void"
-                            ? "border-purple-600 text-purple-600"
-                            : move.type === "Opening Stock"
-                            ? "border-green-600 text-green-600"
-                            : move.type === "Adjustment"
-                            ? "border-amber-500 text-amber-500"
-                            : "border-slate-400 text-slate-400"
-                        }`}
-                      >
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            move.type === "Sale"
-                              ? "bg-blue-500"
-                              : move.type === "Purchase"
-                              ? "bg-emerald-500"
-                              : move.type === "Purchase Return"
-                              ? "bg-rose-500"
-                              : move.type === "Return" || move.type === "Sales Return"
-                              ? "bg-violet-500"
-                              : move.type === "Invoice Void"
-                              ? "bg-purple-600"
-                              : move.type === "Opening Stock"
-                              ? "bg-green-600"
-                              : move.type === "Adjustment"
-                              ? "bg-amber-500"
-                              : "bg-slate-400"
-                          }`}
-                        />
-                      </span>
-
-                      {/* Movement content */}
-                      <div className="bg-slate-50/50 hover:bg-slate-50 border border-slate-150 rounded-xl p-4 transition-all">
-                        <div className="flex items-center justify-between flex-wrap gap-2 text-xs">
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${
-                              move.type === "Sale" ? "bg-blue-50 text-blue-600"
-                              : move.type === "Purchase" ? "bg-emerald-50 text-emerald-700"
-                              : move.type === "Purchase Return" ? "bg-rose-50 text-rose-700"
-                              : move.type === "Return" || move.type === "Sales Return" ? "bg-violet-50 text-violet-750"
-                              : move.type === "Invoice Void" ? "bg-purple-50 text-purple-700"
-                              : move.type === "Opening Stock" ? "bg-green-50 text-green-700"
-                              : move.type === "Adjustment" ? "bg-amber-50 text-amber-700"
-                              : "bg-slate-100 text-slate-500"
-                            }`}>{move.type}</span>
-                            <span className="font-black text-slate-750">{move.desc}</span>
-                          </div>
-                          <span className="text-slate-400 text-[10px]">{formatStockMovementDate(move.date)}</span>
-                        </div>
-                        <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
-                          <span className="text-[10px] text-slate-550">
-                            Ref:{" "}
-                            {move.refUrl ? (
-                              <Link
-                                href={move.refUrl}
-                                className="text-amber-600 hover:text-amber-700 font-bold inline-flex items-center gap-0.5"
-                              >
-                                {move.reference}
-                                <ExternalLink size={8} />
-                              </Link>
-                            ) : (
-                              <span className="font-semibold">{move.reference}</span>
-                            )}
-                          </span>
-
-                          <span
-                            className={`text-xs font-black px-2 py-0.5 rounded ${
-                              move.delta > 0
-                                ? "bg-green-50 text-green-700"
-                                : "bg-red-50 text-red-600"
-                            }`}
-                          >
-                            {move.delta > 0 ? `+${move.delta}` : move.delta} units
-                          </span>
-                        </div>
-                        {move.note && (
-                          <div className="mt-2 text-xs bg-amber-50/70 border border-amber-200/80 text-amber-900 px-2.5 py-1.5 rounded-lg flex items-start gap-1.5">
-                            <span className="font-bold text-amber-800 uppercase tracking-wider text-[9px] mt-0.5 shrink-0">Reason:</span>
-                            <span className="font-medium text-slate-700">{move.note}</span>
-                          </div>
-                        )}
-                      </div>
+                  <div className="py-12 flex flex-col items-center justify-center text-center gap-3">
+                    <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-200">
+                      <rect x="6" y="12" width="36" height="27" rx="3" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                      <path d="M6 19h36" stroke="currentColor" strokeWidth="1.5" />
+                      <path d="M15 9v6M33 9v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                      <path d="M13 28h22M13 34h14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                    <div>
+                      <p className="text-sm font-bold text-slate-600">No movements recorded yet</p>
+                      <p className="text-xs text-slate-400 mt-0.5">Movements appear here after stock adjustments, purchases, or sales.</p>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ) : (
+                  <div className="relative border-l-2 border-slate-100 ml-4 pl-6 space-y-6">
+                    {stockMovements.map((move, idx) => (
+                      <div key={idx} className="relative">
+                        {/* Node Circle */}
+                        <span
+                          className={`absolute -left-[31px] top-1.5 w-4 h-4 rounded-full border-2 bg-white flex items-center justify-center ${move.type === "Sale"
+                              ? "border-blue-500 text-blue-500"
+                              : move.type === "Purchase"
+                                ? "border-emerald-500 text-emerald-500"
+                                : move.type === "Purchase Return"
+                                  ? "border-rose-500 text-rose-500"
+                                  : move.type === "Return" || move.type === "Sales Return"
+                                    ? "border-violet-500 text-violet-500"
+                                    : move.type === "Invoice Void"
+                                      ? "border-purple-600 text-purple-600"
+                                      : move.type === "Opening Stock"
+                                        ? "border-green-600 text-green-600"
+                                        : move.type === "Adjustment"
+                                          ? "border-amber-500 text-amber-500"
+                                          : "border-slate-400 text-slate-400"
+                            }`}
+                        >
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${move.type === "Sale"
+                                ? "bg-blue-500"
+                                : move.type === "Purchase"
+                                  ? "bg-emerald-500"
+                                  : move.type === "Purchase Return"
+                                    ? "bg-rose-500"
+                                    : move.type === "Return" || move.type === "Sales Return"
+                                      ? "bg-violet-500"
+                                      : move.type === "Invoice Void"
+                                        ? "bg-purple-600"
+                                        : move.type === "Opening Stock"
+                                          ? "bg-green-600"
+                                          : move.type === "Adjustment"
+                                            ? "bg-amber-500"
+                                            : "bg-slate-400"
+                              }`}
+                          />
+                        </span>
+
+                        {/* Movement content */}
+                        <div className="bg-slate-50/50 hover:bg-slate-50 border border-slate-150 rounded-xl p-4 transition-all">
+                          <div className="flex items-center justify-between flex-wrap gap-2 text-xs">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${move.type === "Sale" ? "bg-blue-50 text-blue-600"
+                                  : move.type === "Purchase" ? "bg-emerald-50 text-emerald-700"
+                                    : move.type === "Purchase Return" ? "bg-rose-50 text-rose-700"
+                                      : move.type === "Return" || move.type === "Sales Return" ? "bg-violet-50 text-violet-750"
+                                        : move.type === "Invoice Void" ? "bg-purple-50 text-purple-700"
+                                          : move.type === "Opening Stock" ? "bg-green-50 text-green-700"
+                                            : move.type === "Adjustment" ? "bg-amber-50 text-amber-700"
+                                              : "bg-slate-100 text-slate-500"
+                                }`}>{move.type}</span>
+                              <span className="font-black text-slate-750">{move.desc}</span>
+                            </div>
+                            <span className="text-slate-400 text-[10px]">{formatStockMovementDate(move.date)}</span>
+                          </div>
+                          <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
+                            <span className="text-[10px] text-slate-550">
+                              Ref:{" "}
+                              {move.refUrl ? (
+                                <Link
+                                  href={move.refUrl}
+                                  className="text-amber-600 hover:text-amber-700 font-bold inline-flex items-center gap-0.5"
+                                >
+                                  {move.reference}
+                                  <ExternalLink size={8} />
+                                </Link>
+                              ) : (
+                                <span className="font-semibold">{move.reference}</span>
+                              )}
+                            </span>
+
+                            <span
+                              className={`text-xs font-black px-2 py-0.5 rounded ${move.delta > 0
+                                  ? "bg-green-50 text-green-700"
+                                  : "bg-red-50 text-red-600"
+                                }`}
+                            >
+                              {move.delta > 0 ? `+${move.delta}` : move.delta} units
+                            </span>
+                          </div>
+                          {move.note && (
+                            <div className="mt-2 text-xs bg-amber-50/70 border border-amber-200/80 text-amber-900 px-2.5 py-1.5 rounded-lg flex items-start gap-1.5">
+                              <span className="font-bold text-amber-800 uppercase tracking-wider text-[9px] mt-0.5 shrink-0">Reason:</span>
+                              <span className="font-medium text-slate-700">{move.note}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             )}
@@ -1052,8 +1076,8 @@ export default function ProductDetailsPage({
               />
               <div className="flex items-start gap-1.5 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-amber-600 shrink-0 mt-0.5">
-                  <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/>
-                  <path d="M6 4v3M6 8.5v.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                  <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2" />
+                  <path d="M6 4v3M6 8.5v.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
                 <p className="text-[10px] text-amber-700 font-medium leading-snug">
                   Not saved. Notes are session-only and lost on navigation.
@@ -1075,6 +1099,96 @@ export default function ProductDetailsPage({
         onClose={() => setShowAdjustModal(false)}
         product={product}
       />
+
+      {/* Delete Product Confirmation Modal */}
+      {showDeleteModal && product && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-5 border-b border-slate-150 bg-red-50/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                  <Trash2 size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">Delete Product Permanently?</h3>
+                  <p className="text-xs text-red-700 font-medium mt-0.5">Destructive Action — Owner Authorization Required</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4">
+              {/* Target Product Summary Card */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2 text-xs">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-medium">Product Name:</span>
+                  <span className="font-bold text-slate-800">{product.name}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-medium">SKU:</span>
+                  <span className="font-mono font-bold text-slate-700">{product.sku}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-medium">Current Stock:</span>
+                  <span className="font-bold text-slate-800">{product.stock} units</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-medium">Status:</span>
+                  <span className="font-bold text-slate-700">{product.status || "Active"}</span>
+                </div>
+              </div>
+
+              {/* Eligibility notice */}
+              <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                This product has no protected sales, purchase, return, or other business transaction history and is eligible for permanent deletion.
+              </p>
+
+              {/* Cascade removal list */}
+              <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-2">
+                <p className="text-xs font-bold text-amber-900">Deleting this product will permanently remove:</p>
+                <ul className="text-[11px] text-amber-800 space-y-1.5 list-disc list-inside font-medium">
+                  <li>Product record</li>
+                  <li>Current stock associated with this product</li>
+                  <li>Inventory-only StockMovement history belonging exclusively to this product</li>
+                  <li>Embedded Vehicle Fitment data belonging to this product</li>
+                  <li>Any references to this product in temporary Hold Bills</li>
+                  <li>Any Hold Bill that becomes completely empty after removing this product</li>
+                </ul>
+              </div>
+
+              {/* Permanent Warning */}
+              <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl p-3 font-semibold">
+                <AlertTriangle size={16} className="shrink-0 text-red-500" />
+                <span>This action cannot be undone.</span>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-end gap-3 p-4 bg-slate-50 border-t border-slate-150">
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-sm font-semibold transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-bold transition-all shadow cursor-pointer active:scale-98"
+              >
+                <Trash2 size={15} />
+                Delete Permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

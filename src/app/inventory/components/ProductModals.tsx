@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useStore } from "@/lib/store";
 import { X, AlertCircle, AlertTriangle } from "lucide-react";
 import type { Product, VehicleFitment } from "@/types";
@@ -42,6 +42,123 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+function getMatchingSuggestions(
+  query: string,
+  candidates: string[],
+  currentSelfName?: string
+): string[] {
+  const trimmed = query.trim().toLowerCase();
+  if (!trimmed) return [];
+
+  const selfLower = currentSelfName ? currentSelfName.trim().toLowerCase() : null;
+
+  const startsWithMatches: string[] = [];
+  const includesMatches: string[] = [];
+
+  for (const item of candidates) {
+    const itemLower = item.trim().toLowerCase();
+
+    // Avoid confusing self-match suggestion if entered text is simply its current name
+    if (selfLower && itemLower === selfLower && trimmed === selfLower) {
+      continue;
+    }
+
+    if (itemLower.startsWith(trimmed)) {
+      startsWithMatches.push(item);
+    } else if (itemLower.includes(trimmed)) {
+      includesMatches.push(item);
+    }
+  }
+
+  const combined = [...startsWithMatches, ...includesMatches];
+  return combined.slice(0, 8);
+}
+
+interface SuggestionInputProps {
+  label: React.ReactNode;
+  value: string;
+  onChange: (val: string) => void;
+  suggestions: string[];
+  placeholder?: string;
+  className?: string;
+  readOnly?: boolean;
+  id?: string;
+}
+
+function SuggestionInput({
+  label,
+  value,
+  onChange,
+  suggestions,
+  placeholder,
+  className,
+  readOnly = false,
+  id,
+}: SuggestionInputProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(event.target as Node)
+      ) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  const showSuggestions = isOpen && suggestions.length > 0 && !readOnly;
+
+  return (
+    <div className="relative" ref={containerRef}>
+      {label && <FieldLabel>{label}</FieldLabel>}
+      <input
+        id={id}
+        type="text"
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setIsOpen(true);
+        }}
+        onFocus={() => setIsOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            setIsOpen(false);
+          }
+        }}
+        placeholder={placeholder}
+        className={className}
+        readOnly={readOnly}
+        autoComplete="off"
+      />
+      {showSuggestions && (
+        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-44 overflow-y-auto z-50 py-1">
+          {suggestions.map((item) => (
+            <button
+              key={item}
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(item);
+                setIsOpen(false);
+              }}
+              className="w-full text-left px-3.5 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-navy-950 font-medium transition-colors cursor-pointer flex items-center justify-between"
+            >
+              <span>{item}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ProductFormModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -64,6 +181,75 @@ export function ProductFormModal({
   const [newFitModel, setNewFitModel] = useState("");
   const [newFitYear, setNewFitYear] = useState("");
   const [newFitYearTo, setNewFitYearTo] = useState("");
+
+  // Derived canonical brands map: lowercase -> canonical stored string
+  const canonicalBrands = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!state?.products) return map;
+    for (const p of state.products) {
+      if (!p.brand) continue;
+      const trimmed = p.brand.trim();
+      if (!trimmed) continue;
+      const lower = trimmed.toLowerCase();
+      if (!map.has(lower)) {
+        map.set(lower, trimmed);
+      }
+    }
+    return map;
+  }, [state?.products]);
+
+  // Derived canonical categories map: lowercase -> canonical stored string
+  const canonicalCategories = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!state?.products) return map;
+    for (const p of state.products) {
+      if (!p.category) continue;
+      const trimmed = p.category.trim();
+      if (!trimmed) continue;
+      const lower = trimmed.toLowerCase();
+      if (!map.has(lower)) {
+        map.set(lower, trimmed);
+      }
+    }
+    return map;
+  }, [state?.products]);
+
+  // Deduplicated list of product names
+  const existingProductNames = useMemo(() => {
+    const nameMap = new Map<string, string>();
+    if (!state?.products) return [];
+    for (const p of state.products) {
+      if (!p.name) continue;
+      const trimmed = p.name.trim();
+      if (!trimmed) continue;
+      const lower = trimmed.toLowerCase();
+      if (!nameMap.has(lower)) {
+        nameMap.set(lower, trimmed);
+      }
+    }
+    return Array.from(nameMap.values());
+  }, [state?.products]);
+
+  // Dynamic suggestions for Product Name
+  const nameSuggestions = useMemo(() => {
+    return getMatchingSuggestions(
+      form.name,
+      existingProductNames,
+      editingProduct?.name
+    );
+  }, [form.name, existingProductNames, editingProduct]);
+
+  // Dynamic suggestions for Brand
+  const brandSuggestions = useMemo(() => {
+    const brandList = Array.from(canonicalBrands.values());
+    return getMatchingSuggestions(form.brand, brandList);
+  }, [form.brand, canonicalBrands]);
+
+  // Dynamic suggestions for Category
+  const categorySuggestions = useMemo(() => {
+    const categoryList = Array.from(canonicalCategories.values());
+    return getMatchingSuggestions(form.category, categoryList);
+  }, [form.category, canonicalCategories]);
 
   useEffect(() => {
     if (editingProduct) {
@@ -141,9 +327,27 @@ export function ProductFormModal({
       return;
     }
 
+    // Case-insensitive canonicalization for Brand
+    let finalBrand = form.brand.trim();
+    if (finalBrand) {
+      const canonicalMatch = canonicalBrands.get(finalBrand.toLowerCase());
+      if (canonicalMatch) {
+        finalBrand = canonicalMatch;
+      }
+    }
+
+    // Case-insensitive canonicalization for Category
+    let rawCategory = form.category.trim();
+    let finalCategory = rawCategory;
+    if (rawCategory) {
+      const canonicalMatch = canonicalCategories.get(rawCategory.toLowerCase());
+      if (canonicalMatch) {
+        finalCategory = canonicalMatch;
+      }
+    }
+
     if (editingProduct) {
-      const trimmedCategory = form.category.trim();
-      if (!trimmedCategory) {
+      if (!finalCategory) {
         setFormError("Category is required.");
         return;
       }
@@ -199,8 +403,8 @@ export function ProductFormModal({
           ...form,
           name: trimmedName,
           sku: editingProduct.sku,
-          brand: form.brand.trim(),
-          category: trimmedCategory,
+          brand: finalBrand,
+          category: finalCategory,
           status: form.status,
           currentCost: editCost,
           sellPrice: editSellPrice,
@@ -215,8 +419,7 @@ export function ProductFormModal({
       }
     } else {
       // NEW PRODUCT CREATION VALIDATION
-      const trimmedCategory = form.category.trim();
-      if (!trimmedCategory) {
+      if (!finalCategory) {
         setFormError("Category is required.");
         return;
       }
@@ -271,8 +474,8 @@ export function ProductFormModal({
           ...form,
           name: trimmedName,
           sku: trimmedSku,
-          brand: form.brand.trim(),
-          category: trimmedCategory,
+          brand: finalBrand,
+          category: finalCategory,
           status: form.status || "Active",
           stock: stockNum,
           currentCost: costNum,
@@ -316,11 +519,11 @@ export function ProductFormModal({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
-              <FieldLabel>Product Name *</FieldLabel>
-              <input
-                type="text"
+              <SuggestionInput
+                label="Product Name *"
                 value={form.name}
-                onChange={(e) => setField("name", e.target.value)}
+                onChange={(val) => setField("name", val)}
+                suggestions={nameSuggestions}
                 placeholder="e.g. LED Headlight H7"
                 className={INPUT}
               />
@@ -340,22 +543,22 @@ export function ProductFormModal({
             </div>
 
             <div>
-              <FieldLabel>Brand</FieldLabel>
-              <input
-                type="text"
+              <SuggestionInput
+                label="Brand"
                 value={form.brand}
-                onChange={(e) => setField("brand", e.target.value)}
+                onChange={(val) => setField("brand", val)}
+                suggestions={brandSuggestions}
                 placeholder="e.g. Philips"
                 className={INPUT}
               />
             </div>
 
             <div>
-              <FieldLabel>Category *</FieldLabel>
-              <input
-                type="text"
+              <SuggestionInput
+                label="Category *"
                 value={form.category}
-                onChange={(e) => setField("category", e.target.value)}
+                onChange={(val) => setField("category", val)}
+                suggestions={categorySuggestions}
                 placeholder="e.g. Lights"
                 className={INPUT}
               />

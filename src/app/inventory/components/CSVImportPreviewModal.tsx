@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { X, CheckCircle, AlertCircle, RefreshCw, PlusCircle, AlertTriangle, FileSpreadsheet } from "lucide-react";
 import type { Product, VehicleFitment } from "@/types";
 import { formatFitmentDisplay } from "@/lib/fitmentUtils";
-import { generateUniqueId } from "@/lib/store";
+import { generateUniqueId, useStore } from "@/lib/store";
 
 export interface CSVImportRowResult {
   rowNumber: number;
@@ -13,14 +13,26 @@ export interface CSVImportRowResult {
   name: string;
   brand: string;
   category: string;
-  stock: number;
-  buyPrice: number;
-  sellPrice: number;
-  lowStockThreshold: number;
-  status: "Active" | "Inactive" | "Discontinued";
+  stock: number | "";
+  buyPrice: number | ""; // maps to currentCost
+  sellPrice: number | "";
+  lowStockThreshold: number | "";
+  status: "Active" | "Inactive" | "Discontinued" | "";
   isUniversalFit: boolean;
   fitments: VehicleFitment[];
   errors: string[];
+  fieldErrors?: {
+    name?: string;
+    sku?: string;
+    brand?: string;
+    category?: string;
+    status?: string;
+    stock?: string;
+    buyPrice?: string;
+    sellPrice?: string;
+    lowStockThreshold?: string;
+  };
+  nameWarning?: string;
   existingProduct?: Product;
 }
 
@@ -43,22 +55,154 @@ export function CSVImportPreviewModal({
   parsedRows,
   fileName = "autovault_inventory.csv",
 }: CSVImportPreviewModalProps) {
+  const { state } = useStore();
+  const [rows, setRows] = useState<CSVImportRowResult[]>(parsedRows);
   const [activeTab, setActiveTab] = useState<"all" | "new" | "update" | "error">("all");
+
+  useEffect(() => {
+    setRows(parsedRows);
+  }, [parsedRows, isOpen]);
+
+  // Derived existing brands list for convenience selection
+  const existingBrands = useMemo(() => {
+    const set = new Set<string>();
+    if (!state?.products) return [];
+    for (const p of state.products) {
+      if (p.brand?.trim()) set.add(p.brand.trim());
+    }
+    return Array.from(set).sort();
+  }, [state?.products]);
+
+  // Derived existing categories list for convenience selection
+  const existingCategories = useMemo(() => {
+    const set = new Set<string>();
+    if (!state?.products) return [];
+    for (const p of state.products) {
+      if (p.category?.trim()) set.add(p.category.trim());
+    }
+    return Array.from(set).sort();
+  }, [state?.products]);
 
   if (!isOpen) return null;
 
-  const newRows = parsedRows.filter((r) => r.type === "NEW");
-  const updateRows = parsedRows.filter((r) => r.type === "UPDATE");
-  const errorRows = parsedRows.filter((r) => r.type === "ERROR");
+  const newRows = rows.filter((r) => r.type === "NEW");
+  const updateRows = rows.filter((r) => r.type === "UPDATE");
+  const errorRows = rows.filter((r) => r.type === "ERROR");
 
   const validCount = newRows.length + updateRows.length;
 
-  const filteredRows = parsedRows.filter((row) => {
+  const filteredRows = rows.filter((row) => {
     if (activeTab === "new") return row.type === "NEW";
     if (activeTab === "update") return row.type === "UPDATE";
     if (activeTab === "error") return row.type === "ERROR";
     return true;
   });
+
+  function updateRowField(rowNum: number, field: keyof CSVImportRowResult, value: any) {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.rowNumber !== rowNum) return r;
+
+        const updated = { ...r, [field]: value };
+        const newFieldErrors: NonNullable<CSVImportRowResult["fieldErrors"]> = {
+          ...(r.fieldErrors || {}),
+        };
+
+        // Brand canonicalization
+        if (field === "brand") {
+          const valStr = String(value).trim();
+          if (valStr) {
+            const match = existingBrands.find((b) => b.toLowerCase() === valStr.toLowerCase());
+            updated.brand = match || valStr;
+          } else {
+            updated.brand = "";
+          }
+        }
+
+        // Category validation & canonicalization
+        if (field === "category") {
+          const valStr = String(value).trim();
+          if (!valStr) {
+            newFieldErrors.category = "Category is required.";
+            updated.category = "";
+          } else {
+            delete newFieldErrors.category;
+            const match = existingCategories.find((c) => c.toLowerCase() === valStr.toLowerCase());
+            updated.category = match || valStr;
+          }
+        }
+
+        // Name validation
+        if (field === "name") {
+          const valStr = String(value).trim();
+          if (!valStr) {
+            newFieldErrors.name = "Product name is required.";
+          } else if (valStr.length < 3) {
+            newFieldErrors.name = "Product name must be at least 3 characters.";
+          } else if (valStr.length > 100) {
+            newFieldErrors.name = "Product name cannot exceed 100 characters.";
+          } else {
+            delete newFieldErrors.name;
+          }
+          updated.name = valStr;
+        }
+
+        // Status validation
+        if (field === "status") {
+          if (!value || !["Active", "Inactive", "Discontinued"].includes(value)) {
+            newFieldErrors.status = "Status is required.";
+          } else {
+            delete newFieldErrors.status;
+          }
+        }
+
+        // Stock validation
+        if (field === "stock") {
+          const num = Number(value);
+          if (value === "" || value === null || value === undefined || isNaN(num) || num < 0 || !Number.isInteger(num)) {
+            newFieldErrors.stock = "Initial Stock must be a valid non-negative whole number.";
+          } else {
+            delete newFieldErrors.stock;
+            updated.stock = num;
+          }
+        }
+
+        // Buy price validation
+        if (field === "buyPrice") {
+          const num = Number(value);
+          if (value === "" || value === null || value === undefined || isNaN(num) || num < 0) {
+            newFieldErrors.buyPrice = "Current Cost must be a valid non-negative number.";
+          } else {
+            delete newFieldErrors.buyPrice;
+            updated.buyPrice = num;
+          }
+        }
+
+        // Sell price validation
+        if (field === "sellPrice") {
+          const num = Number(value);
+          if (value === "" || value === null || value === undefined || isNaN(num) || num < 0) {
+            newFieldErrors.sellPrice = "Sell Price must be a valid non-negative number.";
+          } else {
+            delete newFieldErrors.sellPrice;
+            updated.sellPrice = num;
+          }
+        }
+
+        const remainingErrors = Object.values(newFieldErrors).filter(Boolean) as string[];
+        const isStillError = remainingErrors.length > 0;
+        const skuMatch = state?.products?.find((p) => p.sku.trim().toLowerCase() === updated.sku.toLowerCase());
+
+        return {
+          ...updated,
+          fieldErrors: newFieldErrors,
+          errors: remainingErrors,
+          type: isStillError ? "ERROR" : skuMatch ? "UPDATE" : "NEW",
+          existingProduct: skuMatch,
+        };
+      })
+    );
+  }
 
   function handleApplyImport() {
     if (validCount === 0) return;
@@ -71,11 +215,11 @@ export function CSVImportPreviewModal({
       sku: r.sku,
       brand: r.brand,
       category: r.category,
-      stock: r.stock,
-      currentCost: r.buyPrice,
-      sellPrice: r.sellPrice,
-      lowStockThreshold: r.lowStockThreshold,
-      status: r.status,
+      stock: Number(r.stock) || 0,
+      currentCost: Number(r.buyPrice) || 0,
+      sellPrice: Number(r.sellPrice) || 0,
+      lowStockThreshold: Number(r.lowStockThreshold) || 5,
+      status: (r.status as "Active" | "Inactive" | "Discontinued") || "Active",
       isUniversalFit: r.isUniversalFit,
       fitments: r.fitments,
       createdAt: timestamp,
@@ -88,24 +232,26 @@ export function CSVImportPreviewModal({
     for (const r of updateRows) {
       if (!r.existingProduct) continue;
 
+      const rStock = Number(r.stock) || 0;
+
       const updatedProd: Product = {
         ...r.existingProduct,
         name: r.name,
         brand: r.brand,
         category: r.category,
-        currentCost: r.buyPrice,
-        sellPrice: r.sellPrice,
-        lowStockThreshold: r.lowStockThreshold,
-        status: r.status,
+        currentCost: Number(r.buyPrice) || 0,
+        sellPrice: Number(r.sellPrice) || 0,
+        lowStockThreshold: Number(r.lowStockThreshold) || 5,
+        status: (r.status as "Active" | "Inactive" | "Discontinued") || "Active",
         isUniversalFit: r.isUniversalFit,
         fitments: r.fitments,
-        stock: r.stock,
+        stock: rStock,
         updatedAt: timestamp,
       };
 
       productsToUpdate.push(updatedProd);
 
-      const delta = r.stock - r.existingProduct.stock;
+      const delta = rStock - r.existingProduct.stock;
       if (delta !== 0) {
         stockAdjustments.push({
           productId: r.existingProduct.id,
@@ -123,7 +269,19 @@ export function CSVImportPreviewModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
+      {/* Hidden Datalists for Brand & Category Autocomplete */}
+      <datalist id="existing-brands-datalist">
+        {existingBrands.map((b) => (
+          <option key={b} value={b} />
+        ))}
+      </datalist>
+      <datalist id="existing-categories-datalist">
+        {existingCategories.map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
+
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-slate-50/80 shrink-0">
           <div>
@@ -148,7 +306,7 @@ export function CSVImportPreviewModal({
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-center">
               <span className="text-xs font-semibold text-slate-500 block uppercase tracking-wider">Total Rows</span>
-              <span className="text-2xl font-black text-slate-800 font-mono">{parsedRows.length}</span>
+              <span className="text-2xl font-black text-slate-800 font-mono">{rows.length}</span>
             </div>
 
             <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-xl text-center">
@@ -167,7 +325,7 @@ export function CSVImportPreviewModal({
 
             <div className={`p-3.5 rounded-xl text-center border ${errorRows.length > 0 ? "bg-red-50 border-red-200 text-red-900" : "bg-slate-50 border-slate-200 text-slate-400"}`}>
               <div className="flex items-center justify-center gap-1 text-xs font-bold uppercase tracking-wider">
-                <AlertCircle size={14} className={errorRows.length > 0 ? "text-red-600" : "text-slate-400"} /> Errors / Skipped
+                <AlertCircle size={14} className={errorRows.length > 0 ? "text-red-600" : "text-slate-400"} /> Errors / Invalid
               </div>
               <span className="text-2xl font-black font-mono">{errorRows.length}</span>
             </div>
@@ -185,7 +343,7 @@ export function CSVImportPreviewModal({
                     : "text-slate-600 hover:bg-slate-100"
                 }`}
               >
-                All Rows ({parsedRows.length})
+                All Rows ({rows.length})
               </button>
               <button
                 type="button"
@@ -225,7 +383,7 @@ export function CSVImportPreviewModal({
             {errorRows.length > 0 && (
               <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md flex items-center gap-1">
                 <AlertTriangle size={12} />
-                {errorRows.length} invalid row{errorRows.length > 1 ? "s" : ""} will be skipped during import.
+                {errorRows.length} invalid row{errorRows.length > 1 ? "s" : ""} must be fixed or will be skipped during import.
               </span>
             )}
           </div>
@@ -244,13 +402,14 @@ export function CSVImportPreviewModal({
                   <tr>
                     <th className="py-3 px-3">Row #</th>
                     <th className="py-3 px-3">Action</th>
-                    <th className="py-3 px-3">SKU</th>
-                    <th className="py-3 px-3">Name</th>
-                    <th className="py-3 px-3">Brand / Cat</th>
-                    <th className="py-3 px-3">Stock</th>
-                    <th className="py-3 px-3 text-right">Cost (₹)</th>
-                    <th className="py-3 px-3 text-right">Sell (₹)</th>
-                    <th className="py-3 px-3">Status</th>
+                    <th className="py-3 px-3">SKU *</th>
+                    <th className="py-3 px-3">Product Name *</th>
+                    <th className="py-3 px-3">Brand</th>
+                    <th className="py-3 px-3">Category *</th>
+                    <th className="py-3 px-3">Stock *</th>
+                    <th className="py-3 px-3 text-right">Cost (₹) *</th>
+                    <th className="py-3 px-3 text-right">Sell (₹) *</th>
+                    <th className="py-3 px-3">Status *</th>
                     <th className="py-3 px-3">Universal Fit</th>
                     <th className="py-3 px-3">Details / Errors</th>
                   </tr>
@@ -261,7 +420,8 @@ export function CSVImportPreviewModal({
                     const isUpdate = r.type === "UPDATE";
                     const isError = r.type === "ERROR";
 
-                    const stockDelta = r.existingProduct ? r.stock - r.existingProduct.stock : 0;
+                    const currentStockNum = typeof r.stock === "number" ? r.stock : 0;
+                    const stockDelta = r.existingProduct ? currentStockNum - r.existingProduct.stock : 0;
 
                     return (
                       <tr
@@ -292,12 +452,55 @@ export function CSVImportPreviewModal({
                             </span>
                           )}
                         </td>
-                        <td className="py-2.5 px-3 font-mono font-bold text-slate-800">{r.sku || "—"}</td>
-                        <td className="py-2.5 px-3 font-semibold text-slate-900 max-w-[180px] truncate" title={r.name}>
-                          {r.name || "—"}
+                        <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
+                          <div>{r.sku || "—"}</div>
+                          {r.fieldErrors?.sku && (
+                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
+                              ❌ {r.fieldErrors.sku}
+                            </span>
+                          )}
                         </td>
-                        <td className="py-2.5 px-3 text-slate-600">
-                          {r.brand || "—"} <span className="text-slate-400">/</span> {r.category || "—"}
+                        <td className="py-2.5 px-3 font-semibold text-slate-900 min-w-[160px]">
+                          <div>{r.name || "—"}</div>
+                          {r.nameWarning && (
+                            <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded inline-block mt-0.5">
+                              {r.nameWarning}
+                            </span>
+                          )}
+                          {r.fieldErrors?.name && (
+                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
+                              ❌ {r.fieldErrors.name}
+                            </span>
+                          )}
+                        </td>
+                        {/* Brand Column with Convenience Autocomplete */}
+                        <td className="py-2.5 px-3 min-w-[130px]">
+                          <input
+                            type="text"
+                            list="existing-brands-datalist"
+                            value={r.brand}
+                            onChange={(e) => updateRowField(r.rowNumber, "brand", e.target.value)}
+                            placeholder="Brand (optional)"
+                            className="w-full border border-slate-200 rounded px-2 py-1 text-xs bg-white hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-navy-600"
+                          />
+                        </td>
+                        {/* Category Column with Convenience Autocomplete */}
+                        <td className="py-2.5 px-3 min-w-[140px]">
+                          <input
+                            type="text"
+                            list="existing-categories-datalist"
+                            value={r.category}
+                            onChange={(e) => updateRowField(r.rowNumber, "category", e.target.value)}
+                            placeholder="Category *"
+                            className={`w-full border rounded px-2 py-1 text-xs bg-white hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 ${
+                              r.fieldErrors?.category ? "border-red-300 focus:ring-red-500 bg-red-50/50" : "border-slate-200 focus:ring-navy-600"
+                            }`}
+                          />
+                          {r.fieldErrors?.category && (
+                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
+                              ❌ {r.fieldErrors.category}
+                            </span>
+                          )}
                         </td>
                         <td className="py-2.5 px-3 font-mono font-bold">
                           {isUpdate && stockDelta !== 0 ? (
@@ -309,23 +512,45 @@ export function CSVImportPreviewModal({
                               </span>
                             </span>
                           ) : (
-                            <span className="text-slate-800">{r.stock}</span>
+                            <span className="text-slate-800">{r.stock === "" ? "—" : r.stock}</span>
+                          )}
+                          {r.fieldErrors?.stock && (
+                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
+                              ❌ {r.fieldErrors.stock}
+                            </span>
                           )}
                         </td>
-                        <td className="py-2.5 px-3 font-mono text-right text-slate-700">₹{r.buyPrice.toLocaleString()}</td>
-                        <td className="py-2.5 px-3 font-mono font-bold text-right text-slate-900">₹{r.sellPrice.toLocaleString()}</td>
+                        <td className="py-2.5 px-3 font-mono text-right text-slate-700">
+                          {r.buyPrice === "" ? "—" : `₹${Number(r.buyPrice).toLocaleString()}`}
+                          {r.fieldErrors?.buyPrice && (
+                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5 text-left">
+                              ❌ {r.fieldErrors.buyPrice}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 font-mono font-bold text-right text-slate-900">
+                          {r.sellPrice === "" ? "—" : `₹${Number(r.sellPrice).toLocaleString()}`}
+                          {r.fieldErrors?.sellPrice && (
+                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5 text-left">
+                              ❌ {r.fieldErrors.sellPrice}
+                            </span>
+                          )}
+                        </td>
                         <td className="py-2.5 px-3">
-                          <span
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                              r.status === "Active"
-                                ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-                                : r.status === "Inactive"
-                                ? "bg-slate-100 text-slate-700 border-slate-300"
-                                : "bg-amber-50 text-amber-800 border-amber-200"
-                            }`}
+                          <select
+                            value={r.status}
+                            onChange={(e) => updateRowField(r.rowNumber, "status", e.target.value)}
+                            className="border border-slate-200 rounded px-1.5 py-1 text-[11px] bg-white hover:bg-slate-50 focus:outline-none"
                           >
-                            {r.status}
-                          </span>
+                            <option value="Active">Active</option>
+                            <option value="Inactive">Inactive</option>
+                            <option value="Discontinued">Discontinued</option>
+                          </select>
+                          {r.fieldErrors?.status && (
+                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
+                              ❌ {r.fieldErrors.status}
+                            </span>
+                          )}
                         </td>
                         <td className="py-2.5 px-3">
                           {r.isUniversalFit ? (

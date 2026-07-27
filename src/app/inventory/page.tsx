@@ -592,7 +592,7 @@ export default function InventoryPage() {
 
   async function handleDownloadSampleTemplate() {
     try {
-      const blob = await generateBlankXLSXImportTemplate();
+      const blob = await generateBlankXLSXImportTemplate(state.products);
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;

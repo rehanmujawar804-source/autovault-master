@@ -21,10 +21,10 @@ const EMPTY_FORM = {
   brand: "",
   category: "",
   status: "Active" as ProductStatus,
-  stock: 0,
-  currentCost: 0,
-  sellPrice: 0,
-  lowStockThreshold: 5,
+  stock: 0 as number | "",
+  currentCost: 0 as number | "",
+  sellPrice: 0 as number | "",
+  lowStockThreshold: 5 as number | "",
   fitments: [] as VehicleFitment[],
   isUniversalFit: false,
 };
@@ -129,24 +129,6 @@ export function ProductFormModal({
       return;
     }
 
-    if (form.currentCost < 0) {
-      setFormError("Current cost cannot be negative.");
-      return;
-    }
-    if (form.sellPrice < 0) {
-      setFormError("Sell price cannot be negative.");
-      return;
-    }
-
-    if (!Number.isInteger(form.stock) || form.stock < 0) {
-      setFormError("Stock must be a whole number (0 or more).");
-      return;
-    }
-    if (!Number.isInteger(form.lowStockThreshold) || form.lowStockThreshold < 1) {
-      setFormError("Low stock threshold must be a whole number of at least 1.");
-      return;
-    }
-
     const duplicateSKU = state.products.find(
       (p) =>
         p.sku.trim().toLowerCase() === trimmedSku.toLowerCase() &&
@@ -159,24 +141,127 @@ export function ProductFormModal({
       return;
     }
 
-    if (form.sellPrice > 0 && form.currentCost > 0 && form.sellPrice < form.currentCost) {
-      setFormWarning(
-        `Warning: Sell Price (₹${form.sellPrice}) is less than Current Cost (₹${form.currentCost}). This product will be sold at a loss.`
-      );
-    }
+    if (editingProduct) {
+      const editCost = form.currentCost === "" ? 0 : Number(form.currentCost);
+      const editSellPrice = form.sellPrice === "" ? 0 : Number(form.sellPrice);
+      const editStock = form.stock === "" ? 0 : Number(form.stock);
+      const editLowStock = form.lowStockThreshold === "" ? 5 : Number(form.lowStockThreshold);
 
-    try {
-      if (editingProduct) {
-        updateProduct({ ...editingProduct, ...form, name: trimmedName, sku: editingProduct.sku });
-        showToast(`"${trimmedName}" updated successfully.`, "success");
-      } else {
-        addProduct({ ...form, name: trimmedName, sku: trimmedSku });
-        showToast(`"${trimmedName}" added successfully.`, "success");
+      if (editCost < 0) {
+        setFormError("Current cost cannot be negative.");
+        return;
       }
-      onClose();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to save product.";
-      setFormError(msg);
+      if (editSellPrice < 0) {
+        setFormError("Sell price cannot be negative.");
+        return;
+      }
+
+      if (!Number.isInteger(editStock) || editStock < 0) {
+        setFormError("Stock must be a whole number (0 or more).");
+        return;
+      }
+      if (!Number.isInteger(editLowStock) || editLowStock < 1) {
+        setFormError("Low stock threshold must be a whole number of at least 1.");
+        return;
+      }
+
+      if (editSellPrice > 0 && editCost > 0 && editSellPrice < editCost) {
+        setFormWarning(
+          `Warning: Sell Price (₹${editSellPrice}) is less than Current Cost (₹${editCost}). This product will be sold at a loss.`
+        );
+      }
+
+      try {
+        updateProduct({
+          ...editingProduct,
+          ...form,
+          name: trimmedName,
+          sku: editingProduct.sku,
+          brand: form.brand.trim(),
+          category: form.category.trim(),
+          currentCost: editCost,
+          sellPrice: editSellPrice,
+          stock: editStock,
+          lowStockThreshold: editLowStock,
+        });
+        showToast(`"${trimmedName}" updated successfully.`, "success");
+        onClose();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to save product.";
+        setFormError(msg);
+      }
+    } else {
+      // NEW PRODUCT CREATION VALIDATION
+      const trimmedCategory = form.category.trim();
+      if (!trimmedCategory) {
+        setFormError("Category is required.");
+        return;
+      }
+
+      if (form.stock === "" || form.stock === null || form.stock === undefined || isNaN(Number(form.stock))) {
+        setFormError("Initial stock is required.");
+        return;
+      }
+      const stockNum = Number(form.stock);
+      if (stockNum < 0) {
+        setFormError("Initial stock cannot be negative.");
+        return;
+      }
+      if (!Number.isInteger(stockNum)) {
+        setFormError("Initial stock must be a whole number (0 or more).");
+        return;
+      }
+
+      if (form.sellPrice === "" || form.sellPrice === null || form.sellPrice === undefined || isNaN(Number(form.sellPrice))) {
+        setFormError("Sell price is required.");
+        return;
+      }
+      const sellPriceNum = Number(form.sellPrice);
+      if (sellPriceNum < 0) {
+        setFormError("Sell price cannot be negative.");
+        return;
+      }
+
+      if (form.lowStockThreshold === "" || form.lowStockThreshold === null || form.lowStockThreshold === undefined || isNaN(Number(form.lowStockThreshold))) {
+        setFormError("Low stock alert is required.");
+        return;
+      }
+      const lowStockNum = Number(form.lowStockThreshold);
+      if (lowStockNum < 0) {
+        setFormError("Low stock alert cannot be negative.");
+        return;
+      }
+      if (!Number.isInteger(lowStockNum)) {
+        setFormError("Low stock alert must be a whole number.");
+        return;
+      }
+
+      const costNum = form.currentCost === "" ? 0 : Number(form.currentCost);
+      if (sellPriceNum > 0 && costNum > 0 && sellPriceNum < costNum) {
+        setFormWarning(
+          `Warning: Sell Price (₹${sellPriceNum}) is less than Current Cost (₹${costNum}). This product will be sold at a loss.`
+        );
+      }
+
+      try {
+        addProduct({
+          ...form,
+          name: trimmedName,
+          sku: trimmedSku,
+          brand: form.brand.trim(),
+          category: trimmedCategory,
+          status: form.status || "Active",
+          stock: stockNum,
+          currentCost: costNum,
+          sellPrice: sellPriceNum,
+          lowStockThreshold: lowStockNum,
+        });
+        showToast(`"${trimmedName}" added successfully.`, "success");
+        onClose();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to save product.";
+        setFormError(msg);
+      }
     }
   }
 
@@ -243,7 +328,7 @@ export function ProductFormModal({
             </div>
 
             <div>
-              <FieldLabel>Category</FieldLabel>
+              <FieldLabel>Category *</FieldLabel>
               <input
                 type="text"
                 value={form.category}
@@ -268,12 +353,12 @@ export function ProductFormModal({
 
             {!editingProduct && (
               <div>
-                <FieldLabel>Initial Stock</FieldLabel>
+                <FieldLabel>Initial Stock *</FieldLabel>
                 <input
                   type="number"
                   min="0"
                   value={form.stock}
-                  onChange={(e) => setField("stock", Number(e.target.value))}
+                  onChange={(e) => setField("stock", e.target.value === "" ? "" : Number(e.target.value))}
                   className={INPUT}
                 />
               </div>
@@ -286,7 +371,7 @@ export function ProductFormModal({
                   type="number"
                   min="0"
                   value={form.currentCost}
-                  onChange={(e) => setField("currentCost", Number(e.target.value))}
+                  onChange={(e) => setField("currentCost", e.target.value === "" ? "" : Number(e.target.value))}
                   className={INPUT}
                 />
               </div>
@@ -298,30 +383,30 @@ export function ProductFormModal({
                 type="number"
                 min="0"
                 value={form.sellPrice}
-                onChange={(e) => setField("sellPrice", Number(e.target.value))}
+                onChange={(e) => setField("sellPrice", e.target.value === "" ? "" : Number(e.target.value))}
                 className={INPUT}
               />
             </div>
 
             <div>
-              <FieldLabel>Low Stock Alert (units)</FieldLabel>
+              <FieldLabel>Low Stock Alert (units) *</FieldLabel>
               <input
                 type="number"
-                min="1"
+                min="0"
                 value={form.lowStockThreshold}
-                onChange={(e) => setField("lowStockThreshold", Number(e.target.value))}
+                onChange={(e) => setField("lowStockThreshold", e.target.value === "" ? "" : Number(e.target.value))}
                 className={INPUT}
               />
             </div>
           </div>
 
-          {form.currentCost > 0 && form.sellPrice > 0 && (
+          {Number(form.currentCost) > 0 && Number(form.sellPrice) > 0 && (
             <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2.5 text-xs">
               <span className="text-green-700 font-medium">
                 Margin:{" "}
-                {Math.round(((form.sellPrice - form.currentCost) / form.sellPrice) * 100)}
+                {Math.round(((Number(form.sellPrice) - Number(form.currentCost)) / Number(form.sellPrice)) * 100)}
                 % &nbsp;|&nbsp; Profit per unit: ₹
-                {(form.sellPrice - form.currentCost).toLocaleString()}
+                {(Number(form.sellPrice) - Number(form.currentCost)).toLocaleString()}
               </span>
             </div>
           )}

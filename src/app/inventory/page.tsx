@@ -8,6 +8,7 @@ import { ProductFormModal, AdjustStockModal } from "./components/ProductModals";
 import { BulkFitmentModal } from "./components/BulkFitmentModals";
 import { CSVImportPreviewModal, type CSVImportRowResult } from "./components/CSVImportPreviewModal";
 import { SpreadsheetImportUploadModal } from "./components/SpreadsheetImportUploadModal";
+import { InventoryIntelligenceDashboard } from "./components/InventoryIntelligenceDashboard";
 import { formatFitmentDisplay, serializeFitmentsForCSV, parseFitmentsFromCSV } from "@/lib/fitmentUtils";
 import { generateXLSXWorkbook, generateCSVText, parseSpreadsheetFile, generateBlankXLSXImportTemplate } from "@/lib/spreadsheetUtils";
 import { saveRecentImportReport } from "@/lib/recentImportReports";
@@ -680,81 +681,8 @@ export default function InventoryPage() {
         )}
       </div>
 
-      {/* ── KPI Cards ──────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6 min-w-0">
-
-        {/* Total Products */}
-        <KpiCard
-          label="Total Products"
-          value={stats.total.toString()}
-          icon={<Package size={20} />}
-          iconGradient="from-slate-700 to-slate-500"
-          gradient="from-white to-slate-50"
-          borderColor="border-slate-200"
-          badge={undefined}
-        />
-
-        {/* Total Units */}
-        <KpiCard
-          label="Stock Units"
-          value={stats.totalUnits.toLocaleString()}
-          icon={<Activity size={20} />}
-          iconGradient="from-blue-600 to-blue-400"
-          gradient="from-white to-blue-50/40"
-          borderColor="border-blue-100"
-          badge={undefined}
-        />
-
-        {/* Inventory Value (sell value) */}
-        <KpiCard
-          label="Inventory Value"
-          value={`₹${stats.sellValue.toLocaleString()}`}
-          icon={<TrendingUp size={20} />}
-          iconGradient="from-emerald-600 to-emerald-400"
-          gradient="from-white to-emerald-50/40"
-          borderColor="border-emerald-100"
-          badge={undefined}
-          isRupee
-        />
-
-        {/* Low Stock */}
-        <KpiCard
-          label="Low Stock"
-          value={stats.lowStock.toString()}
-          icon={<AlertTriangle size={20} />}
-          iconGradient="from-amber-500 to-orange-400"
-          gradient={stats.lowStock > 0 ? "from-white to-amber-50/60" : "from-white to-slate-50"}
-          borderColor={stats.lowStock > 0 ? "border-amber-200" : "border-slate-200"}
-          badge={stats.lowStock > 0 ? "warning" : undefined}
-          valueColor={stats.lowStock > 0 ? "text-amber-600" : "text-slate-800"}
-        />
-
-        {/* Out of Stock */}
-        <KpiCard
-          label="Out of Stock"
-          value={stats.outOfStock.toString()}
-          icon={<AlertCircle size={20} />}
-          iconGradient="from-red-600 to-red-400"
-          gradient={stats.outOfStock > 0 ? "from-white to-red-50/60" : "from-white to-slate-50"}
-          borderColor={stats.outOfStock > 0 ? "border-red-200" : "border-slate-200"}
-          badge={stats.outOfStock > 0 ? "critical" : undefined}
-          valueColor={stats.outOfStock > 0 ? "text-red-600" : "text-slate-800"}
-        />
-
-        {/* Capital Invested — owner only */}
-        {isOwner && (
-          <KpiCard
-            label="Capital Invested"
-            value={`₹${stats.capitalInvested.toLocaleString()}`}
-            icon={<DollarSign size={20} />}
-            iconGradient="from-violet-700 to-violet-500"
-            gradient="from-navy-950 to-navy-900"
-            borderColor="border-navy-800"
-            isDark
-            isRupee
-          />
-        )}
-      </div>
+      {/* ── Inventory Intelligence Dashboard (Unified KPI & Intelligence Hub) ── */}
+      <InventoryIntelligenceDashboard state={state} getInventoryValue={getInventoryValue} />
 
       {/* ── Operations Control Room ─────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-slate-200 mb-6 overflow-hidden min-w-0 w-full">

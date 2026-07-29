@@ -30,3 +30,17 @@ export function saveRecentImportReport(report: RecentImportReport): RecentImport
     return [report];
   }
 }
+
+/**
+ * Clears stored recent import reports from localStorage during explicit store reset.
+ * Fixes NEW-17: Prevents orphaned import reports from surviving factory store resets.
+ */
+export function clearRecentImportReports(): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Non-blocking
+  }
+}
+

@@ -231,3 +231,77 @@ export function formatPurchaseDate(purchase: { createdAt?: string; date?: string
   return "";
 }
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CENTRALIZED IST DATE/TIME ENGINE (Asia/Kolkata)
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+/**
+ * Returns an input date/timestamp as a YYYY-MM-DD string in Asia/Kolkata timezone.
+ * Handles Date objects, ISO strings, epoch numbers, and date-only YYYY-MM-DD strings.
+ * Guarantees operating system / browser timezone independence.
+ */
+export function getISTDateStr(dateInput?: Date | string | number): string {
+  if (!dateInput) return todayLocalStr();
+  if (typeof dateInput === "string") {
+    const trimmed = dateInput.trim();
+    const dateOnlyMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+    if (dateOnlyMatch) {
+      return trimmed;
+    }
+  }
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return String(dateInput);
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return formatter.format(d);
+}
+
+/**
+ * Returns an input date/timestamp as a YYYY-MM string in Asia/Kolkata timezone.
+ */
+export function getISTMonthStr(dateInput?: Date | string | number): string {
+  const istDateStr = getISTDateStr(dateInput);
+  return istDateStr.length >= 7 ? istDateStr.substring(0, 7) : istDateStr;
+}
+
+/**
+ * Evaluates whether a date/timestamp falls within [startDateStr, endDateStr] in IST.
+ * startDateStr and endDateStr should be YYYY-MM-DD formatted strings.
+ */
+export function isDateInISTRange(
+  dateInput: Date | string | number,
+  startDateStr?: string,
+  endDateStr?: string
+): boolean {
+  const istDate = getISTDateStr(dateInput);
+  if (!istDate) return false;
+  if (startDateStr && istDate < startDateStr) return false;
+  if (endDateStr && istDate > endDateStr) return false;
+  return true;
+}
+
+/**
+ * Safely parses any date/timestamp into IST calendar components ({ year, month, day, dateStr }).
+ * Prevents NaN errors when parsing ISO string representations.
+ */
+export function parseDateToIST(
+  dateInput?: Date | string | number
+): { year: number; month: number; day: number; dateStr: string } | null {
+  const dateStr = getISTDateStr(dateInput);
+  if (!dateStr) return null;
+  const parts = dateStr.split("-");
+  if (parts.length !== 3) return null;
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10);
+  const day = parseInt(parts[2], 10);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
+  return { year, month, day, dateStr };
+}
+
+

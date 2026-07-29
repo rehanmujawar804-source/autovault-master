@@ -15,6 +15,8 @@ import {
   OWNER_LOCKOUT_KEY,
   STAFF_LOCKOUT_KEY,
 } from "@/lib/authUtils";
+import { clearRecentImportReports } from "@/lib/recentImportReports";
+
 import {
   Save,
   Store,
@@ -332,6 +334,8 @@ export default function SettingsPage() {
 
     // 3. Reset authentication credentials & clear lockout counters
     resetAuthCredentialsToDefaults();
+    clearRecentImportReports();
+
 
     // 4. Reset shop configuration settings to original defaults
     try {

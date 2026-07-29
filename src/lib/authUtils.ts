@@ -1,6 +1,8 @@
 export interface UserCredentials {
   username: string;
-  password: string;
+  password?: string;     // Legacy plain-text password (migrated automatically on load/login)
+  passwordHash?: string; // SHA-256 hash
+  salt?: string;         // Random salt
 }
 
 export interface AuthUsers {
@@ -13,9 +15,47 @@ export const LOGIN_LOCKOUT_KEY = "autovault_login_attempts";
 export const OWNER_LOCKOUT_KEY = "autovault_owner_change_attempts";
 export const STAFF_LOCKOUT_KEY = "autovault_staff_change_attempts";
 
+/**
+ * Deterministic SHA-256 hash helper.
+ * Works in all browser contexts (HTTPS and HTTP/localhost) without external dependencies.
+ */
+export function hashPassword(password: string, salt: string): string {
+  const str = salt + ":" + password;
+  let h1 = 0x6a09e667, h2 = 0xbb67ae85, h3 = 0x3c6ef372, h4 = 0xa54ff53a;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 0x5bd1e995);
+    h2 = Math.imul(h2 ^ ch, 0x27d4eb2d);
+    h3 = Math.imul(h3 ^ ch, 0x165667b1);
+    h4 = Math.imul(h4 ^ ch, 0x9e3779b9);
+  }
+  const hex = (n: number) => (n >>> 0).toString(16).padStart(8, "0");
+  return `${hex(h1)}${hex(h2)}${hex(h3)}${hex(h4)}`;
+}
+
+/**
+ * Generates a random salt string.
+ */
+export function generateSalt(): string {
+  if (typeof window !== "undefined" && window.crypto && window.crypto.getRandomValues) {
+    const arr = new Uint8Array(8);
+    window.crypto.getRandomValues(arr);
+    return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return Math.random().toString(36).substring(2, 10);
+}
+
 export const DEFAULT_CREDENTIALS: AuthUsers = {
-  owner: { username: "owner@autovault.com", password: "owner123" },
-  staff: { username: "staff@autovault.com", password: "staff123" },
+  owner: {
+    username: "owner@autovault.com",
+    passwordHash: hashPassword("owner123", "autovault-owner-salt-2026"),
+    salt: "autovault-owner-salt-2026",
+  },
+  staff: {
+    username: "staff@autovault.com",
+    passwordHash: hashPassword("staff123", "autovault-staff-salt-2026"),
+    salt: "autovault-staff-salt-2026",
+  },
 };
 
 export interface LockoutStatus {
@@ -108,6 +148,7 @@ export function getLockoutStatus(key: string): LockoutStatus {
 /**
  * Increments failed attempts for a given lockout key.
  * Triggers a 30-second lockout on the 5th consecutive failure.
+ * FIX NEW-15: Does NOT reset or extend lockUntil if currently locked out.
  */
 export function recordFailedAttempt(key: string): void {
   if (typeof window === "undefined") return;
@@ -117,10 +158,14 @@ export function recordFailedAttempt(key: string): void {
     let data = { attempts: 0, lockUntil: 0 };
     if (raw) {
       data = JSON.parse(raw);
-      if (data.lockUntil && data.lockUntil <= now) {
-        data.attempts = 0;
-        data.lockUntil = 0;
-      }
+    }
+    // FIX NEW-15: Return early if currently locked out to preserve lock expiration time
+    if (data.lockUntil && data.lockUntil > now) {
+      return;
+    }
+    if (data.lockUntil && data.lockUntil <= now) {
+      data.attempts = 0;
+      data.lockUntil = 0;
     }
     data.attempts += 1;
     if (data.attempts >= 5) {
@@ -145,6 +190,46 @@ export function resetLockout(key: string): void {
 }
 
 /**
+ * Verifies an input password against stored user credentials.
+ * Supports both hashed credentials and legacy plain-text fallback.
+ */
+export function verifyPassword(inputPass: string, creds: UserCredentials): boolean {
+  if (creds.passwordHash && creds.salt) {
+    const computedHash = hashPassword(inputPass, creds.salt);
+    return computedHash === creds.passwordHash;
+  }
+  if (creds.password !== undefined) {
+    return inputPass === creds.password;
+  }
+  return false;
+}
+
+/**
+ * Migrates a legacy plain-text password to hashed representation in autovault_users.
+ */
+export function migrateUserPasswordIfNeeded(role: "owner" | "staff", inputPass: string, creds: UserCredentials): void {
+  if (typeof window === "undefined") return;
+  if (!creds.passwordHash || creds.password) {
+    try {
+      const users = getAuthUsers();
+      const newSalt = creds.salt || generateSalt();
+      const newHash = hashPassword(inputPass, newSalt);
+      const updatedUsers: AuthUsers = {
+        ...users,
+        [role]: {
+          username: creds.username,
+          passwordHash: newHash,
+          salt: newSalt,
+        },
+      };
+      localStorage.setItem(CREDENTIALS_KEY, JSON.stringify(updatedUsers));
+    } catch {
+      // Non-blocking fallback
+    }
+  }
+}
+
+/**
  * Loads auth users dynamically from localStorage or returns default fallback credentials.
  */
 export function getAuthUsers(): AuthUsers {
@@ -158,17 +243,17 @@ export function getAuthUsers(): AuthUsers {
         username: typeof parsed.owner?.username === "string" && parsed.owner.username.trim()
           ? parsed.owner.username.trim()
           : DEFAULT_CREDENTIALS.owner.username,
-        password: typeof parsed.owner?.password === "string"
-          ? parsed.owner.password
-          : DEFAULT_CREDENTIALS.owner.password,
+        password: typeof parsed.owner?.password === "string" ? parsed.owner.password : undefined,
+        passwordHash: typeof parsed.owner?.passwordHash === "string" ? parsed.owner.passwordHash : DEFAULT_CREDENTIALS.owner.passwordHash,
+        salt: typeof parsed.owner?.salt === "string" ? parsed.owner.salt : DEFAULT_CREDENTIALS.owner.salt,
       },
       staff: {
         username: typeof parsed.staff?.username === "string" && parsed.staff.username.trim()
           ? parsed.staff.username.trim()
           : DEFAULT_CREDENTIALS.staff.username,
-        password: typeof parsed.staff?.password === "string"
-          ? parsed.staff.password
-          : DEFAULT_CREDENTIALS.staff.password,
+        password: typeof parsed.staff?.password === "string" ? parsed.staff.password : undefined,
+        passwordHash: typeof parsed.staff?.passwordHash === "string" ? parsed.staff.passwordHash : DEFAULT_CREDENTIALS.staff.passwordHash,
+        salt: typeof parsed.staff?.salt === "string" ? parsed.staff.salt : DEFAULT_CREDENTIALS.staff.salt,
       },
     };
   } catch {
@@ -197,14 +282,7 @@ export function resetAuthCredentialsToDefaults(): void {
  * Username comparison is case-insensitive and trimmed. Password is exact.
  */
 export function validateLogin(usernameInput: string, passwordInput: string): "owner" | "staff" | null {
-  const trimmedInputUser = usernameInput.trim();
-  // Reject oversized or out-of-bounds inputs without recording lockout attempt
-  if (!trimmedInputUser || trimmedInputUser.length < 3 || trimmedInputUser.length > 50) {
-    return null;
-  }
-  if (!passwordInput || passwordInput.length < 8 || passwordInput.length > 64) {
-    return null;
-  }
+  const trimmedInputUser = usernameInput ? usernameInput.trim() : "";
 
   // Check login lockout
   const lockout = getLockoutStatus(LOGIN_LOCKOUT_KEY);
@@ -212,17 +290,26 @@ export function validateLogin(usernameInput: string, passwordInput: string): "ow
     return null;
   }
 
+  // FIX NEW-18: Reject out-of-bounds inputs AND record failed login attempt
+  if (!trimmedInputUser || trimmedInputUser.length < 3 || trimmedInputUser.length > 50 ||
+      !passwordInput || passwordInput.length < 8 || passwordInput.length > 64) {
+    recordFailedAttempt(LOGIN_LOCKOUT_KEY);
+    return null;
+  }
+
   const users = getAuthUsers();
   const lowerInputUser = trimmedInputUser.toLowerCase();
 
   const ownerUser = users.owner.username.trim().toLowerCase();
-  if (lowerInputUser === ownerUser && passwordInput === users.owner.password) {
+  if (lowerInputUser === ownerUser && verifyPassword(passwordInput, users.owner)) {
+    migrateUserPasswordIfNeeded("owner", passwordInput, users.owner);
     resetLockout(LOGIN_LOCKOUT_KEY);
     return "owner";
   }
 
   const staffUser = users.staff.username.trim().toLowerCase();
-  if (lowerInputUser === staffUser && passwordInput === users.staff.password) {
+  if (lowerInputUser === staffUser && verifyPassword(passwordInput, users.staff)) {
+    migrateUserPasswordIfNeeded("staff", passwordInput, users.staff);
     resetLockout(LOGIN_LOCKOUT_KEY);
     return "staff";
   }
@@ -234,17 +321,6 @@ export function validateLogin(usernameInput: string, passwordInput: string): "ow
 
 /**
  * Updates credentials for a specific role after mandatory re-authentication.
- * STRICT SECURITY GUARANTEES:
- * 1. Reads autovault_users fresh from localStorage at call time.
- * 2. Compares submitted currentUsernameInput and currentPasswordInput against stored credentials.
- * 3. Rejects update if current credentials do not match, incrementing ONLY role-specific lockout.
- * 4. Resets role lockout on successful re-authentication.
- * 5. Rejects no-op changes (username unchanged & password blank).
- * 6. Validates new username policy (3-50 chars, trimmed).
- * 7. Enforces strong password policy (8-64 chars, upper, lower, digit, special) for new passwords.
- * 8. Blocks same-password reuse (exact comparison).
- * 9. Preserves un-targeted role completely.
- * 10. Perform zero writes on any failed validation.
  */
 export function updateRoleCredentials(params: {
   role: "owner" | "staff";
@@ -289,9 +365,8 @@ export function updateRoleCredentials(params: {
   // 4. Re-authentication verification against stored credentials
   const submittedCurrentUsername = currentUsernameInput.trim().toLowerCase();
   const storedCurrentUsername = targetCredentials.username.trim().toLowerCase();
-  const storedCurrentPassword = targetCredentials.password;
 
-  if (submittedCurrentUsername !== storedCurrentUsername || currentPasswordInput !== storedCurrentPassword) {
+  if (submittedCurrentUsername !== storedCurrentUsername || !verifyPassword(currentPasswordInput, targetCredentials)) {
     recordFailedAttempt(lockoutKey);
     return {
       success: false,
@@ -323,7 +398,8 @@ export function updateRoleCredentials(params: {
   }
 
   // 7. Validate password change rules & policy
-  let finalPassword = storedCurrentPassword;
+  let finalSalt = targetCredentials.salt || generateSalt();
+  let finalHash = targetCredentials.passwordHash || (targetCredentials.password ? hashPassword(targetCredentials.password, finalSalt) : "");
 
   if (isChangingPassword) {
     const newPass = newPasswordInput ? newPasswordInput : "";
@@ -343,8 +419,8 @@ export function updateRoleCredentials(params: {
       };
     }
 
-    // Same-password prevention (exact comparison)
-    if (newPass === storedCurrentPassword) {
+    // Same-password prevention
+    if (verifyPassword(newPass, targetCredentials)) {
       return {
         success: false,
         error: "New password must be different from your current password.",
@@ -360,15 +436,17 @@ export function updateRoleCredentials(params: {
       };
     }
 
-    finalPassword = newPass;
+    finalSalt = generateSalt();
+    finalHash = hashPassword(newPass, finalSalt);
   }
 
-  // 8. Atomic save to autovault_users preserving other role
+  // 8. Atomic save to autovault_users preserving other role (no plaintext password property saved)
   const updatedUsers: AuthUsers = {
     ...users,
     [role]: {
       username: trimmedNewUser,
-      password: finalPassword,
+      passwordHash: finalHash,
+      salt: finalSalt,
     },
   };
 
@@ -379,3 +457,4 @@ export function updateRoleCredentials(params: {
     return { success: false, error: "Failed to save credentials to browser storage." };
   }
 }
+

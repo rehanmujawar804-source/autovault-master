@@ -32,8 +32,10 @@ import {
   useReducer,
   useEffect,
   useState,
+  useRef,
   ReactNode,
 } from "react";
+
 import { CheckCircle, AlertCircle, Info, X } from "lucide-react";
 import type {
   AppState,
@@ -93,7 +95,7 @@ const SEED_INVOICES: Invoice[] = [];
 
 const DEFAULT_FINANCE_ACCOUNTS: FinanceAccount[] = [
   { id: "acc-cash", name: "Cash", type: "Cash", openingBalance: 0, createdAt: "2026-01-01T00:00:00.000Z" },
-  { id: "acc-upi",  name: "UPI",  type: "UPI",  openingBalance: 0, createdAt: "2026-01-01T00:00:00.000Z" },
+  { id: "acc-upi", name: "UPI", type: "UPI", openingBalance: 0, createdAt: "2026-01-01T00:00:00.000Z" },
   { id: "acc-bank", name: "Bank", type: "Bank", openingBalance: 0, createdAt: "2026-01-01T00:00:00.000Z" },
 ];
 
@@ -133,11 +135,11 @@ type Action =
   | { type: "BULK_ASSIGN_FITMENT"; productIds: string[]; fitment: VehicleFitment }
   | { type: "BULK_REMOVE_FITMENT"; productIds: string[]; fitment: VehicleFitment }
   | {
-      type: "BULK_IMPORT_PRODUCTS";
-      productsToAdd: Product[];
-      productsToUpdate: Product[];
-      stockAdjustments: Array<{ productId: string; delta: number }>;
-    }
+    type: "BULK_IMPORT_PRODUCTS";
+    productsToAdd: Product[];
+    productsToUpdate: Product[];
+    stockAdjustments: Array<{ productId: string; delta: number }>;
+  }
 
   // Customers
   | { type: "ADD_CUSTOMER"; customer: Customer }
@@ -150,14 +152,14 @@ type Action =
   // Debt Repayment — core new action
   | { type: "RECORD_DEBT_PAYMENT"; payment: DebtPayment }
   | {
-      type: "RECORD_CUSTOMER_DEBT_PAYMENT_FIFO";
-      customerId: string;
-      totalAmount: number;
-      method: PaymentMethod;
-      date: string;
-      note?: string;
-      collectedBy?: "Owner" | "Staff";
-    }
+    type: "RECORD_CUSTOMER_DEBT_PAYMENT_FIFO";
+    customerId: string;
+    totalAmount: number;
+    method: PaymentMethod;
+    date: string;
+    note?: string;
+    collectedBy?: "Owner" | "Staff";
+  }
   | { type: "VOID_DEBT_PAYMENT"; paymentId: string; reason: string; voidedBy: string }
 
   // Suppliers Sprint 1 & 2
@@ -167,14 +169,14 @@ type Action =
   | { type: "UPDATE_PURCHASE"; purchaseId: string; invoiceNumber: string; date: string; notes: string }
   | { type: "RECORD_SUPPLIER_PAYMENT"; payment: SupplierPayment }
   | {
-      type: "RECORD_SUPPLIER_PAYMENT_FIFO";
-      supplierId: string;
-      totalAmount: number;
-      method: PaymentMethod;
-      date: string;
-      note?: string;
-      paidBy?: "Owner" | "Staff";
-    }
+    type: "RECORD_SUPPLIER_PAYMENT_FIFO";
+    supplierId: string;
+    totalAmount: number;
+    method: PaymentMethod;
+    date: string;
+    note?: string;
+    paidBy?: "Owner" | "Staff";
+  }
   | { type: "ADD_PURCHASE_RETURN"; returnRecord: PurchaseReturn; refundMethod: PaymentMethod | "Adjustment" }
 
   // Reset / Hydrate
@@ -197,7 +199,7 @@ type Action =
   | { type: "COMPLETE_PURCHASE_ORDER"; poId: string }
   | { type: "CONFIRM_PURCHASE_ORDER"; poId: string }
   | { type: "RECORD_PO_ACTIVITY"; poId: string; entry: POActivityLog }
-  
+
   // Sales Returns (Sprint 5.0)
   | { type: "ADD_SALES_RETURN"; salesReturn: SalesReturn }
   | { type: "CANCEL_SALES_RETURN"; returnId: string; reason: string; voidedBy: string }
@@ -205,31 +207,31 @@ type Action =
 
   // Operating Business Expenses
   | {
-      type: "RECORD_BUSINESS_EXPENSE";
-      category: FinanceCategory;
-      amount: number;
-      paymentMethod: PaymentMethod;
-      date?: string;
-      notes?: string;
-      referenceId?: string;
-    }
+    type: "RECORD_BUSINESS_EXPENSE";
+    category: FinanceCategory;
+    amount: number;
+    paymentMethod: PaymentMethod;
+    date?: string;
+    notes?: string;
+    referenceId?: string;
+  }
 
   // Finance Opening Balances & Money In
   | {
-      type: "SET_OPENING_BALANCES";
-      cash: number;
-      bank: number;
-      upi: number;
-    }
+    type: "SET_OPENING_BALANCES";
+    cash: number;
+    bank: number;
+    upi: number;
+  }
   | {
-      type: "RECORD_BUSINESS_MONEY_IN";
-      category: "Owner Capital" | "Expense Refund" | "Other Business Receipt";
-      amount: number;
-      paymentMethod: PaymentMethod;
-      date?: string;
-      notes?: string;
-      referenceId?: string;
-    };
+    type: "RECORD_BUSINESS_MONEY_IN";
+    category: "Owner Capital" | "Expense Refund" | "Other Business Receipt";
+    amount: number;
+    paymentMethod: PaymentMethod;
+    date?: string;
+    notes?: string;
+    referenceId?: string;
+  };
 
 // ─────────────────────────────────────────────
 //  HELPERS (pure, used inside reducer)
@@ -283,18 +285,18 @@ export function normalizeProduct(product: Partial<Product> & { id?: string; name
 function methodToAccountId(method: PaymentMethod): string {
   switch (method) {
     case "Cash": return "acc-cash";
-    case "UPI":  return "acc-upi";
+    case "UPI": return "acc-upi";
     case "Card": return "acc-bank";
-    default:     return "acc-cash"; // Should not be reached for Credit
+    default: return "acc-cash"; // Should not be reached for Credit
   }
 }
 
 function refundMethodToAccountId(method: string): string {
   switch (method) {
     case "Cash": return "acc-cash";
-    case "UPI":  return "acc-upi";
+    case "UPI": return "acc-upi";
     case "Bank": return "acc-bank";
-    default:     return "acc-cash";
+    default: return "acc-cash";
   }
 }
 
@@ -754,7 +756,7 @@ function reducer(state: AppState, action: Action): AppState {
     case "BULK_IMPORT_PRODUCTS": {
       const timestamp = new Date().toISOString();
       const movements = [...(state.stockMovements || [])];
-      
+
       const existingIds = new Set(state.products.map((p) => p.id).filter((id) => Boolean(id && id.trim())));
 
       const normalizedToAdd = action.productsToAdd.map((p) => {
@@ -1658,7 +1660,7 @@ function reducer(state: AppState, action: Action): AppState {
               receivedQuantity: item.receivedQuantity + purchase.quantity,
             };
           });
-          
+
           const productName = state.products.find((p) => p.id === purchase.productId)?.name || "Unknown Product";
           const deliveryActivity: POActivityLog = {
             id: `poa-${crypto.randomUUID()}`,
@@ -1666,12 +1668,12 @@ function reducer(state: AppState, action: Action): AppState {
             date: new Date().toISOString(),
             notes: `Delivered ${purchase.quantity} units of ${productName}`,
           };
-          
+
           const newActivities = [...(po.activityLog || []), deliveryActivity];
-          
+
           const isAllCompleted = updatedItems.every((item) => item.receivedQuantity >= item.quantity);
           const newStatus: PurchaseOrderStatus = isAllCompleted ? "Completed" : "Partially Delivered";
-          
+
           if (isAllCompleted) {
             newActivities.push({
               id: `poa-${crypto.randomUUID()}`,
@@ -1704,7 +1706,7 @@ function reducer(state: AppState, action: Action): AppState {
 
     case "UPDATE_PURCHASE": {
       const { purchaseId, invoiceNumber, date, notes } = action;
-      
+
       const targetPurchase = (state.purchases || []).find((p) => p.id === purchaseId);
       const origRef = targetPurchase ? (targetPurchase.invoiceNumber || targetPurchase.id) : purchaseId;
 
@@ -2095,19 +2097,19 @@ function reducer(state: AppState, action: Action): AppState {
         purchaseOrders: (state.purchaseOrders || []).map((po) =>
           po.id === action.poId
             ? {
-                ...po,
-                status: "Sent" as const,
-                activityLog: [
-                  ...(po.activityLog || []),
-                  {
-                    id: `poa-${crypto.randomUUID()}`,
-                    type: "Sent" as const,
-                    date: new Date().toISOString(),
-                    notes: "Purchase Order marked as Sent",
-                  },
-                ],
-                updatedAt: new Date().toISOString(),
-              }
+              ...po,
+              status: "Sent" as const,
+              activityLog: [
+                ...(po.activityLog || []),
+                {
+                  id: `poa-${crypto.randomUUID()}`,
+                  type: "Sent" as const,
+                  date: new Date().toISOString(),
+                  notes: "Purchase Order marked as Sent",
+                },
+              ],
+              updatedAt: new Date().toISOString(),
+            }
             : po
         ),
       };
@@ -2119,19 +2121,19 @@ function reducer(state: AppState, action: Action): AppState {
         purchaseOrders: (state.purchaseOrders || []).map((po) =>
           po.id === action.poId
             ? {
-                ...po,
-                status: "Cancelled" as const,
-                activityLog: [
-                  ...(po.activityLog || []),
-                  {
-                    id: `poa-${crypto.randomUUID()}`,
-                    type: "Cancelled" as const,
-                    date: new Date().toISOString(),
-                    notes: "Purchase Order cancelled",
-                  },
-                ],
-                updatedAt: new Date().toISOString(),
-              }
+              ...po,
+              status: "Cancelled" as const,
+              activityLog: [
+                ...(po.activityLog || []),
+                {
+                  id: `poa-${crypto.randomUUID()}`,
+                  type: "Cancelled" as const,
+                  date: new Date().toISOString(),
+                  notes: "Purchase Order cancelled",
+                },
+              ],
+              updatedAt: new Date().toISOString(),
+            }
             : po
         ),
       };
@@ -2143,19 +2145,19 @@ function reducer(state: AppState, action: Action): AppState {
         purchaseOrders: (state.purchaseOrders || []).map((po) =>
           po.id === action.poId
             ? {
-                ...po,
-                status: "Completed" as const,
-                activityLog: [
-                  ...(po.activityLog || []),
-                  {
-                    id: `poa-${crypto.randomUUID()}`,
-                    type: "Completed" as const,
-                    date: new Date().toISOString(),
-                    notes: "Purchase Order manually marked as Completed",
-                  },
-                ],
-                updatedAt: new Date().toISOString(),
-              }
+              ...po,
+              status: "Completed" as const,
+              activityLog: [
+                ...(po.activityLog || []),
+                {
+                  id: `poa-${crypto.randomUUID()}`,
+                  type: "Completed" as const,
+                  date: new Date().toISOString(),
+                  notes: "Purchase Order manually marked as Completed",
+                },
+              ],
+              updatedAt: new Date().toISOString(),
+            }
             : po
         ),
       };
@@ -2167,19 +2169,19 @@ function reducer(state: AppState, action: Action): AppState {
         purchaseOrders: (state.purchaseOrders || []).map((po) =>
           po.id === action.poId
             ? {
-                ...po,
-                status: "Supplier Confirmed" as const,
-                activityLog: [
-                  ...(po.activityLog || []),
-                  {
-                    id: `poa-${crypto.randomUUID()}`,
-                    type: "Confirmed" as const,
-                    date: new Date().toISOString(),
-                    notes: "Supplier confirmed purchase order",
-                  },
-                ],
-                updatedAt: new Date().toISOString(),
-              }
+              ...po,
+              status: "Supplier Confirmed" as const,
+              activityLog: [
+                ...(po.activityLog || []),
+                {
+                  id: `poa-${crypto.randomUUID()}`,
+                  type: "Confirmed" as const,
+                  date: new Date().toISOString(),
+                  notes: "Supplier confirmed purchase order",
+                },
+              ],
+              updatedAt: new Date().toISOString(),
+            }
             : po
         ),
       };
@@ -2191,10 +2193,10 @@ function reducer(state: AppState, action: Action): AppState {
         purchaseOrders: (state.purchaseOrders || []).map((po) =>
           po.id === action.poId
             ? {
-                ...po,
-                activityLog: [...(po.activityLog || []), action.entry],
-                updatedAt: new Date().toISOString(),
-              }
+              ...po,
+              activityLog: [...(po.activityLog || []), action.entry],
+              updatedAt: new Date().toISOString(),
+            }
             : po
         ),
       };
@@ -2706,6 +2708,7 @@ function reducer(state: AppState, action: Action): AppState {
 interface StoreContextValue {
   state: AppState;
   dispatch: React.Dispatch<Action>;
+  quotaExceeded: boolean;
 
   // Toast notifications helper
   toast: { message: string; type: "success" | "error" | "info" } | null;
@@ -2894,61 +2897,91 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(timer);
   }, [toast]);
 
+  const [quotaExceeded, setQuotaExceeded] = useState(false);
+  const isLocalWriteRef = useRef(false);
+
+  function handleStorageError(err: any) {
+    if (err) {
+      const name = err.name || "";
+      const code = err.code || 0;
+      if (name === "QuotaExceededError" || name === "NS_ERROR_DOM_QUOTA_REACHED" || code === 22 || code === 1014) {
+        setQuotaExceeded(true);
+      }
+    }
+  }
+
   // ── Load from localStorage on initial mount ────────────────────────────────
-  // If the stored version doesn't match STORE_VERSION, we wipe the old data and
-  // start fresh — this guarantees a clean demo state after a version bump.
+  // PERSIST-02: Safely run migrations on parsed state without deleting data on version mismatch
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as AppState & { __v?: string };
-        if (parsed.__v !== STORE_VERSION) {
-          // Version mismatch — clear stale data and start clean
-          localStorage.removeItem(STORAGE_KEY);
-          // State stays at INITIAL_STATE (empty arrays)
-        } else {
-          // ── Run any pending one-time migrations ──────────────────────────
-          // runMigrations() is pure: receives the raw parsed state, applies
-          // only migrations that have not yet been marked as done, and returns
-          // the (possibly repaired) state. Applied IDs are persisted to
-          // MIGRATION_KEY so this logic is idempotent across page reloads.
-          const migratedState = runMigrations(parsed as AppState);
+        // Run any pending migrations deterministically
+        const migratedState = runMigrations(parsed as AppState);
 
-          // If migrations produced a different state, write it back to
-          // localStorage immediately so the repaired data is durable.
-          if (migratedState !== parsed) {
-            try {
-              localStorage.setItem(
-                STORAGE_KEY,
-                JSON.stringify({ ...migratedState, __v: STORE_VERSION })
-              );
-            } catch { /* ignore write failures */ }
+        if (parsed.__v !== STORE_VERSION || migratedState !== parsed) {
+          try {
+            isLocalWriteRef.current = true;
+            localStorage.setItem(
+              STORAGE_KEY,
+              JSON.stringify({ ...migratedState, __v: STORE_VERSION })
+            );
+            setQuotaExceeded(false);
+          } catch (err: any) {
+            isLocalWriteRef.current = false;
+            handleStorageError(err);
           }
-
-          dispatch({ type: "HYDRATE_STORE", state: migratedState });
         }
+
+        dispatch({ type: "HYDRATE_STORE", state: migratedState });
       }
-    } catch {
-      // Corrupted storage — ignore and start fresh
-      try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    } catch (err: any) {
+      handleStorageError(err);
     } finally {
       setHydrated(true);
     }
   }, []);
 
-  // ── Persist to localStorage whenever state changes after hydration ─────────
-  // Always tag with STORE_VERSION so future loads can detect mismatches.
+  // ── PERSIST-03: Multi-tab localStorage Synchronization ─────────────────────
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    function handleStorageChange(event: StorageEvent) {
+      if (event.key !== STORAGE_KEY || !event.newValue) return;
+      if (isLocalWriteRef.current) {
+        isLocalWriteRef.current = false;
+        return;
+      }
+      try {
+        const parsed = JSON.parse(event.newValue) as AppState;
+        const migrated = runMigrations(parsed);
+        dispatch({ type: "HYDRATE_STORE", state: migrated });
+      } catch {
+        // Ignore unparseable storage events
+      }
+    }
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, []);
+
+  // ── PERSIST-01: Persist to localStorage whenever state changes after hydration ─────────
   useEffect(() => {
     if (!hydrated) return;
     try {
+      isLocalWriteRef.current = true;
       localStorage.setItem(
         STORAGE_KEY,
         JSON.stringify({ ...state, __v: STORE_VERSION })
       );
-    } catch {
-      // storage full or unavailable — silently ignore
+      setQuotaExceeded(false);
+    } catch (err: any) {
+      isLocalWriteRef.current = false;
+      handleStorageError(err);
     }
   }, [state, hydrated]);
+
 
   // ── Helpers ──────────────────────────────────
 
@@ -3667,14 +3700,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const account = (state.financeAccounts ?? DEFAULT_FINANCE_ACCOUNTS).find((a) => a.id === accountId);
     const opening = account?.openingBalance ?? 0;
     const txs = (state.financeTransactions ?? []).filter((t) => t.accountId === accountId);
-    const income  = txs.filter((t) => t.type === "Income" ).reduce((s, t) => s + t.amount, 0);
+    const income = txs.filter((t) => t.type === "Income").reduce((s, t) => s + t.amount, 0);
     const expense = txs.filter((t) => t.type === "Expense").reduce((s, t) => s + t.amount, 0);
     return roundMoney(opening + income - expense);
   }
 
-  function getCashBalance()  { return getAccountBalance("acc-cash"); }
-  function getBankBalance()  { return getAccountBalance("acc-bank"); }
-  function getUPIBalance()   { return getAccountBalance("acc-upi");  }
+  function getCashBalance() { return getAccountBalance("acc-cash"); }
+  function getBankBalance() { return getAccountBalance("acc-bank"); }
+  function getUPIBalance() { return getAccountBalance("acc-upi"); }
 
   function getTotalCashAvailable(): number {
     return roundMoney(getCashBalance() + getBankBalance() + getUPIBalance());
@@ -3711,7 +3744,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const txs = (state.financeTransactions ?? []).filter(
       (t) => t.date >= fromDate && t.date <= toDate + "T23:59:59.999Z"
     );
-    const income  = txs.filter((t) => t.type === "Income" ).reduce((s, t) => s + t.amount, 0);
+    const income = txs.filter((t) => t.type === "Income").reduce((s, t) => s + t.amount, 0);
     const expense = txs.filter((t) => t.type === "Expense").reduce((s, t) => s + t.amount, 0);
     return roundMoney(income - expense);
   }
@@ -3856,8 +3889,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       value={{
         state,
         dispatch,
+        quotaExceeded,
         toast,
         showToast,
+
         recordBusinessExpense,
         setOpeningBalances,
         recordBusinessMoneyIn,

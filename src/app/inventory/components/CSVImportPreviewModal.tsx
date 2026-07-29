@@ -60,8 +60,45 @@ export function CSVImportPreviewModal({
   const [activeTab, setActiveTab] = useState<"all" | "new" | "update" | "error">("all");
 
   useEffect(() => {
-    setRows(parsedRows);
-  }, [parsedRows, isOpen]);
+    const seenSkusInFile = new Map<string, number>();
+    const validated = parsedRows.map((r) => {
+      const lowerSku = (r.sku || "").trim().toLowerCase();
+      const skuMatch = state?.products?.find((p) => p.sku?.trim().toLowerCase() === lowerSku);
+
+      const fieldErrors = { ...(r.fieldErrors || {}) };
+      const errors = [...(r.errors || [])];
+
+      if (lowerSku) {
+        if (seenSkusInFile.has(lowerSku)) {
+          const firstRow = seenSkusInFile.get(lowerSku);
+          const dupErr = `Duplicate SKU "${r.sku}" in import file (first seen in row ${firstRow}).`;
+          fieldErrors.sku = dupErr;
+          if (!errors.includes(dupErr)) {
+            errors.push(dupErr);
+          }
+          return {
+            ...r,
+            type: "ERROR" as const,
+            errors,
+            fieldErrors,
+            existingProduct: undefined,
+          };
+        }
+        seenSkusInFile.set(lowerSku, r.rowNumber);
+      }
+
+      const hasErrors = errors.length > 0;
+      return {
+        ...r,
+        errors,
+        fieldErrors,
+        type: hasErrors ? ("ERROR" as const) : skuMatch ? ("UPDATE" as const) : ("NEW" as const),
+        existingProduct: skuMatch,
+      };
+    });
+
+    setRows(validated);
+  }, [parsedRows, isOpen, state?.products]);
 
   // Derived existing brands list for convenience selection
   const existingBrands = useMemo(() => {
@@ -191,7 +228,8 @@ export function CSVImportPreviewModal({
 
         const remainingErrors = Object.values(newFieldErrors).filter(Boolean) as string[];
         const isStillError = remainingErrors.length > 0;
-        const skuMatch = state?.products?.find((p) => p.sku.trim().toLowerCase() === updated.sku.toLowerCase());
+        const lowerUpdatedSku = (updated.sku || "").trim().toLowerCase();
+        const skuMatch = state?.products?.find((p) => (p.sku || "").trim().toLowerCase() === lowerUpdatedSku);
 
         return {
           ...updated,

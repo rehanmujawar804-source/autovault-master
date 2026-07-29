@@ -64,7 +64,7 @@ import type {
   SalesReturnStatus,
   ExchangeItem,
 } from "@/types";
-import { todayLocalStr } from "@/lib/dateUtils";
+import { todayLocalStr, getISTDateStr, getISTMonthStr } from "@/lib/dateUtils";
 import { calculateRevenue } from "./revenueUtils";
 import {
   toTitleCase,
@@ -131,7 +131,7 @@ type Action =
   | { type: "ADD_PRODUCT"; product: Product }
   | { type: "UPDATE_PRODUCT"; product: Product }
   | { type: "DELETE_PRODUCT"; productId: string }
-  | { type: "ADJUST_STOCK"; productId: string; delta: number; note: string }
+  | { type: "ADJUST_STOCK"; productId: string; delta: number; note: string; recordExpense?: boolean; expenseCategory?: FinanceCategory }
   | { type: "BULK_ASSIGN_FITMENT"; productIds: string[]; fitment: VehicleFitment }
   | { type: "BULK_REMOVE_FITMENT"; productIds: string[]; fitment: VehicleFitment }
   | {
@@ -472,6 +472,40 @@ const MIGRATIONS: StoreMigration[] = [
       };
     },
   },
+  {
+    id: "m005-repair-po-sequence-counter",
+    description:
+      "Recalculates purchaseOrderCounter so it is never lower than the highest existing PO sequence number, " +
+      "preventing duplicate PO number generation after state hydration or backup restore.",
+    run(inputState) {
+      const log: string[] = [];
+      const maxSeq = (inputState.purchaseOrders || []).reduce((max, po) => {
+        if (!po.poNumber) return max;
+        const match = po.poNumber.match(/PO-\d+-(\d+)/i);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num > max) return num;
+        }
+        return max;
+      }, 0);
+
+      const existingCounter = inputState.purchaseOrderCounter || 0;
+      const repairedCounter = Math.max(existingCounter, maxSeq);
+
+      if (repairedCounter !== existingCounter) {
+        log.push(
+          `Repaired purchaseOrderCounter: ${existingCounter} -> ${repairedCounter} (highest existing PO seq: ${maxSeq})`
+        );
+      } else {
+        log.push(`purchaseOrderCounter is clean (${repairedCounter}).`);
+      }
+
+      return {
+        state: { ...inputState, purchaseOrderCounter: repairedCounter },
+        log,
+      };
+    },
+  },
 ];
 
 /**
@@ -537,12 +571,28 @@ function runMigrations(rawState: AppState): AppState {
   return currentState;
 }
 
-/** Calculate remaining due for an invoice after applying all repayments */
+/**
+ * BUG-07 Fix: Centralized calculation for total Adjustment (Store Credit / Debt Offset) returns on an invoice.
+ * ONLY returns with refundMethod === "Adjustment" reduce invoice due amount and customer credit debt.
+ * Cash, Bank, UPI, Card refunds do NOT reduce customer credit debt.
+ */
+export function getAdjustmentReturnTotal(
+  salesReturns: SalesReturn[] | undefined,
+  invoiceId: string
+): number {
+  if (!salesReturns || !salesReturns.length) return 0;
+  return salesReturns
+    .filter((r) => r.invoiceId === invoiceId && r.status !== "Cancelled" && r.refundMethod === "Adjustment")
+    .reduce((sum, r) => sum + r.totalRefund, 0);
+}
+
+/**
+ * Calculate remaining due for an invoice after applying all repayments and adjustment returns.
+ * BUG-07 Fix: Cash/Bank/UPI refunds do NOT reduce invoice due amount or customer credit debt.
+ * Only Store Credit / Debt Offset ("Adjustment") returns reduce invoice dueAmount.
+ */
 function calcInvoiceDue(invoice: Invoice, payments: DebtPayment[], salesReturns: SalesReturn[]): number {
-  const returnsTotal = (salesReturns || [])
-    .filter((r) => r.invoiceId === invoice.id && r.status !== "Cancelled")
-    .reduce((s, r) => s + r.totalRefund, 0);
-  return Math.max(0, roundMoney(invoice.dueAmount - returnsTotal));
+  return Math.max(0, roundMoney(invoice.dueAmount));
 }
 
 /** Calculate payment status given remaining due and total */
@@ -550,6 +600,71 @@ function calcPaymentStatus(due: number, total: number): PaymentStatus {
   if (due <= 0) return "Paid";
   if (due < total) return "Partial";
   return "Debt";
+}
+
+/**
+ * BUG-04 Fix: Dynamic single-source-of-truth calculation for active returned quantity.
+ * Calculates active returned quantity for a specific invoice line item dynamically
+ * from active (non-cancelled) sales returns.
+ */
+export function getActiveReturnedQuantity(
+  salesReturns: SalesReturn[] | undefined,
+  invoiceId: string,
+  invoiceItemId: string,
+  productId: string
+): number {
+  if (!salesReturns) return 0;
+  return salesReturns
+    .filter((r) => r.invoiceId === invoiceId && r.status !== "Cancelled")
+    .reduce((sum, r) => {
+      const matchingItems = r.items.filter(
+        (ri) => ri.invoiceItemId === invoiceItemId || (!ri.invoiceItemId && ri.productId === productId)
+      );
+      return sum + matchingItems.reduce((s, ri) => s + ri.quantity, 0);
+    }, 0);
+}
+
+/**
+ * BUG-04 Fix: Calculates remaining returnable quantity for an invoice line item dynamically.
+ */
+export function getReturnableQuantity(
+  invoice: Invoice,
+  salesReturns: SalesReturn[] | undefined,
+  itemId: string
+): number {
+  const item = invoice.items.find((it) => it.id === itemId);
+  if (!item) return 0;
+  const activeReturned = getActiveReturnedQuantity(salesReturns, invoice.id, item.id || "", item.productId);
+  return Math.max(0, item.quantity - activeReturned);
+}
+
+/**
+ * DUP-01 Fix: Ensures an invoice number is guaranteed unique across all invoices in state.
+ * If proposedNumber collides with an existing invoice, auto-increments sequence number until free.
+ */
+function ensureUniqueInvoiceNumber(proposedNumber: string, existingInvoices: Invoice[]): string {
+  const existingSet = new Set((existingInvoices || []).map((i) => i.invoiceNumber));
+  if (!existingSet.has(proposedNumber)) {
+    return proposedNumber;
+  }
+  const match = proposedNumber.match(/^(.*)-(\d{4})-(\d+)$/);
+  if (match) {
+    const prefix = match[1];
+    const year = match[2];
+    let seq = parseInt(match[3], 10);
+    const padLen = match[3].length;
+    let candidate = `${prefix}-${year}-${String(seq + 1).padStart(padLen, "0")}`;
+    while (existingSet.has(candidate)) {
+      seq += 1;
+      candidate = `${prefix}-${year}-${String(seq + 1).padStart(padLen, "0")}`;
+    }
+    return candidate;
+  }
+  let candidate = `${proposedNumber}-${Math.floor(100 + Math.random() * 900)}`;
+  while (existingSet.has(candidate)) {
+    candidate = `${proposedNumber}-${Math.floor(100 + Math.random() * 900)}`;
+  }
+  return candidate;
 }
 
 /**
@@ -610,6 +725,7 @@ const OWNER_ONLY_ACTIONS = new Set<Action["type"]>([
   "ADJUST_STOCK",
   "BULK_ASSIGN_FITMENT",
   "BULK_REMOVE_FITMENT",
+  "BULK_IMPORT_PRODUCTS",
 
   // Suppliers & Procurement
   "ADD_SUPPLIER",
@@ -633,6 +749,7 @@ const OWNER_ONLY_ACTIONS = new Set<Action["type"]>([
   // Financial Configuration & Danger Zone
   "SET_OPENING_BALANCES",
   "RECORD_BUSINESS_MONEY_IN",
+  "RECORD_BUSINESS_EXPENSE",
   "RESET_STORE",
 
   // Owner-only Invoice / Debt Payment / Return Void & Modifies
@@ -758,9 +875,18 @@ function reducer(state: AppState, action: Action): AppState {
       const movements = [...(state.stockMovements || [])];
 
       const existingIds = new Set(state.products.map((p) => p.id).filter((id) => Boolean(id && id.trim())));
+      const existingSkus = new Set(state.products.map((p) => (p.sku || "").trim().toLowerCase()).filter(Boolean));
 
-      const normalizedToAdd = action.productsToAdd.map((p) => {
+      const normalizedToAdd: Product[] = [];
+      for (const p of action.productsToAdd) {
         let normalized = normalizeProduct(p);
+        const lowerSku = (normalized.sku || "").trim().toLowerCase();
+
+        // NEW-04 Fix: Skip adding if SKU matches an existing product in state or an earlier item in this batch
+        if (lowerSku && existingSkus.has(lowerSku)) {
+          continue;
+        }
+
         if (!p.id || !p.id.trim() || existingIds.has(normalized.id)) {
           let newId = generateUniqueId("p");
           while (existingIds.has(newId)) {
@@ -768,9 +894,11 @@ function reducer(state: AppState, action: Action): AppState {
           }
           normalized = { ...normalized, id: newId };
         }
+
         existingIds.add(normalized.id);
-        return normalized;
-      });
+        if (lowerSku) existingSkus.add(lowerSku);
+        normalizedToAdd.push(normalized);
+      }
 
       const normalizedToUpdate = action.productsToUpdate.map(normalizeProduct);
 
@@ -835,6 +963,29 @@ function reducer(state: AppState, action: Action): AppState {
           note: trimmedNote || undefined,
         });
       }
+
+      // NEW-BUG-02: Optional financial write-off expense for negative adjustments
+      const newFinanceTransactions = [...(state.financeTransactions || [])];
+      if (originalProd && action.delta < 0 && action.recordExpense) {
+        const lossAmount = roundMoney(Math.abs(action.delta) * originalProd.currentCost);
+        if (lossAmount > 0) {
+          const category: FinanceCategory = action.expenseCategory || "Other Operating Expense";
+          newFinanceTransactions.push({
+            id: generateUniqueId("ft"),
+            accountId: "acc-cash",
+            type: "Expense" as const,
+            category,
+            amount: lossAmount,
+            date: new Date().toISOString(),
+            method: "Cash",
+            referenceId: originalProd.id,
+            notes: trimmedNote
+              ? `Stock Write-off (${Math.abs(action.delta)} units of ${originalProd.name}) — ${trimmedNote}`
+              : `Stock Write-off (${Math.abs(action.delta)} units of ${originalProd.name})`,
+          });
+        }
+      }
+
       return {
         ...state,
         products: state.products.map((p) =>
@@ -843,6 +994,7 @@ function reducer(state: AppState, action: Action): AppState {
             : p
         ),
         stockMovements: movements,
+        financeTransactions: newFinanceTransactions,
       };
     }
 
@@ -915,8 +1067,10 @@ function reducer(state: AppState, action: Action): AppState {
     // 3. Customer debt/visits updated (or new customer created). totalSpent is derived.
     case "ADD_INVOICE": {
       const originalInv = action.invoice;
+      const uniqueInvoiceNumber = ensureUniqueInvoiceNumber(originalInv.invoiceNumber, state.invoices);
       const inv: Invoice = {
         ...originalInv,
+        invoiceNumber: uniqueInvoiceNumber,
         items: (originalInv.items || []).map((item, idx) => {
           const prod = state.products.find((p) => p.id === item.productId);
           return {
@@ -1072,12 +1226,7 @@ function reducer(state: AppState, action: Action): AppState {
         const customerInvoices = newInvoices.filter(
           (inv) => inv.customerId === c.id && !inv.voided
         );
-        const totalDue = customerInvoices.reduce((s, inv) => {
-          const returnsTotal = (state.salesReturns || [])
-            .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
-            .reduce((sum, r) => sum + r.totalRefund, 0);
-          return s + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
-        }, 0);
+        const totalDue = customerInvoices.reduce((s, inv) => s + Math.max(0, roundMoney(inv.dueAmount)), 0);
         const invoice = state.invoices.find((i) => i.id === payment.invoiceId);
         return {
           ...c,
@@ -1143,11 +1292,8 @@ function reducer(state: AppState, action: Action): AppState {
       for (const inv of customerInvoices) {
         if (remaining <= 0) break;
 
-        // Subtract active returns for effective outstanding
-        const returnsTotal = (state.salesReturns || [])
-          .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
-          .reduce((s, r) => s + r.totalRefund, 0);
-        const effectiveDue = Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
+        // BUG-07 Fix: Effective due is directly inv.dueAmount (which already incorporates Adjustment returns if any)
+        const effectiveDue = Math.max(0, roundMoney(inv.dueAmount));
         if (effectiveDue <= 0) continue;
 
         const alloc = Math.min(remaining, effectiveDue);
@@ -1214,12 +1360,7 @@ function reducer(state: AppState, action: Action): AppState {
         const remainingInvoices = updatedInvoices.filter(
           (inv) => inv.customerId === c.id && !inv.voided
         );
-        const totalDue = remainingInvoices.reduce((s, inv) => {
-          const returnsTotal = (state.salesReturns || [])
-            .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
-            .reduce((sum, r) => sum + r.totalRefund, 0);
-          return s + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
-        }, 0);
+        const totalDue = remainingInvoices.reduce((s, inv) => s + Math.max(0, roundMoney(inv.dueAmount)), 0);
         const allocatedTotal = roundMoney(roundedTotal - remaining);
         return {
           ...c,
@@ -1306,12 +1447,7 @@ function reducer(state: AppState, action: Action): AppState {
         const customerInvoices = newInvoices.filter(
           (inv) => inv.customerId === c.id && !inv.voided
         );
-        const totalDue = customerInvoices.reduce((s, inv) => {
-          const returnsTotal = (state.salesReturns || [])
-            .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
-            .reduce((sum, r) => sum + r.totalRefund, 0);
-          return s + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
-        }, 0);
+        const totalDue = customerInvoices.reduce((s, inv) => s + Math.max(0, roundMoney(inv.dueAmount)), 0);
         return {
           ...c,
           debt: roundMoney(totalDue),
@@ -1407,12 +1543,7 @@ function reducer(state: AppState, action: Action): AppState {
         const customerInvoices = newInvoices.filter(
           (inv) => inv.customerId === c.id && !inv.voided
         );
-        const totalDue = customerInvoices.reduce((s, inv) => {
-          const returnsTotal = (state.salesReturns || [])
-            .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
-            .reduce((sum, r) => sum + r.totalRefund, 0);
-          return s + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
-        }, 0);
+        const totalDue = customerInvoices.reduce((s, inv) => s + Math.max(0, roundMoney(inv.dueAmount)), 0);
         return {
           ...c,
           debt: roundMoney(totalDue),
@@ -1588,13 +1719,17 @@ function reducer(state: AppState, action: Action): AppState {
       const { purchase, paymentMethod } = action;
       const newPurchases = [...(state.purchases || []), purchase];
 
-      // Update product: increase stock and update currentCost
+      // Update product: increase stock and update currentCost using Weighted Average Cost (WAC)
       const newProducts = state.products.map((p) => {
         if (p.id !== purchase.productId) return p;
+        const newStock = p.stock + purchase.quantity;
+        const newAvgCost = newStock > 0
+          ? roundMoney((p.stock * p.currentCost + purchase.quantity * purchase.buyPrice) / newStock)
+          : purchase.buyPrice;
         return {
           ...p,
-          stock: p.stock + purchase.quantity,
-          currentCost: purchase.buyPrice,
+          stock: newStock,
+          currentCost: newAvgCost,
         };
       });
 
@@ -1996,12 +2131,7 @@ function reducer(state: AppState, action: Action): AppState {
         const customerInvoices = state.invoices.filter(
           (inv) => inv.customerId === c.id && !inv.voided
         );
-        const totalDue = customerInvoices.reduce((s, inv) => {
-          const returnsTotal = (state.salesReturns || [])
-            .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
-            .reduce((sum, r) => sum + r.totalRefund, 0);
-          return s + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
-        }, 0);
+        const totalDue = customerInvoices.reduce((s, inv) => s + Math.max(0, roundMoney(inv.dueAmount)), 0);
         const totalSpent = calculateRevenue(state.invoices, state.salesReturns, undefined, c.id);
         return {
           ...c,
@@ -2266,20 +2396,50 @@ function reducer(state: AppState, action: Action): AppState {
         ? salesReturn.createdAt
         : new Date().toISOString();
 
+      const targetInvoice = state.invoices.find((i) => i.id === salesReturn.invoiceId);
+      if (!targetInvoice || targetInvoice.voided) return state;
+
+      // BUG-04 Guard: Prevent over-returning items beyond remaining returnable quantity
+      const isOverReturn = salesReturn.items.some((ri) => {
+        const item = targetInvoice.items.find((it) => it.id === ri.invoiceItemId || (!ri.invoiceItemId && it.productId === ri.productId));
+        if (!item) return true;
+        const activeReturned = getActiveReturnedQuantity(state.salesReturns, targetInvoice.id, item.id || "", item.productId);
+        const returnable = Math.max(0, item.quantity - activeReturned);
+        return ri.quantity <= 0 || ri.quantity > returnable;
+      });
+      if (isOverReturn) {
+        console.warn(`[AutoVault Guard] Blocked sales return ${salesReturn.returnNumber}. Quantity exceeds remaining returnable items.`);
+        return state;
+      }
+
       // 1. Append the new sales return record
       const newSalesReturns = [...(state.salesReturns || []), salesReturn];
 
-      // 2. Update returnedQuantity cache on each invoice item (convenience cache only)
+      // 2. Update returnedQuantity cache and dueAmount on invoice
+      // BUG-07 Fix: Only Store Credit / Debt Offset ("Adjustment") returns reduce invoice dueAmount.
+      // Cash / Bank / UPI refunds leave invoice dueAmount and customer debt unchanged.
       const newInvoices = state.invoices.map((inv) => {
         if (inv.id !== salesReturn.invoiceId) return inv;
         const newItems = inv.items.map((item) => {
-          const returnItem = salesReturn.items.find((ri) => ri.invoiceItemId === item.id);
+          const returnItem = salesReturn.items.find((ri) => ri.invoiceItemId === item.id || (!ri.invoiceItemId && ri.productId === item.productId));
           if (!returnItem) return item;
           return {
             ...item,
             returnedQuantity: (item.returnedQuantity || 0) + returnItem.quantity,
           };
         });
+
+        if (salesReturn.refundMethod === "Adjustment") {
+          const newDueAmount = Math.max(0, roundMoney(inv.dueAmount - salesReturn.totalRefund));
+          const newPaymentStatus = calcPaymentStatus(newDueAmount, inv.total);
+          return {
+            ...inv,
+            items: newItems,
+            dueAmount: newDueAmount,
+            paymentStatus: newPaymentStatus,
+          };
+        }
+
         return { ...inv, items: newItems };
       });
 
@@ -2438,7 +2598,7 @@ function reducer(state: AppState, action: Action): AppState {
           : { ...r, status: "Cancelled" as const, cancellationReason: reason, cancelledBy: voidedBy, cancelledAt }
       );
 
-      // 2. Reverse returnedQuantity cache on invoice items
+      // 2. Reverse returnedQuantity cache on invoice items and restore dueAmount if Adjustment
       const newInvoices = state.invoices.map((inv) => {
         if (inv.id !== target.invoiceId) return inv;
         const newItems = inv.items.map((item) => {
@@ -2449,6 +2609,19 @@ function reducer(state: AppState, action: Action): AppState {
             returnedQuantity: Math.max(0, (item.returnedQuantity || 0) - returnItem.quantity),
           };
         });
+
+        if (target.refundMethod === "Adjustment") {
+          const maxDue = Math.max(0, inv.total - inv.amountPaid);
+          const newDueAmount = Math.min(maxDue, roundMoney(inv.dueAmount + target.totalRefund));
+          const newPaymentStatus = calcPaymentStatus(newDueAmount, inv.total);
+          return {
+            ...inv,
+            items: newItems,
+            dueAmount: newDueAmount,
+            paymentStatus: newPaymentStatus,
+          };
+        }
+
         return { ...inv, items: newItems };
       });
 
@@ -2721,7 +2894,7 @@ interface StoreContextValue {
   updateProduct: (product: Product) => void;
   deleteProduct: (productId: string) => boolean;
   isProductSafeToDelete: (productId: string) => boolean;
-  adjustStock: (productId: string, delta: number, note: string) => void;
+  adjustStock: (productId: string, delta: number, note: string, recordExpense?: boolean, expenseCategory?: FinanceCategory) => void;
   bulkImportProducts: (payload: {
     productsToAdd: Product[];
     productsToUpdate: Product[];
@@ -3055,14 +3228,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return true;
   }
 
-  function adjustStock(productId: string, delta: number, note: string) {
+  function adjustStock(productId: string, delta: number, note: string, recordExpense?: boolean, expenseCategory?: FinanceCategory) {
     if (!isOwnerAllowed()) return;
     const trimmedNote = (note || "").trim();
     if (!trimmedNote) {
       showToast("A valid reason or note is required for manual stock adjustments.", "error");
       return;
     }
-    dispatch({ type: "ADJUST_STOCK", productId, delta, note: trimmedNote });
+    dispatch({ type: "ADJUST_STOCK", productId, delta, note: trimmedNote, recordExpense, expenseCategory });
   }
 
   function bulkImportProducts(payload: {
@@ -3251,16 +3424,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return state.invoices.filter((inv) => inv.customerId === customerId);
   }
 
-  /** All invoices for a customer that still have EFFECTIVE outstanding > 0 (after returns) */
+  /** All invoices for a customer that still have canonical outstanding due > 0 */
   function getCustomerOutstandingInvoices(customerId: string) {
-    return state.invoices.filter((inv) => {
-      if (inv.customerId !== customerId || inv.voided || inv.dueAmount <= 0) return false;
-      // Subtract any active returns from the raw dueAmount
-      const returnsTotal = (state.salesReturns || [])
-        .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
-        .reduce((s, r) => s + r.totalRefund, 0);
-      return Math.max(0, inv.dueAmount - returnsTotal) > 0;
-    });
+    return state.invoices.filter((inv) => inv.customerId === customerId && !inv.voided && inv.dueAmount > 0);
   }
 
   /** Calculates authoritative customer outstanding balance from non-voided invoices minus active returns */
@@ -3292,16 +3458,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return calculateProfit(state.invoices, state.salesReturns, state.products);
   }
 
-  /** Derives total outstanding debt from all invoice effective dues (subtracting active returns) — source of truth */
+  /** Derives total outstanding debt from all invoice effective dues — source of truth */
   function getTotalOutstandingDebt() {
     return state.invoices
       .filter((inv) => !inv.voided && inv.dueAmount > 0)
-      .reduce((sum, inv) => {
-        const returnsTotal = (state.salesReturns || [])
-          .filter((r) => r.invoiceId === inv.id && r.status !== "Cancelled")
-          .reduce((s, r) => s + r.totalRefund, 0);
-        return sum + Math.max(0, roundMoney(inv.dueAmount - returnsTotal));
-      }, 0);
+      .reduce((sum, inv) => sum + Math.max(0, roundMoney(inv.dueAmount)), 0);
   }
 
   function getInventoryValue() {
@@ -3714,28 +3875,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function getTodayIncome(): number {
-    const today = todayLocalStr();
+    const today = getISTDateStr(new Date());
     return (state.financeTransactions ?? [])
-      .filter((t) => t.type === "Income" && t.date.startsWith(today))
+      .filter((t) => t.type === "Income" && getISTDateStr(t.date) === today)
       .reduce((s, t) => s + t.amount, 0);
   }
 
   function getTodayExpense(): number {
-    const today = todayLocalStr();
+    const today = getISTDateStr(new Date());
     return (state.financeTransactions ?? [])
-      .filter((t) => t.type === "Expense" && t.date.startsWith(today))
+      .filter((t) => t.type === "Expense" && getISTDateStr(t.date) === today)
       .reduce((s, t) => s + t.amount, 0);
   }
 
   function getMonthlyIncome(monthStr: string): number {
     return (state.financeTransactions ?? [])
-      .filter((t) => t.type === "Income" && t.date.startsWith(monthStr))
+      .filter((t) => t.type === "Income" && getISTMonthStr(t.date) === monthStr)
       .reduce((s, t) => s + t.amount, 0);
   }
 
   function getMonthlyExpense(monthStr: string): number {
     return (state.financeTransactions ?? [])
-      .filter((t) => t.type === "Expense" && t.date.startsWith(monthStr))
+      .filter((t) => t.type === "Expense" && getISTMonthStr(t.date) === monthStr)
       .reduce((s, t) => s + t.amount, 0);
   }
 
@@ -3772,10 +3933,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function getInvoiceOutstanding(invoice: Invoice): number {
-    const returnsTotal = (state.salesReturns || [])
-      .filter((r) => r.invoiceId === invoice.id && r.status !== "Cancelled")
-      .reduce((s, r) => s + r.totalRefund, 0);
-    return Math.max(0, roundMoney(invoice.dueAmount - returnsTotal));
+    return Math.max(0, roundMoney(invoice.dueAmount));
   }
 
   function getReturnableQuantity(invoiceItemId: string, invoiceId: string): number {

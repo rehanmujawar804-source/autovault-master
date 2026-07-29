@@ -24,6 +24,7 @@ import {
   Smartphone,
   CreditCard,
   AlertCircle,
+  AlertTriangle,
   Package,
   Tag,
   User,
@@ -33,7 +34,6 @@ import {
   ChevronUp,
   Sparkles,
   Info,
-  AlertTriangle,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,6 +62,7 @@ export default function BillingPage() {
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [negativeStockConfirmItems, setNegativeStockConfirmItems] = useState<Array<{ name: string; currentStock: number; sellQty: number; resultStock: number }> | null>(null);
 
   // ── Optional POS Vehicle Helper State ─────────────────────────────────────
   const [isPosVehicleHelperExpanded, setIsPosVehicleHelperExpanded] = useState(false);
@@ -400,11 +401,10 @@ export default function BillingPage() {
   // ── Cart helpers ──────────────────────────────────────────────────────────
   function addToCart(productId: string) {
     const product = state.products.find((p) => p.id === productId);
-    if (!product || product.stock === 0 || !isSellableInPOS(product)) return;
+    if (!product || !isSellableInPOS(product)) return;
     setCart((prev) => {
       const existing = prev.find((i) => i.product.id === productId);
       if (existing) {
-        if (existing.quantity >= product.stock) return prev;
         return prev.map((i) =>
           i.product.id === productId ? { ...i, quantity: i.quantity + 1 } : i
         );
@@ -421,19 +421,20 @@ export default function BillingPage() {
     const product = state.products.find((p) => p.id === productId);
     if (!product) return;
     if (qty <= 0) { removeFromCart(productId); return; }
-    if (qty > product.stock) return;
     setCart((prev) => prev.map((i) => (i.product.id === productId ? { ...i, quantity: qty } : i)));
   }
 
   // ── Generate Invoice ──────────────────────────────────────────────────────
-  function handleGenerateInvoice() {
+  function handleGenerateInvoice(bypassNegativeStockCheck = false) {
     setValidationError("");
     if (cart.length === 0) {
       showToast("Add at least one product to the cart.", "error");
       return;
     }
 
-    // Live inventory stock & status validation check
+    // Live inventory status validation check
+    const negativeItems: Array<{ name: string; currentStock: number; sellQty: number; resultStock: number }> = [];
+
     for (const item of cart) {
       const liveProduct = state.products.find((p) => p.id === item.product.id);
       if (!liveProduct) {
@@ -447,10 +448,18 @@ export default function BillingPage() {
         return;
       }
       if (item.quantity > liveProduct.stock) {
-        setValidationError(`Insufficient stock for "${liveProduct.name}". Available: ${liveProduct.stock}, Cart: ${item.quantity}.`);
-        showToast(`Insufficient stock for "${liveProduct.name}".`, "error");
-        return;
+        negativeItems.push({
+          name: liveProduct.name,
+          currentStock: liveProduct.stock,
+          sellQty: item.quantity,
+          resultStock: liveProduct.stock - item.quantity,
+        });
       }
+    }
+
+    if (!bypassNegativeStockCheck && negativeItems.length > 0) {
+      setNegativeStockConfirmItems(negativeItems);
+      return;
     }
 
     if (!billedBy) {
@@ -480,11 +489,16 @@ export default function BillingPage() {
       }
     }
 
-    // Business validation: Debt/Partial must have customer details
-    if (paymentStatus === "Debt" || paymentStatus === "Partial") {
+    // Business validation: Credit/Debt/Partial must have registered customer details
+    if (paymentMethod === "Credit" || paymentStatus === "Debt" || paymentStatus === "Partial") {
+      if (!selectedCustomerId && (!finalName || finalName.toLowerCase() === "walk-in customer")) {
+        setValidationError("Credit sales require a registered customer.");
+        showToast("Credit sales require a registered customer.", "error");
+        return;
+      }
       if (!finalName || finalName.toLowerCase() === "walk-in customer") {
-        setValidationError("Customer Name is required for Debt or Partial payment status.");
-        showToast("Customer details required for debt tracking.", "error");
+        setValidationError("Credit sales require a registered customer.");
+        showToast("Credit sales require a registered customer.", "error");
         return;
       }
       if (!finalPhone) {
@@ -1456,7 +1470,7 @@ export default function BillingPage() {
 
             <button
               type="button"
-              onClick={handleGenerateInvoice}
+              onClick={() => handleGenerateInvoice()}
               disabled={cart.length === 0 || isSubmitting}
               className="w-full flex items-center justify-center gap-2.5 bg-yellow-400 hover:bg-yellow-300 active:bg-yellow-500 disabled:bg-slate-200 disabled:cursor-not-allowed text-navy-950 py-3.5 rounded-xl font-extrabold text-sm transition-all shadow-md cursor-pointer"
             >
@@ -1678,6 +1692,58 @@ export default function BillingPage() {
           </div>
         );
       })()}
+
+      {negativeStockConfirmItems && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 border border-amber-200">
+            <div className="flex items-center gap-3 text-amber-600">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center shrink-0">
+                <AlertTriangle size={20} />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-800 text-base">Negative Stock Warning</h3>
+                <p className="text-xs text-slate-500">Owner confirmation required to proceed</p>
+              </div>
+            </div>
+
+            <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3.5 space-y-2 text-xs">
+              <p className="text-amber-900 font-semibold">
+                Completing this invoice will result in negative stock for the following item(s):
+              </p>
+              <div className="space-y-1.5 divide-y divide-amber-200/60 pt-1">
+                {negativeStockConfirmItems.map((item, idx) => (
+                  <div key={idx} className="pt-1.5 flex justify-between items-center text-slate-700">
+                    <span className="font-medium text-slate-800 truncate max-w-[200px]">{item.name}</span>
+                    <span className="font-mono text-amber-900">
+                      {item.currentStock} → <strong className="text-rose-600 font-bold">{item.resultStock}</strong> ({item.sellQty} sold)
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setNegativeStockConfirmItems(null)}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 font-bold text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setNegativeStockConfirmItems(null);
+                  handleGenerateInvoice(true);
+                }}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs transition-colors shadow-md cursor-pointer"
+              >
+                Confirm & Proceed
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

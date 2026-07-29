@@ -121,6 +121,7 @@ export default function FinancePage() {
     getIncomeByCategory,
     getTotalSupplierOutstanding,
     getTotalOutstandingDebt,
+    getInventoryValue,
   } = useStore();
 
   // Role Guard
@@ -229,6 +230,7 @@ export default function FinancePage() {
   const totalGrossProfit = useMemo(() => calculateProfit(state.invoices, state.salesReturns), [state.invoices, state.salesReturns]);
   const totalCustomerReceivables = useMemo(() => getTotalOutstandingDebt(), [state.invoices, state.salesReturns]);
   const totalSupplierPayables = useMemo(() => getTotalSupplierOutstanding(), [state.purchases, state.purchaseReturns, state.supplierPayments]);
+  const totalInventoryValue = useMemo(() => getInventoryValue(), [state.products]);
 
   // Operating Expenses Total & Net Profit (Gross Profit - Operating Expenses)
   const totalOperatingExpenses = useMemo(() => {
@@ -577,16 +579,16 @@ export default function FinancePage() {
         </div>
       </div>
 
-      {/* ── OWNER FINANCIAL POSITION CONTROL CENTER ────────────────────────────── */}
+      {/* ── OWNER FINANCIAL POSITION CONTROL CENTER (FINANCE HEALTH SUMMARY) ────────────────────────────── */}
       <div className="bg-slate-900 text-white p-5 rounded-2xl border border-slate-800 shadow-lg space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
           <div>
             <h2 className="text-sm font-black uppercase tracking-wider text-yellow-400 flex items-center gap-2">
               <ShieldAlert size={16} />
-              Owner Financial Overview & Net Position
+              Finance Health Summary & Position Overview
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Separation of Available Cash Funds, Receivables, Payables, Revenue, Gross Profit, and Operating Expenses.
+              Read-only summary of Cash, Bank, UPI, Receivables, Payables, Inventory Valuation, Revenue, Gross & Net Profit.
             </p>
           </div>
           <span className="text-[11px] font-mono text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded-lg">
@@ -594,12 +596,26 @@ export default function FinancePage() {
           </span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
-          {/* Available Funds */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {/* Cash Balance */}
           <div className="bg-slate-800/80 border border-emerald-500/30 rounded-xl p-3.5 space-y-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block">Available Funds</span>
-            <p className="text-lg font-black text-white">₹{totalAvailable.toLocaleString()}</p>
-            <span className="text-[10px] text-slate-400 block">Cash + Bank + UPI</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block">Cash Balance</span>
+            <p className="text-lg font-black text-white">₹{cashBalance.toLocaleString()}</p>
+            <span className="text-[10px] text-slate-400 block">Physical Cash In Hand</span>
+          </div>
+
+          {/* Bank Balance */}
+          <div className="bg-slate-800/80 border border-blue-500/30 rounded-xl p-3.5 space-y-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 block">Bank Balance</span>
+            <p className="text-lg font-black text-white">₹{bankBalance.toLocaleString()}</p>
+            <span className="text-[10px] text-slate-400 block">Bank Account Funds</span>
+          </div>
+
+          {/* UPI Balance */}
+          <div className="bg-slate-800/80 border border-purple-500/30 rounded-xl p-3.5 space-y-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-purple-400 block">UPI Balance</span>
+            <p className="text-lg font-black text-white">₹{upiBalance.toLocaleString()}</p>
+            <span className="text-[10px] text-slate-400 block">Digital Wallet / UPI</span>
           </div>
 
           {/* Receivables */}
@@ -622,14 +638,24 @@ export default function FinancePage() {
             <span className="text-[10px] text-slate-400 block">Supplier Dues</span>
           </Link>
 
-          {/* Revenue */}
-          <Link href="/analytics" className="bg-slate-800/80 border border-blue-500/30 rounded-xl p-3.5 space-y-1 hover:border-blue-400 transition-colors block group">
+          {/* Inventory Valuation */}
+          <Link href="/inventory" className="bg-slate-800/80 border border-amber-400/30 rounded-xl p-3.5 space-y-1 hover:border-amber-300 transition-colors block group">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 block">Revenue</span>
-              <ChevronRight size={12} className="text-slate-500 group-hover:text-blue-400 transition-colors" />
+              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-300 block">Inventory Value</span>
+              <ChevronRight size={12} className="text-slate-500 group-hover:text-amber-300 transition-colors" />
+            </div>
+            <p className="text-lg font-black text-white">₹{totalInventoryValue.toLocaleString()}</p>
+            <span className="text-[10px] text-slate-400 block">Stock × Current Cost</span>
+          </Link>
+
+          {/* Revenue */}
+          <Link href="/analytics" className="bg-slate-800/80 border border-cyan-500/30 rounded-xl p-3.5 space-y-1 hover:border-cyan-400 transition-colors block group">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400 block">Revenue</span>
+              <ChevronRight size={12} className="text-slate-500 group-hover:text-cyan-400 transition-colors" />
             </div>
             <p className="text-lg font-black text-white">₹{totalRevenue.toLocaleString()}</p>
-            <span className="text-[10px] text-slate-400 block">Sales Value</span>
+            <span className="text-[10px] text-slate-400 block">Completed Sales Value</span>
           </Link>
 
           {/* Gross Profit */}

@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useStore } from "@/lib/store";
 import { X, AlertCircle, AlertTriangle } from "lucide-react";
-import type { Product, VehicleFitment } from "@/types";
+import type { Product, VehicleFitment, FinanceCategory } from "@/types";
 import {
   toTitleCase,
   addOrMergeFitment,
@@ -577,20 +577,31 @@ export function ProductFormModal({
               </select>
             </div>
 
-            {!editingProduct && (
-              <div>
-                <FieldLabel>Initial Stock *</FieldLabel>
-                <input
-                  type="number"
-                  min="0"
-                  value={form.stock}
-                  onChange={(e) => setField("stock", e.target.value === "" ? "" : Number(e.target.value))}
-                  className={INPUT}
-                />
-              </div>
-            )}
-
-            {editingProduct && (
+            {!editingProduct ? (
+              <>
+                <div>
+                  <FieldLabel>Initial Stock *</FieldLabel>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.stock}
+                    onChange={(e) => setField("stock", e.target.value === "" ? "" : Number(e.target.value))}
+                    className={INPUT}
+                  />
+                </div>
+                <div>
+                  <FieldLabel>Opening Stock Cost (₹ per unit)</FieldLabel>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.currentCost}
+                    onChange={(e) => setField("currentCost", e.target.value === "" ? "" : Number(e.target.value))}
+                    placeholder="e.g. 100"
+                    className={INPUT}
+                  />
+                </div>
+              </>
+            ) : (
               <div>
                 <FieldLabel>Current Cost (₹) * — Manual Fallback</FieldLabel>
                 <input
@@ -881,13 +892,19 @@ export function AdjustStockModal({
   onClose,
   product,
 }: AdjustStockModalProps) {
-  const { adjustStock, showToast } = useStore();
+  const { adjustStock, updateProduct, showToast } = useStore();
   const [stockDelta, setStockDelta] = useState("");
   const [reasonNote, setReasonNote] = useState("");
+  const [recordExpense, setRecordExpense] = useState(false);
+  const [expenseCategory, setExpenseCategory] = useState<FinanceCategory>("Other Operating Expense");
+  const [openingCostInput, setOpeningCostInput] = useState("");
 
   useEffect(() => {
     setStockDelta("");
     setReasonNote("");
+    setRecordExpense(false);
+    setExpenseCategory("Other Operating Expense");
+    setOpeningCostInput("");
   }, [isOpen, product]);
 
   if (!isOpen || !product) return null;
@@ -908,8 +925,27 @@ export function AdjustStockModal({
       showToast(`Cannot adjust stock down by ${delta}. Only ${product.stock} units available.`, "error");
       return;
     }
+    if (direction === "add" && product.currentCost === 0) {
+      const costVal = Number(openingCostInput);
+      if (isNaN(costVal) || costVal < 0 || openingCostInput.trim() === "") {
+        showToast("Please enter a valid Opening Cost (₹ per unit) for this product.", "error");
+        return;
+      }
+      try {
+        updateProduct({ ...product, currentCost: costVal });
+      } catch {
+        showToast("Failed to update opening cost.", "error");
+        return;
+      }
+    }
     try {
-      adjustStock(product.id, direction === "add" ? delta : -delta, trimmedNote);
+      adjustStock(
+        product.id,
+        direction === "add" ? delta : -delta,
+        trimmedNote,
+        direction === "remove" ? recordExpense : false,
+        expenseCategory
+      );
       showToast(`Adjusted stock for "${product.name}" successfully!`, "success");
       onClose();
     } catch (err) {
@@ -961,6 +997,23 @@ export function AdjustStockModal({
             />
           </div>
 
+          {product.currentCost === 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-1.5 text-xs">
+              <FieldLabel>Opening Cost (₹ per unit) *</FieldLabel>
+              <p className="text-amber-800 text-[11px] font-medium">
+                Current Cost is ₹0. Entering opening cost initializes unit cost for COGS and inventory valuation when adding stock.
+              </p>
+              <input
+                type="number"
+                min="0"
+                placeholder="e.g. 120"
+                value={openingCostInput}
+                onChange={(e) => setOpeningCostInput(e.target.value)}
+                className={INPUT}
+              />
+            </div>
+          )}
+
           {Number(stockDelta) > 0 && (
             <div className="grid grid-cols-2 gap-3 text-center text-sm">
               <div className="bg-green-50 border border-green-200 rounded-xl p-3">
@@ -975,6 +1028,39 @@ export function AdjustStockModal({
                   {Math.max(0, product.stock - Number(stockDelta))}
                 </p>
               </div>
+            </div>
+          )}
+
+          {Number(stockDelta) > 0 && (
+            <div className="space-y-2 border-t border-slate-150 pt-3">
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={recordExpense}
+                  onChange={(e) => setRecordExpense(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-300 text-navy-950 focus:ring-navy-600 cursor-pointer accent-navy-950"
+                />
+                <span>Record Financial Loss (Write-off Expense)</span>
+              </label>
+              {recordExpense && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2 text-xs">
+                  <p className="text-amber-800 font-medium">
+                    Logs an operating expense of ₹{((Number(stockDelta) || 0) * product.currentCost).toLocaleString()} ({stockDelta} units × ₹{product.currentCost} current cost).
+                  </p>
+                  <div>
+                    <FieldLabel>Expense Category</FieldLabel>
+                    <select
+                      value={expenseCategory}
+                      onChange={(e) => setExpenseCategory(e.target.value as FinanceCategory)}
+                      className={INPUT}
+                    >
+                      <option value="Other Operating Expense">Other Operating Expense</option>
+                      <option value="Maintenance & Repair">Maintenance & Repair</option>
+                      <option value="Office & Shop Expense">Office & Shop Expense</option>
+                    </select>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

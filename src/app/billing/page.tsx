@@ -730,9 +730,8 @@ export default function BillingPage() {
         <button
           type="button"
           onClick={() => setMobileTab("catalog")}
-          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
-            mobileTab === "catalog" ? "bg-amber-500 text-slate-950 shadow-xs" : "text-slate-300 hover:text-white"
-          }`}
+          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${mobileTab === "catalog" ? "bg-amber-500 text-slate-950 shadow-xs" : "text-slate-300 hover:text-white"
+            }`}
         >
           <Package size={14} />
           Products
@@ -744,9 +743,8 @@ export default function BillingPage() {
         <button
           type="button"
           onClick={() => setMobileTab("cart")}
-          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer relative ${
-            mobileTab === "cart" ? "bg-amber-500 text-slate-950 shadow-xs" : "text-slate-300 hover:text-white"
-          }`}
+          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer relative ${mobileTab === "cart" ? "bg-amber-500 text-slate-950 shadow-xs" : "text-slate-300 hover:text-white"
+            }`}
         >
           <ShoppingCart size={14} />
           Cart
@@ -760,9 +758,8 @@ export default function BillingPage() {
         <button
           type="button"
           onClick={() => setMobileTab("checkout")}
-          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
-            mobileTab === "checkout" ? "bg-amber-500 text-slate-950 shadow-xs" : "text-slate-300 hover:text-white"
-          }`}
+          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${mobileTab === "checkout" ? "bg-amber-500 text-slate-950 shadow-xs" : "text-slate-300 hover:text-white"
+            }`}
         >
           <ReceiptText size={14} />
           Checkout
@@ -901,8 +898,8 @@ export default function BillingPage() {
                 type="button"
                 onClick={() => setSelectedCategory(c)}
                 className={`px-3.5 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border cursor-pointer shrink-0 ${selectedCategory === c
-                    ? "bg-navy-950 border-navy-950 text-white shadow-sm"
-                    : "bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700"
+                  ? "bg-navy-950 border-navy-950 text-white shadow-sm"
+                  : "bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700"
                   }`}
               >
                 {c}
@@ -951,10 +948,10 @@ export default function BillingPage() {
                       key={product.id}
                       onClick={() => !outOfStock && addToCart(product.id)}
                       className={`relative bg-white rounded-xl border p-4 flex flex-col justify-between cursor-pointer select-none transition-all duration-150 group ${outOfStock
-                          ? "border-slate-150 opacity-55 cursor-not-allowed"
-                          : inCart
-                            ? "border-amber-400 shadow-md ring-2 ring-amber-300/40 bg-amber-50/20"
-                            : "border-slate-200 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5"
+                        ? "border-slate-150 opacity-55 cursor-not-allowed"
+                        : inCart
+                          ? "border-amber-400 shadow-md ring-2 ring-amber-300/40 bg-amber-50/20"
+                          : "border-slate-200 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5"
                         }`}
                     >
                       {/* Qty badge */}
@@ -1437,8 +1434,8 @@ export default function BillingPage() {
                     type="button"
                     onClick={() => handlePresetDiscount(pct)}
                     className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-all cursor-pointer ${discount === pct && discountInput === String(pct)
-                        ? "bg-navy-950 border-navy-950 text-white shadow-sm"
-                        : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600"
+                      ? "bg-navy-950 border-navy-950 text-white shadow-sm"
+                      : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600"
                       }`}
                   >
                     {pct === 0 ? "0%" : `${pct}%`}
@@ -1491,11 +1488,10 @@ export default function BillingPage() {
                         key={item.id}
                         type="button"
                         onClick={() => setPaymentMethod(item.id as PaymentMethod)}
-                        className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-all cursor-pointer active:scale-95 ${
-                          active
+                        className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-all cursor-pointer active:scale-95 ${active
                             ? "bg-navy-950 border-navy-950 text-white shadow-md"
                             : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600"
-                        }`}
+                          }`}
                       >
                         {item.icon}
                         {item.label}
@@ -1571,8 +1567,8 @@ export default function BillingPage() {
                       type="button"
                       onClick={() => setBilledBy(role)}
                       className={`flex-1 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer active:scale-95 ${active
-                          ? "bg-navy-950 border-navy-950 text-white shadow-md"
-                          : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                        ? "bg-navy-950 border-navy-950 text-white shadow-md"
+                        : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
                         }`}
                     >
                       {role}

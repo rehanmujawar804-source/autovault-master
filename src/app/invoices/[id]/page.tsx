@@ -14,22 +14,22 @@ import { useRole } from "@/hooks/useRole";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STATUS_BADGE: Record<PaymentStatus, string> = {
-  Paid:    "bg-green-100 text-green-700",
+  Paid: "bg-green-100 text-green-700",
   Partial: "bg-orange-100 text-orange-700",
-  Debt:    "bg-red-100 text-red-600",
+  Debt: "bg-red-100 text-red-600",
 };
 
 const METHOD_BADGE: Record<string, string> = {
-  Cash:   "bg-emerald-50 text-emerald-700",
-  UPI:    "bg-blue-50 text-blue-700",
-  Card:   "bg-purple-50 text-purple-700",
+  Cash: "bg-emerald-50 text-emerald-700",
+  UPI: "bg-blue-50 text-blue-700",
+  Card: "bg-purple-50 text-purple-700",
   Credit: "bg-red-50 text-red-600",
 };
 
 const METHOD_COLORS: Record<PaymentMethod, string> = {
-  Cash:   "bg-emerald-50 text-emerald-700 border-emerald-200",
-  UPI:    "bg-blue-50 text-blue-700 border-blue-200",
-  Card:   "bg-purple-50 text-purple-700 border-purple-200",
+  Cash: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  UPI: "bg-blue-50 text-blue-700 border-blue-200",
+  Card: "bg-purple-50 text-purple-700 border-purple-200",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ export default function InvoiceDetailPage({
 }) {
   const { id } = use(params);
   const { state, getInvoiceById, getCustomerById, recordDebtPayment, getDebtPaymentsByInvoice, voidInvoice, voidDebtPayment, showToast,
-          addSalesReturn, cancelSalesReturn, getSalesReturnsByInvoice, getReturnableQuantity, getInvoiceOutstanding } = useStore();
+    addSalesReturn, cancelSalesReturn, getSalesReturnsByInvoice, getReturnableQuantity, getInvoiceOutstanding } = useStore();
   const { isOwner, loading, requireAuth } = useRole();
 
   useEffect(() => {
@@ -509,11 +509,10 @@ export default function InvoiceDetailPage({
                 {repayments.map((p) => (
                   <div
                     key={p.id}
-                    className={`flex flex-col text-xs rounded-lg px-3 py-2 border ${
-                      p.voided
+                    className={`flex flex-col text-xs rounded-lg px-3 py-2 border ${p.voided
                         ? "bg-red-50 border-red-200 opacity-70"
                         : "bg-green-50 border-green-100"
-                    }`}
+                      }`}
                   >
                     <div className="flex justify-between items-start">
                       <div>
@@ -526,9 +525,8 @@ export default function InvoiceDetailPage({
                         </span>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                          p.voided ? "bg-red-100 text-red-700" : "bg-green-100 text-green-800"
-                        }`}>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${p.voided ? "bg-red-100 text-red-700" : "bg-green-100 text-green-800"
+                          }`}>
                           {p.method}
                         </span>
                         {p.voided && (
@@ -628,19 +626,17 @@ export default function InvoiceDetailPage({
                 {salesReturns.map((ret) => (
                   <div
                     key={ret.id}
-                    className={`rounded-lg border px-3 py-2.5 text-xs ${
-                      ret.status === "Cancelled"
+                    className={`rounded-lg border px-3 py-2.5 text-xs ${ret.status === "Cancelled"
                         ? "bg-red-50 border-red-200 opacity-60"
                         : "bg-orange-50 border-orange-200"
-                    }`}
+                      }`}
                   >
                     <div className="flex justify-between items-start mb-1">
                       <span className="font-bold text-slate-800 font-mono">{ret.returnNumber}</span>
-                      <span className={`text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                        ret.status === "Cancelled" ? "bg-red-100 text-red-700" :
-                        ret.status === "Adjusted"  ? "bg-blue-100 text-blue-700" :
-                        "bg-green-100 text-green-700"
-                      }`}>{ret.status}</span>
+                      <span className={`text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded ${ret.status === "Cancelled" ? "bg-red-100 text-red-700" :
+                          ret.status === "Adjusted" ? "bg-blue-100 text-blue-700" :
+                            "bg-green-100 text-green-700"
+                        }`}>{ret.status}</span>
                     </div>
                     <p className="text-slate-600">{ret.reason}</p>
                     <div className="flex justify-between mt-1">
@@ -745,12 +741,12 @@ export default function InvoiceDetailPage({
             events.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
             const iconMap: Record<TimelineEvent["icon"], { dot: string; label: string }> = {
-              "create":        { dot: "bg-blue-500",   label: "🧾" },
-              "pay":           { dot: "bg-green-500",  label: "💰" },
-              "void-pay":      { dot: "bg-red-400",    label: "✕" },
-              "return":        { dot: "bg-orange-400", label: "↩" },
-              "cancel-return": { dot: "bg-red-500",    label: "✕" },
-              "void-inv":      { dot: "bg-red-700",    label: "🚫" },
+              "create": { dot: "bg-blue-500", label: "🧾" },
+              "pay": { dot: "bg-green-500", label: "💰" },
+              "void-pay": { dot: "bg-red-400", label: "✕" },
+              "return": { dot: "bg-orange-400", label: "↩" },
+              "cancel-return": { dot: "bg-red-500", label: "✕" },
+              "void-inv": { dot: "bg-red-700", label: "🚫" },
             };
 
             if (events.length === 0) return null;
@@ -968,11 +964,10 @@ export default function InvoiceDetailPage({
                           key={m}
                           type="button"
                           onClick={() => setCollectMethod(m)}
-                          className={`py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                            collectMethod === m
+                          className={`py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${collectMethod === m
                               ? "bg-slate-900 border-slate-900 text-white"
                               : `${METHOD_COLORS[m]} hover:opacity-80`
-                          }`}
+                            }`}
                         >
                           {m}
                         </button>
@@ -992,11 +987,10 @@ export default function InvoiceDetailPage({
                             key={role}
                             type="button"
                             onClick={() => setCollectCollectedBy(role)}
-                            className={`flex-1 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                              active
-                               ? "bg-slate-900 border-slate-900 text-white"
+                            className={`flex-1 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${active
+                                ? "bg-slate-900 border-slate-900 text-white"
                                 : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                            }`}
+                              }`}
                           >
                             {role}
                           </button>
@@ -1210,7 +1204,7 @@ export default function InvoiceDetailPage({
                           <p className="text-xs font-bold text-slate-850">{item.name}</p>
                           <span className="text-xs font-mono font-bold text-slate-500">₹{item.price.toLocaleString()}</span>
                         </div>
-                        
+
                         <div className="grid grid-cols-3 gap-2 text-center text-[10px] bg-white border border-slate-100 rounded-lg p-2 font-semibold">
                           <div>
                             <span className="text-slate-400 block uppercase tracking-wider text-[8px]">Sold</span>
@@ -1245,7 +1239,7 @@ export default function InvoiceDetailPage({
                               >+</button>
                             </div>
                           </div>
-                          
+
                           <div className="text-right">
                             <span className="text-[10px] font-bold text-slate-450 block uppercase tracking-wider">Refund</span>
                             <span className={`text-xs font-bold ${qty > 0 ? "text-orange-600 font-black" : "text-slate-450"}`}>
@@ -1268,11 +1262,10 @@ export default function InvoiceDetailPage({
                       key={m}
                       type="button"
                       onClick={() => setReturnMethod(m)}
-                      className={`py-2 rounded-xl border text-[11px] font-bold transition-all cursor-pointer ${
-                        returnMethod === m
+                      className={`py-2 rounded-xl border text-[11px] font-bold transition-all cursor-pointer ${returnMethod === m
                           ? "bg-orange-500 border-orange-500 text-white"
                           : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-orange-50 hover:border-orange-200"
-                      }`}
+                        }`}
                     >{m}</button>
                   ))}
                 </div>
@@ -1287,7 +1280,7 @@ export default function InvoiceDetailPage({
                     <p className="text-xs font-bold text-orange-800 uppercase tracking-wider">
                       Replacement Product (Exchange)
                     </p>
-                    
+
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
                         Select Replacement Item <span className="text-red-500">*</span>
@@ -1355,8 +1348,8 @@ export default function InvoiceDetailPage({
                                 {diff > 0
                                   ? `+₹${diff.toLocaleString()} (Customer Pays Extra)`
                                   : diff < 0
-                                  ? `-₹${Math.abs(diff).toLocaleString()} (Store Refunds)`
-                                  : "₹0 (Equal Value Exchange)"}
+                                    ? `-₹${Math.abs(diff).toLocaleString()} (Store Refunds)`
+                                    : "₹0 (Equal Value Exchange)"}
                               </span>
                             </div>
                           </div>
@@ -1372,11 +1365,10 @@ export default function InvoiceDetailPage({
                                     key={m}
                                     type="button"
                                     onClick={() => setDiffMethod(m as any)}
-                                    className={`py-1.5 rounded-lg border text-[10px] font-bold transition cursor-pointer ${
-                                      diffMethod === m
+                                    className={`py-1.5 rounded-lg border text-[10px] font-bold transition cursor-pointer ${diffMethod === m
                                         ? "bg-orange-600 border-orange-600 text-white"
                                         : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                                    }`}
+                                      }`}
                                   >
                                     {m}
                                   </button>

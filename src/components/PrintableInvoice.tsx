@@ -16,7 +16,7 @@ export function numberToWords(amount: number): string {
     "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
     "Seventeen", "Eighteen", "Nineteen"
   ];
-  
+
   const tens = [
     "", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"
   ];
@@ -160,7 +160,7 @@ export default function PrintableInvoice({ invoice, shopSettings }: PrintableInv
               {shopName}
             </h1>
           </div>
-          
+
           {showAddress && (
             <div className="text-[10px] font-bold text-slate-600 uppercase tracking-widest border-y border-dashed border-slate-300 py-0.5 w-full max-w-xl">
               {address}
@@ -238,7 +238,7 @@ export default function PrintableInvoice({ invoice, shopSettings }: PrintableInv
                 <td className="py-2 px-4 text-right font-mono font-bold">₹{(item.price * item.quantity).toLocaleString()}</td>
               </tr>
             ))}
-            
+
             {/* Grid spacer rows to maintain professional standard receipt book layout */}
             {emptyRows.map((_, idx) => (
               <tr key={`empty-${idx}`} className="border-b border-slate-200 last:border-b-0 min-h-[28px] print:border-slate-300">
@@ -290,14 +290,14 @@ export default function PrintableInvoice({ invoice, shopSettings }: PrintableInv
             <span>Subtotal:</span>
             <span className="font-mono">₹{invoice.subtotal.toLocaleString()}</span>
           </div>
-          
+
           {invoice.discount > 0 && (
             <div className="flex justify-between text-green-600 text-xs">
               <span>Discount ({invoice.discount}%):</span>
               <span className="font-mono">−₹{discountAmount.toLocaleString()}</span>
             </div>
           )}
-          
+
           <div className="flex justify-between font-black text-slate-900 border-t border-slate-200 pt-1.5 pb-0.5 text-base">
             <span>Final Total:</span>
             <span className="font-mono text-base text-navy-950">₹{invoice.total.toLocaleString()}</span>

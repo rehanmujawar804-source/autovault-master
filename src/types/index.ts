@@ -86,13 +86,13 @@ export type PurchaseOrderStatus =
 export interface POActivityLog {
   id: string;
   type:
-    | "Created"
-    | "Edited"
-    | "Sent"
-    | "Confirmed"
-    | "Delivery"
-    | "Completed"
-    | "Cancelled";
+  | "Created"
+  | "Edited"
+  | "Sent"
+  | "Confirmed"
+  | "Delivery"
+  | "Completed"
+  | "Cancelled";
   date: string; // ISO timestamp
   notes: string;
   user?: string;

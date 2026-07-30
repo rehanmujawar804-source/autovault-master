@@ -63,6 +63,8 @@ import type {
   SalesReturnItem,
   SalesReturnStatus,
   ExchangeItem,
+  CustomerCreditTransaction,
+  CustomerCreditType,
 } from "@/types";
 import { todayLocalStr, getISTDateStr, getISTMonthStr } from "@/lib/dateUtils";
 import { calculateRevenue } from "./revenueUtils";
@@ -116,6 +118,7 @@ const INITIAL_STATE: AppState = {
   purchaseOrderCounter: 0,
   salesReturns: [],
   salesReturnCounter: 0,
+  customerCreditTransactions: [],
 };
 
 const STORAGE_KEY = "autovault_store";
@@ -146,7 +149,7 @@ type Action =
   | { type: "UPDATE_CUSTOMER"; customer: Customer }
 
   // Invoices
-  | { type: "ADD_INVOICE"; invoice: Invoice }
+  | { type: "ADD_INVOICE"; invoice: Invoice; creditRedeemed?: number }
   | { type: "VOID_INVOICE"; invoiceId: string; reason: string; voidedBy: string }
 
   // Debt Repayment — core new action
@@ -159,6 +162,13 @@ type Action =
     date: string;
     note?: string;
     collectedBy?: "Owner" | "Staff";
+  }
+  | {
+    type: "APPLY_STORE_CREDIT_TO_DEBT";
+    customerId: string;
+    amount?: number;
+    notes?: string;
+    appliedBy?: "Owner" | "Staff";
   }
   | { type: "VOID_DEBT_PAYMENT"; paymentId: string; reason: string; voidedBy: string }
 
@@ -572,6 +582,71 @@ function runMigrations(rawState: AppState): AppState {
 }
 
 /**
+ * Single-pass O(N) credit balance map builder.
+ * Computes exact customer credit balances for all customers.
+ * Clamps floating point arithmetic and ensures balance >= 0.
+ */
+export function getCustomerCreditBalanceMap(
+  transactions: CustomerCreditTransaction[] | undefined
+): Map<string, number> {
+  const map = new Map<string, number>();
+  if (!transactions || !transactions.length) return map;
+
+  for (const tx of transactions) {
+    if (!tx.customerId) continue;
+    const current = map.get(tx.customerId) || 0;
+    let delta = 0;
+    if (tx.type === "Issue" || tx.type === "RedeemReversal") {
+      delta = tx.amount;
+    } else if (tx.type === "Redeem" || tx.type === "IssueReversal") {
+      delta = -tx.amount;
+    } else if (tx.type === "Reversal") {
+      if (tx.invoiceId && !tx.salesReturnId) {
+        delta = tx.amount; // Reversing an invoice redemption restores credit (+amount)
+      } else {
+        delta = -tx.amount; // Reversing a sales return credit issuance removes credit (-amount)
+      }
+    }
+    map.set(tx.customerId, current + delta);
+  }
+
+  for (const [cId, rawBal] of map.entries()) {
+    map.set(cId, Math.max(0, roundMoney(rawBal)));
+  }
+
+  return map;
+}
+
+/**
+ * Calculates customer credit balance from immutable CustomerCreditTransaction ledger.
+ * Balance = sum(Issue) + sum(RedeemReversal) - sum(Redeem) - sum(IssueReversal) - sum(Reversal).
+ */
+export function getCustomerCreditBalance(
+  transactions: CustomerCreditTransaction[] | undefined,
+  customerId: string
+): number {
+  if (!transactions || !transactions.length || !customerId) return 0;
+  const balanceMap = getCustomerCreditBalanceMap(transactions);
+  return balanceMap.get(customerId) || 0;
+}
+
+/**
+ * Calculates total outstanding store credit liability across all customers.
+ */
+export function getTotalCustomerCreditLiability(
+  customers: Customer[] | undefined,
+  transactions: CustomerCreditTransaction[] | undefined
+): number {
+  if (!customers || !customers.length || !transactions || !transactions.length) return 0;
+  const balanceMap = getCustomerCreditBalanceMap(transactions);
+  let total = 0;
+  for (const c of customers) {
+    total += balanceMap.get(c.id) || 0;
+  }
+  return Math.max(0, roundMoney(total));
+}
+
+/**
  * BUG-07 Fix: Centralized calculation for total Adjustment (Store Credit / Debt Offset) returns on an invoice.
  * ONLY returns with refundMethod === "Adjustment" reduce invoice due amount and customer credit debt.
  * Cash, Bank, UPI, Card refunds do NOT reduce customer credit debt.
@@ -781,7 +856,7 @@ function isActionAuthorized(action: Action): boolean {
 //  REDUCER
 // ─────────────────────────────────────────────
 
-function reducer(state: AppState, action: Action): AppState {
+export function reducer(state: AppState, action: Action): AppState {
   // Reducer-level RBAC Guard: Block unauthorized staff dispatches of owner-only actions
   if (!isActionAuthorized(action)) {
     console.warn(`[AutoVault RBAC] Blocked unauthorized action dispatch: "${action.type}". User is not Owner.`);
@@ -1095,14 +1170,47 @@ function reducer(state: AppState, action: Action): AppState {
         (c) => c.id === inv.customerId || c.phone === inv.customerPhone
       );
 
+      // Process Store Credit Redemption (if requested)
+      const requestedCreditRedeemed = action.creditRedeemed ?? 0;
+      let actualCreditRedeemed = 0;
+      let newCustomerCreditTxs = [...(state.customerCreditTransactions || [])];
+      const targetCustomerId = inv.customerId || existingCustomer?.id;
+
+      if (requestedCreditRedeemed > 0 && targetCustomerId) {
+        const availableCredit = getCustomerCreditBalance(state.customerCreditTransactions, targetCustomerId);
+        actualCreditRedeemed = Math.min(requestedCreditRedeemed, availableCredit, inv.total);
+
+        if (actualCreditRedeemed > 0) {
+          const redeemTx: CustomerCreditTransaction = {
+            id: generateUniqueId("cct"),
+            customerId: targetCustomerId,
+            type: "Redeem",
+            amount: actualCreditRedeemed,
+            date: inv.createdAt || new Date().toISOString(),
+            referenceType: "Invoice",
+            referenceId: inv.id,
+            invoiceId: inv.id,
+            notes: `Store Credit redeemed on Invoice ${inv.invoiceNumber}`,
+            createdBy: (inv.billedBy as "Owner" | "Staff") || "Owner",
+          };
+          newCustomerCreditTxs.push(redeemTx);
+        }
+      }
+
       let newCustomers: Customer[];
 
       if (existingCustomer) {
         newCustomers = state.customers.map((c) => {
           if (c.id !== existingCustomer.id) return c;
+          const updatedStoreCredit = getCustomerCreditBalance(newCustomerCreditTxs, c.id);
+          const activityDesc = actualCreditRedeemed > 0
+            ? `Invoice Created (Store Credit Redeemed: ₹${actualCreditRedeemed.toLocaleString()})`
+            : "Invoice Created";
+
           return {
             ...c,
             debt: c.debt + inv.dueAmount,
+            storeCredit: updatedStoreCredit,
             // totalSpent intentionally not updated here — derived via calculateRevenue() on demand
             visits: c.visits + 1,
             lastVisit: inv.date,
@@ -1112,7 +1220,7 @@ function reducer(state: AppState, action: Action): AppState {
               {
                 id: `ca-${crypto.randomUUID()}`,
                 type: "Invoice" as const,
-                description: "Invoice Created",
+                description: activityDesc,
                 reference: inv.invoiceNumber,
                 date: inv.createdAt || new Date().toISOString(),
               },
@@ -1120,11 +1228,14 @@ function reducer(state: AppState, action: Action): AppState {
           };
         });
       } else if (inv.customer && inv.customer !== "Walk-in Customer") {
+        const createdCustomerId = inv.customerId ?? `c-${crypto.randomUUID()}`;
+        const updatedStoreCredit = getCustomerCreditBalance(newCustomerCreditTxs, createdCustomerId);
         const newCustomer: Customer = {
-          id: inv.customerId ?? `c-${crypto.randomUUID()}`,
+          id: createdCustomerId,
           name: inv.customer,
           phone: inv.customerPhone,
           debt: inv.dueAmount,
+          storeCredit: updatedStoreCredit,
           // totalSpent intentionally omitted — derived via calculateRevenue() on demand
           visits: 1,
           lastVisit: inv.date,
@@ -1133,7 +1244,9 @@ function reducer(state: AppState, action: Action): AppState {
             {
               id: `ca-${crypto.randomUUID()}`,
               type: "Invoice" as const,
-              description: "Invoice Created",
+              description: actualCreditRedeemed > 0
+                ? `Invoice Created (Store Credit Redeemed: ₹${actualCreditRedeemed.toLocaleString()})`
+                : "Invoice Created",
               reference: inv.invoiceNumber,
               date: inv.createdAt || new Date().toISOString(),
             },
@@ -1187,6 +1300,7 @@ function reducer(state: AppState, action: Action): AppState {
         stockMovements: newInvoiceStockMovements,
         customers: newCustomers,
         financeTransactions: newInvoiceFinanceTxs,
+        customerCreditTransactions: newCustomerCreditTxs,
       };
     }
 
@@ -1387,6 +1501,137 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    // ── Apply Customer Store Credit to Outstanding Debt (FIFO) ─────────────────
+    case "APPLY_STORE_CREDIT_TO_DEBT": {
+      const { customerId, amount: requestedAmount, notes, appliedBy } = action;
+      if (!customerId) return state;
+
+      const availableCredit = getCustomerCreditBalance(state.customerCreditTransactions, customerId);
+      if (availableCredit <= 0) return state;
+
+      const customerInvoices = state.invoices
+        .filter((inv) => inv.customerId === customerId && !inv.voided && inv.dueAmount > 0)
+        .sort((a, b) => {
+          const timeA = new Date(a.createdAt || a.date).getTime();
+          const timeB = new Date(b.createdAt || b.date).getTime();
+          return timeA - timeB;
+        });
+
+      const totalOutstandingDebt = customerInvoices.reduce(
+        (s, inv) => s + Math.max(0, roundMoney(inv.dueAmount)),
+        0
+      );
+      if (totalOutstandingDebt <= 0) return state;
+
+      const maxToApply = Math.min(availableCredit, totalOutstandingDebt);
+      const roundedAmount = requestedAmount && requestedAmount > 0
+        ? Math.min(roundMoney(requestedAmount), maxToApply)
+        : maxToApply;
+
+      if (roundedAmount <= 0) return state;
+
+      const nowISO = new Date().toISOString();
+      let remainingToApply = roundedAmount;
+      const createdPayments: DebtPayment[] = [];
+      const invoiceUpdates: Record<string, { newAmountPaid: number; newDueAmount: number; newStatus: PaymentStatus }> = {};
+
+      for (const inv of customerInvoices) {
+        if (remainingToApply <= 0) break;
+        const effectiveDue = Math.max(0, roundMoney(inv.dueAmount));
+        if (effectiveDue <= 0) continue;
+
+        const alloc = Math.min(remainingToApply, effectiveDue);
+        if (alloc <= 0) continue;
+
+        const newPayment: DebtPayment = {
+          id: `dp-${crypto.randomUUID()}`,
+          customerId,
+          invoiceId: inv.id,
+          amount: alloc,
+          date: nowISO,
+          method: "Cash" as PaymentMethod,
+          note: `Applied Store Credit against Outstanding Debt (${inv.invoiceNumber})`,
+          collectedBy: appliedBy || "Owner",
+        };
+        createdPayments.push(newPayment);
+
+        const currentPaid = inv.amountPaid;
+        const currentDue = inv.dueAmount;
+        const newAmountPaid = currentPaid + alloc;
+        const newDueAmount = Math.max(0, roundMoney(currentDue - alloc));
+        const newStatus = calcPaymentStatus(newDueAmount, inv.total);
+
+        invoiceUpdates[inv.id] = {
+          newAmountPaid,
+          newDueAmount,
+          newStatus,
+        };
+
+        remainingToApply = roundMoney(remainingToApply - alloc);
+      }
+
+      if (createdPayments.length === 0) return state;
+
+      const actualApplied = roundMoney(createdPayments.reduce((s, p) => s + p.amount, 0));
+
+      const newDebtPayments = [...(state.debtPayments || []), ...createdPayments];
+
+      const newInvoices = state.invoices.map((inv) => {
+        const update = invoiceUpdates[inv.id];
+        if (!update) return inv;
+        return {
+          ...inv,
+          amountPaid: update.newAmountPaid,
+          dueAmount: update.newDueAmount,
+          paymentStatus: update.newStatus,
+        };
+      });
+
+      const redeemCreditTx: CustomerCreditTransaction = {
+        id: generateUniqueId("cct"),
+        customerId,
+        type: "Redeem",
+        amount: actualApplied,
+        date: nowISO,
+        referenceType: "DebtSettlement",
+        referenceId: createdPayments[0].id,
+        notes: notes ? `Applied Store Credit against Outstanding Debt — ${notes}` : `Applied Store Credit against Outstanding Debt`,
+        createdBy: appliedBy || "Owner",
+      };
+      const newCustomerCreditTxs = [...(state.customerCreditTransactions || []), redeemCreditTx];
+
+      const newCustomers = state.customers.map((c) => {
+        if (c.id !== customerId) return c;
+        const updatedStoreCredit = getCustomerCreditBalance(newCustomerCreditTxs, c.id);
+        const customerInvoicesAfter = newInvoices.filter((inv) => inv.customerId === c.id && !inv.voided);
+        const updatedDebt = customerInvoicesAfter.reduce((s, inv) => s + Math.max(0, roundMoney(inv.dueAmount)), 0);
+
+        return {
+          ...c,
+          debt: updatedDebt,
+          storeCredit: updatedStoreCredit,
+          activities: [
+            ...(c.activities || []),
+            {
+              id: `ca-${crypto.randomUUID()}`,
+              type: "Credit" as const,
+              description: `Store Credit Redeemed (Applied ₹${actualApplied.toLocaleString()} to Debt)`,
+              reference: `Debt Settlement (${createdPayments.length} inv)`,
+              date: nowISO,
+            },
+          ],
+        };
+      });
+
+      return {
+        ...state,
+        debtPayments: newDebtPayments,
+        invoices: newInvoices,
+        customers: newCustomers,
+        customerCreditTransactions: newCustomerCreditTxs,
+      };
+    }
+
     // ── Void Debt Payment (Void a single repayment) ────────────────────────
     //
     // Reverses ONE repayment without touching the invoice void status.
@@ -1538,22 +1783,46 @@ function reducer(state: AppState, action: Action): AppState {
         }
       });
 
+      // 4. Reverse redeemed store credit (if any)
+      let newCustomerCreditTxs = [...(state.customerCreditTransactions || [])];
+      const redeemedTxsForInvoice = (state.customerCreditTransactions || []).filter(
+        (tx) => tx.invoiceId === invoice.id && tx.type === "Redeem"
+      );
+      const totalRedeemedToRestore = redeemedTxsForInvoice.reduce((sum, tx) => sum + tx.amount, 0);
+
+      if (totalRedeemedToRestore > 0 && invoice.customerId) {
+        newCustomerCreditTxs.push({
+          id: generateUniqueId("cct"),
+          customerId: invoice.customerId,
+          type: "Reversal",
+          amount: totalRedeemedToRestore,
+          date: voidedAt,
+          invoiceId: invoice.id,
+          notes: `Store Credit restored from Voided Invoice ${invoice.invoiceNumber}`,
+          createdBy: (voidedBy as "Owner" | "Staff") || "Owner",
+        });
+      }
+
       const newCustomers = state.customers.map((c) => {
         if (c.id !== invoice.customerId) return c;
         const customerInvoices = newInvoices.filter(
           (inv) => inv.customerId === c.id && !inv.voided
         );
         const totalDue = customerInvoices.reduce((s, inv) => s + Math.max(0, roundMoney(inv.dueAmount)), 0);
+        const updatedStoreCredit = getCustomerCreditBalance(newCustomerCreditTxs, c.id);
         return {
           ...c,
           debt: roundMoney(totalDue),
+          storeCredit: updatedStoreCredit,
           // totalSpent intentionally not updated here — derived via calculateRevenue() on demand
           activities: [
             ...(c.activities || []),
             {
               id: `ca-${crypto.randomUUID()}`,
               type: "Void" as const,
-              description: "Invoice Voided",
+              description: totalRedeemedToRestore > 0
+                ? `Invoice Voided (Restored ₹${totalRedeemedToRestore.toLocaleString()} Store Credit)`
+                : "Invoice Voided",
               reference: invoice.invoiceNumber,
               date: voidedAt,
             },
@@ -1585,6 +1854,7 @@ function reducer(state: AppState, action: Action): AppState {
         stockMovements: movements,
         customers: newCustomers,
         financeTransactions: newFinanceTransactions,
+        customerCreditTransactions: newCustomerCreditTxs,
       };
     }
 
@@ -1662,11 +1932,19 @@ function reducer(state: AppState, action: Action): AppState {
         };
       });
 
+      const customerCreditTransactions = action.state.customerCreditTransactions ?? [];
+      const customers = (action.state.customers || []).map((c: Customer) => ({
+        ...c,
+        debt: c.debt ?? 0,
+        storeCredit: getCustomerCreditBalance(customerCreditTransactions, c.id),
+      }));
+
       return {
         ...action.state,
         products,
         purchases,
         invoices,
+        customers,
         debtPayments: action.state.debtPayments ?? [],
         suppliers: action.state.suppliers ?? [],
         stockMovements,
@@ -1698,6 +1976,7 @@ function reducer(state: AppState, action: Action): AppState {
         purchaseOrderCounter: action.state.purchaseOrderCounter ?? 0,
         salesReturns: action.state.salesReturns ?? [],
         salesReturnCounter: action.state.salesReturnCounter ?? 0,
+        customerCreditTransactions,
       };
     }
 
@@ -2412,8 +2691,38 @@ function reducer(state: AppState, action: Action): AppState {
         return state;
       }
 
+      let debtAdjusted = 0;
+      let creditCreated = 0;
+      let newCustomerCreditTxs = [...(state.customerCreditTransactions || [])];
+
+      if (salesReturn.refundMethod === "Adjustment") {
+        const currentDue = targetInvoice.dueAmount;
+        debtAdjusted = Math.min(currentDue, salesReturn.totalRefund);
+        creditCreated = roundMoney(salesReturn.totalRefund - debtAdjusted);
+
+        if (creditCreated > 0 && salesReturn.customerId) {
+          const issueTx: CustomerCreditTransaction = {
+            id: generateUniqueId("cct"),
+            customerId: salesReturn.customerId,
+            type: "Issue",
+            amount: creditCreated,
+            date: now,
+            salesReturnId: salesReturn.id,
+            notes: `Store Credit generated from Sales Return ${salesReturn.returnNumber}`,
+            createdBy: (salesReturn.createdBy as "Owner" | "Staff") || "Owner",
+          };
+          newCustomerCreditTxs.push(issueTx);
+        }
+      }
+
+      const returnRecordToSave: SalesReturn = {
+        ...salesReturn,
+        debtAdjusted,
+        creditCreated,
+      };
+
       // 1. Append the new sales return record
-      const newSalesReturns = [...(state.salesReturns || []), salesReturn];
+      const newSalesReturns = [...(state.salesReturns || []), returnRecordToSave];
 
       // 2. Update returnedQuantity cache and dueAmount on invoice
       // BUG-07 Fix: Only Store Credit / Debt Offset ("Adjustment") returns reduce invoice dueAmount.
@@ -2430,7 +2739,7 @@ function reducer(state: AppState, action: Action): AppState {
         });
 
         if (salesReturn.refundMethod === "Adjustment") {
-          const newDueAmount = Math.max(0, roundMoney(inv.dueAmount - salesReturn.totalRefund));
+          const newDueAmount = Math.max(0, roundMoney(inv.dueAmount - debtAdjusted));
           const newPaymentStatus = calcPaymentStatus(newDueAmount, inv.total);
           return {
             ...inv,
@@ -2556,15 +2865,32 @@ function reducer(state: AppState, action: Action): AppState {
       const newCustomers = state.customers.map((c) => {
         if (!salesReturn.customerId || c.id !== salesReturn.customerId) return c;
         const itemsStr = salesReturn.items.map((it) => `${it.productName} ×${it.quantity}`).join(", ");
+        const updatedStoreCredit = getCustomerCreditBalance(newCustomerCreditTxs, c.id);
+        const customerInvoices = newInvoices.filter(
+          (inv) => inv.customerId === c.id && !inv.voided
+        );
+        const updatedDebt = customerInvoices.reduce((s, inv) => s + Math.max(0, roundMoney(inv.dueAmount)), 0);
+
+        let returnDesc = `Sales Return: ${itemsStr}`;
+        if (salesReturn.refundMethod === "Adjustment") {
+          returnDesc += ` — Debt Adjusted: ₹${debtAdjusted.toLocaleString()}`;
+          if (creditCreated > 0) {
+            returnDesc += `, Store Credit Issued: ₹${creditCreated.toLocaleString()}`;
+          }
+        } else {
+          returnDesc += ` — Refund ₹${salesReturn.totalRefund.toLocaleString()} (${salesReturn.refundMethod})`;
+        }
+
         return {
           ...c,
-          // totalSpent intentionally not updated here — derived via calculateRevenue() on demand
+          debt: roundMoney(updatedDebt),
+          storeCredit: updatedStoreCredit,
           activities: [
             ...(c.activities || []),
             {
               id: `ca-${crypto.randomUUID()}`,
               type: "Return" as const,
-              description: `Sales Return: ${itemsStr} — Refund ₹${salesReturn.totalRefund.toLocaleString()}`,
+              description: returnDesc,
               reference: origInvoice?.invoiceNumber || salesReturn.invoiceId,
               date: now,
             },
@@ -2581,6 +2907,7 @@ function reducer(state: AppState, action: Action): AppState {
         stockMovements: newStockMovements,
         financeTransactions: newFinanceTxs,
         customers: newCustomers,
+        customerCreditTransactions: newCustomerCreditTxs,
       };
     }
 
@@ -2590,6 +2917,20 @@ function reducer(state: AppState, action: Action): AppState {
 
       const target = (state.salesReturns || []).find((r) => r.id === returnId);
       if (!target || target.status === "Cancelled") return state;
+
+      let newCustomerCreditTxs = [...(state.customerCreditTransactions || [])];
+      if (target.refundMethod === "Adjustment" && (target.creditCreated ?? 0) > 0 && target.customerId) {
+        newCustomerCreditTxs.push({
+          id: generateUniqueId("cct"),
+          customerId: target.customerId,
+          type: "Reversal",
+          amount: target.creditCreated!,
+          date: cancelledAt,
+          salesReturnId: target.id,
+          notes: `Store Credit reversed due to Sales Return Cancellation ${target.returnNumber}`,
+          createdBy: (voidedBy as "Owner" | "Staff") || "Owner",
+        });
+      }
 
       // 1. Mark return as Cancelled (append-only, never delete)
       const newSalesReturns = (state.salesReturns || []).map((r) =>
@@ -2611,8 +2952,9 @@ function reducer(state: AppState, action: Action): AppState {
         });
 
         if (target.refundMethod === "Adjustment") {
+          const debtRestored = target.debtAdjusted ?? target.totalRefund;
           const maxDue = Math.max(0, inv.total - inv.amountPaid);
-          const newDueAmount = Math.min(maxDue, roundMoney(inv.dueAmount + target.totalRefund));
+          const newDueAmount = Math.min(maxDue, roundMoney(inv.dueAmount + debtRestored));
           const newPaymentStatus = calcPaymentStatus(newDueAmount, inv.total);
           return {
             ...inv,
@@ -2738,9 +3080,10 @@ function reducer(state: AppState, action: Action): AppState {
       const newCustomers = state.customers.map((c) => {
         if (!target.customerId || c.id !== target.customerId) return c;
         const itemsStr = target.items.map((it) => `${it.productName} ×${it.quantity}`).join(", ");
+        const updatedStoreCredit = getCustomerCreditBalance(newCustomerCreditTxs, c.id);
         return {
           ...c,
-          // totalSpent intentionally not updated here — derived via calculateRevenue() on demand
+          storeCredit: updatedStoreCredit,
           activities: [
             ...(c.activities || []),
             {
@@ -2762,6 +3105,7 @@ function reducer(state: AppState, action: Action): AppState {
         stockMovements: newStockMovements,
         financeTransactions: newFinanceTxs,
         customers: newCustomers,
+        customerCreditTransactions: newCustomerCreditTxs,
       };
     }
 
@@ -2865,6 +3209,13 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    case "HYDRATE_STORE": {
+      return {
+        ...action.state,
+        customerCreditTransactions: action.state.customerCreditTransactions ?? [],
+      };
+    }
+
     case "RESET_STORE": {
       return INITIAL_STATE;
     }
@@ -2888,7 +3239,7 @@ interface StoreContextValue {
   showToast: (message: string, type?: "success" | "error" | "info") => void;
 
   // Convenience helpers
-  addInvoice: (invoice: Invoice) => void;
+  addInvoice: (invoice: Invoice, creditRedeemed?: number) => void;
   voidInvoice: (invoiceId: string, reason: string, voidedBy: string) => void;
   addProduct: (product: Omit<Product, "id">) => void;
   updateProduct: (product: Product) => void;
@@ -2911,9 +3262,13 @@ interface StoreContextValue {
     note?: string;
     collectedBy?: "Owner" | "Staff";
   }) => void;
+  applyStoreCreditToDebt: (customerId: string, amount?: number, notes?: string, appliedBy?: "Owner" | "Staff") => void;
   voidDebtPayment: (paymentId: string, reason: string, voidedBy: string) => void;
   reconcileDebtCache: () => void;
   exportStoreAsJSON: () => void;
+  getCustomerCreditBalance: (customerId: string) => number;
+  getCustomerCreditTransactions: (customerId: string) => CustomerCreditTransaction[];
+  getTotalCustomerCreditLiability: () => number;
 
   // Hold Bills Helpers
   createHoldBill: (bill: Omit<HoldBill, "id" | "createdAt" | "updatedAt" | "holdNumber">) => void;
@@ -3158,8 +3513,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // ── Helpers ──────────────────────────────────
 
-  function addInvoice(invoice: Invoice) {
-    dispatch({ type: "ADD_INVOICE", invoice });
+  function addInvoice(invoice: Invoice, creditRedeemed?: number) {
+    dispatch({ type: "ADD_INVOICE", invoice, creditRedeemed });
+  }
+
+  function getCustomerCreditBalanceHelper(customerId: string): number {
+    return getCustomerCreditBalance(state.customerCreditTransactions, customerId);
+  }
+
+  function getCustomerCreditTransactionsHelper(customerId: string): CustomerCreditTransaction[] {
+    if (!customerId) return [];
+    return (state.customerCreditTransactions || [])
+      .filter((tx) => tx.customerId === customerId)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }
+
+  function getTotalCustomerCreditLiabilityHelper(): number {
+    return getTotalCustomerCreditLiability(state.customers, state.customerCreditTransactions);
   }
 
   function voidInvoice(invoiceId: string, reason: string, voidedBy: string) {
@@ -3189,6 +3559,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }
 
+  // Current Cost currently supports manual administrative correction.
+  // Future versions may derive this automatically from:
+  // - Purchase Receipts
+  // - Weighted Average Cost
+  // - FIFO/LIFO inventory costing
   function updateProduct(product: Product) {
     if (!isOwnerAllowed()) return;
     const duplicate = state.products.find(
@@ -3338,6 +3713,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }
 
+  function applyStoreCreditToDebt(
+    customerId: string,
+    amount?: number,
+    notes?: string,
+    appliedBy?: "Owner" | "Staff"
+  ) {
+    dispatch({
+      type: "APPLY_STORE_CREDIT_TO_DEBT",
+      customerId,
+      amount,
+      notes,
+      appliedBy,
+    });
+  }
+
   function voidDebtPayment(paymentId: string, reason: string, voidedBy: string) {
     if (!isOwnerAllowed()) return;
     dispatch({ type: "VOID_DEBT_PAYMENT", paymentId, reason, voidedBy });
@@ -3376,6 +3766,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         financeTransactions: state.financeTransactions ?? [],
         salesReturns: state.salesReturns ?? [],
         salesReturnCounter: state.salesReturnCounter ?? 0,
+        customerCreditTransactions: state.customerCreditTransactions ?? [],
         purchaseReturns: state.purchaseReturns ?? [],
         purchaseOrders: state.purchaseOrders ?? [],
         purchaseOrderCounter: state.purchaseOrderCounter ?? 0,
@@ -4062,12 +4453,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         updateCustomer,
         recordDebtPayment,
         recordCustomerDebtPaymentFIFO,
+        applyStoreCreditToDebt,
         voidDebtPayment,
         createHoldBill,
         updateHoldBill,
         deleteHoldBill,
         reconcileDebtCache,
         exportStoreAsJSON,
+        getCustomerCreditBalance: getCustomerCreditBalanceHelper,
+        getCustomerCreditTransactions: getCustomerCreditTransactionsHelper,
+        getTotalCustomerCreditLiability: getTotalCustomerCreditLiabilityHelper,
         addSupplier,
         updateSupplier,
         addPurchase,

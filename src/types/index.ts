@@ -207,6 +207,7 @@ export interface Invoice {
   subtotal: number;
   discount: number; // percentage 0-100
   total: number;    // subtotal after discount
+  creditRedeemed?: number; // Store credit redeemed towards this invoice
   notes: string;
   date: string;     // ISO date string
   createdAt?: string; // Full ISO timestamp
@@ -221,7 +222,7 @@ export interface Invoice {
 
 export interface CustomerActivity {
   id: string;
-  type: "Invoice" | "Repayment" | "Void" | "Return";
+  type: "Invoice" | "Repayment" | "Void" | "Return" | "Credit";
   description: string;
   reference: string;
   date: string;
@@ -236,10 +237,42 @@ export interface Customer {
    *  All revenue display now uses calculateRevenue() from revenueUtils.ts.
    *  Kept as optional for localStorage backward-compatibility only. */
   totalSpent?: number;
+  storeCredit?: number; // Derived balance from customerCreditTransactions
   visits: number;
   lastVisit: string; // ISO date string
   invoiceIds: string[];
   activities?: CustomerActivity[];
+}
+
+// ── Customer Credit Ledger ───────────────────
+
+export type CustomerCreditType =
+  | "Issue"
+  | "Redeem"
+  | "IssueReversal"
+  | "RedeemReversal"
+  | "Reversal";
+
+export type CustomerCreditReferenceType =
+  | "SalesReturn"
+  | "Invoice"
+  | "DebtSettlement"
+  | "ManualAdjustment"
+  | "InvoiceVoid"
+  | "SalesReturnCancellation";
+
+export interface CustomerCreditTransaction {
+  id: string;
+  customerId: string;
+  type: CustomerCreditType;
+  amount: number;
+  date: string; // ISO timestamp
+  referenceType?: CustomerCreditReferenceType;
+  referenceId?: string;
+  invoiceId?: string;
+  salesReturnId?: string;
+  notes?: string;
+  createdBy?: "Owner" | "Staff";
 }
 
 // ── Debt Payment (Repayment Ledger) ──────────
@@ -405,6 +438,7 @@ export interface AppState {
   purchaseOrderCounter?: number;
   salesReturns?: SalesReturn[];
   salesReturnCounter?: number;
+  customerCreditTransactions?: CustomerCreditTransaction[];
 }
 
 export type SalesReturnStatus = "Pending" | "Refunded" | "Adjusted" | "Cancelled";
@@ -440,6 +474,8 @@ export interface SalesReturn {
   items: SalesReturnItem[];
   totalRefund: number;
   status: SalesReturnStatus;
+  debtAdjusted?: number;          // Amount of refund used to reduce open invoice due
+  creditCreated?: number;         // Amount of refund issued as Customer Store Credit
   // Exchange properties
   exchangeItems?: ExchangeItem[];
   exchangeDifference?: number; // Positive = Customer pays extra, Negative = Store refunds difference, 0 = Equal exchange

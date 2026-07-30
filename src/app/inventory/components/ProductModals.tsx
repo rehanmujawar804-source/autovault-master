@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useStore } from "@/lib/store";
+import { useRole } from "@/hooks/useRole";
 import { X, AlertCircle, AlertTriangle } from "lucide-react";
 import type { Product, VehicleFitment, FinanceCategory } from "@/types";
 import {
@@ -171,10 +172,12 @@ export function ProductFormModal({
   editingProduct,
 }: ProductFormModalProps) {
   const { state, addProduct, updateProduct, showToast } = useStore();
+  const { isOwner } = useRole();
 
   const [form, setForm] = useState<ProductForm>(EMPTY_FORM);
   const [formError, setFormError] = useState("");
   const [formWarning, setFormWarning] = useState("");
+  const [pendingCostChange, setPendingCostChange] = useState<{ updatedProduct: Product; oldCost: number; newCost: number } | null>(null);
 
   // Fitment entry state
   const [newFitBrand, setNewFitBrand] = useState("");
@@ -271,6 +274,7 @@ export function ProductFormModal({
     }
     setFormError("");
     setFormWarning("");
+    setPendingCostChange(null);
     setNewFitBrand("");
     setNewFitModel("");
     setNewFitYear("");
@@ -397,20 +401,36 @@ export function ProductFormModal({
         );
       }
 
-      try {
-        updateProduct({
-          ...editingProduct,
-          ...form,
-          name: trimmedName,
-          sku: editingProduct.sku,
-          brand: finalBrand,
-          category: finalCategory,
-          status: form.status,
-          currentCost: editCost,
-          sellPrice: editSellPrice,
-          stock: editingProduct.stock,
-          lowStockThreshold: editLowStock,
+      // Current Cost currently supports manual administrative correction.
+      // Future versions may derive this automatically from:
+      // - Purchase Receipts
+      // - Weighted Average Cost
+      // - FIFO/LIFO inventory costing
+      const updatedProductObj: Product = {
+        ...editingProduct,
+        ...form,
+        name: trimmedName,
+        sku: editingProduct.sku,
+        brand: finalBrand,
+        category: finalCategory,
+        status: form.status,
+        currentCost: editCost,
+        sellPrice: editSellPrice,
+        stock: editingProduct.stock,
+        lowStockThreshold: editLowStock,
+      };
+
+      if (editCost !== editingProduct.currentCost) {
+        setPendingCostChange({
+          updatedProduct: updatedProductObj,
+          oldCost: editingProduct.currentCost,
+          newCost: editCost,
         });
+        return;
+      }
+
+      try {
+        updateProduct(updatedProductObj);
         showToast(`"${trimmedName}" updated successfully.`, "success");
         onClose();
       } catch (err) {
@@ -436,6 +456,14 @@ export function ProductFormModal({
       if (!Number.isInteger(stockNum)) {
         setFormError("Initial stock must be a whole number (0 or more).");
         return;
+      }
+
+      // CHANGE 1 — Opening Cost is required when Initial Stock > 0
+      if (stockNum > 0) {
+        if (form.currentCost === "" || form.currentCost === null || form.currentCost === undefined || isNaN(Number(form.currentCost))) {
+          setFormError("Opening Cost is required when Initial Stock is greater than 0.");
+          return;
+        }
       }
 
       if (form.sellPrice === "" || form.sellPrice === null || form.sellPrice === undefined || isNaN(Number(form.sellPrice))) {
@@ -637,16 +665,27 @@ export function ProductFormModal({
             </div>
           </div>
 
-          {Number(form.currentCost) > 0 && Number(form.sellPrice) > 0 && (
-            <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2.5 text-xs">
-              <span className="text-green-700 font-medium">
-                Margin:{" "}
-                {Math.round(((Number(form.sellPrice) - Number(form.currentCost)) / Number(form.sellPrice)) * 100)}
-                % &nbsp;|&nbsp; Profit per unit: ₹
-                {(Number(form.sellPrice) - Number(form.currentCost)).toLocaleString()}
-              </span>
-            </div>
-          )}
+          {Number(form.currentCost) > 0 && Number(form.sellPrice) > 0 && (() => {
+            const cost = Number(form.currentCost);
+            const sell = Number(form.sellPrice);
+            const unitProfit = sell - cost;
+            const marginPct = sell > 0 ? Math.round(((sell - cost) / sell) * 100) : 0;
+            const containerStyle = unitProfit > 0
+              ? "bg-green-50 border-green-200 text-green-700"
+              : unitProfit === 0
+              ? "bg-slate-100 border-slate-200 text-slate-700"
+              : "bg-red-50 border-red-200 text-red-700";
+
+            return (
+              <div className={`border rounded-lg px-4 py-2.5 text-xs ${containerStyle}`}>
+                <span className="font-semibold">
+                  Margin: {marginPct}% &nbsp;|&nbsp; Profit per unit: {
+                    unitProfit < 0 ? `-₹${Math.abs(unitProfit).toLocaleString()}` : `₹${unitProfit.toLocaleString()}`
+                  }
+                </span>
+              </div>
+            );
+          })()}
 
           {/* Universal Fit Toggle Section */}
           <div className="border-t border-slate-150 pt-4 space-y-2">
@@ -877,6 +916,67 @@ export function ProductFormModal({
           </button>
         </div>
       </div>
+
+      {/* CHANGE 4 — Current Cost Administrative Change Confirmation Dialog */}
+      {pendingCostChange && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[70] animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3 text-amber-600 border-b border-slate-100 pb-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
+                <AlertTriangle size={20} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Confirm Current Cost Update</h3>
+                <p className="text-xs text-slate-500 font-medium">Administrative Inventory Cost Correction</p>
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-600 leading-relaxed space-y-2">
+              <p className="font-semibold text-slate-700">
+                Changing Current Cost from <span className="font-bold text-slate-900">₹{pendingCostChange.oldCost.toLocaleString()}</span> to <span className="font-bold text-amber-700">₹{pendingCostChange.newCost.toLocaleString()}</span> will immediately affect:
+              </p>
+              <ul className="list-disc pl-4 space-y-1 text-slate-600 font-medium">
+                <li>Inventory Value</li>
+                <li>Gross Profit</li>
+                <li>Margin %</li>
+                <li>Inventory Intelligence Dashboard</li>
+                <li>Financial inventory valuation</li>
+              </ul>
+              <p className="text-[11px] text-slate-500 bg-slate-50 p-2.5 rounded-lg border border-slate-200/60 font-medium mt-2">
+                This should only be used to correct costing errors.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setPendingCostChange(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    updateProduct(pendingCostChange.updatedProduct);
+                    showToast(`"${pendingCostChange.updatedProduct.name}" cost updated successfully.`, "success");
+                    setPendingCostChange(null);
+                    onClose();
+                  } catch (err) {
+                    const msg = err instanceof Error ? err.message : "Failed to save product.";
+                    setFormError(msg);
+                    setPendingCostChange(null);
+                  }
+                }}
+                className="px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow transition-all cursor-pointer"
+              >
+                Update Cost
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

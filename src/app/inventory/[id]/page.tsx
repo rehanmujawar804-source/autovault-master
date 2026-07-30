@@ -269,8 +269,9 @@ export default function ProductDetailsPage({
   const sellPrice = product.sellPrice;
   const unitProfit = sellPrice - currentCost;
   const marginPct = sellPrice > 0 ? ((sellPrice - currentCost) / sellPrice) * 100 : 0;
-  const inventoryValue = currentStock * sellPrice;
+  const inventoryValue = currentStock * currentCost;
   const capitalInvested = currentStock * currentCost;
+  const retailValue = currentStock * sellPrice;
 
   // Intelligence calculations
   const lowStock = currentStock <= product.lowStockThreshold;
@@ -307,9 +308,16 @@ export default function ProductDetailsPage({
   // Deterministic restock recommendation
   const restockQty = lowStock ? product.lowStockThreshold * 2 : 0;
 
-  // Deterministic profitability rating
-  const profitability =
-    marginPct > 40 ? "High" : marginPct >= 20 ? "Medium" : "Low";
+  // Deterministic profitability rating based on business rules:
+  // Sell Price > Current Cost -> Profitable
+  // Sell Price == Current Cost -> Break Even
+  // Sell Price < Current Cost -> Loss
+  const profitabilityStatus: "Profitable" | "Break Even" | "Loss" =
+    sellPrice > currentCost
+      ? "Profitable"
+      : sellPrice === currentCost
+      ? "Break Even"
+      : "Loss";
 
   return (
     <div className="space-y-6">
@@ -468,10 +476,18 @@ export default function ProductDetailsPage({
           <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Unit Profit</span>
             <div className="flex items-baseline gap-0.5">
-              <span className="text-xs font-medium text-green-600">₹</span>
-              <span className="text-xl font-bold text-green-700 tabular-nums">
-                {unitProfit >= 0 ? unitProfit.toLocaleString() : `(${Math.abs(unitProfit).toLocaleString()})`}
-              </span>
+              {unitProfit < 0 ? (
+                <span className="text-xl font-bold tabular-nums text-red-600">
+                  -₹{Math.abs(unitProfit).toLocaleString()}
+                </span>
+              ) : (
+                <>
+                  <span className={`text-xs font-medium ${unitProfit > 0 ? "text-green-600" : "text-slate-400"}`}>₹</span>
+                  <span className={`text-xl font-bold tabular-nums ${unitProfit > 0 ? "text-green-700" : "text-slate-700"}`}>
+                    {unitProfit.toLocaleString()}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         ) : (
@@ -486,7 +502,7 @@ export default function ProductDetailsPage({
           <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Margin</span>
             <div className="flex items-baseline gap-0.5">
-              <span className={`text-xl font-bold tabular-nums ${marginPct >= 0 ? "text-green-700" : "text-red-600"}`}>
+              <span className={`text-xl font-bold tabular-nums ${marginPct > 0 ? "text-green-700" : marginPct === 0 ? "text-slate-600" : "text-red-600"}`}>
                 {Math.round(marginPct)}%
               </span>
             </div>
@@ -614,11 +630,23 @@ export default function ProductDetailsPage({
                       <div className="border border-slate-200 rounded-2xl p-4 flex flex-col justify-between">
                         <div>
                           <span className="text-xs text-slate-400 font-semibold block uppercase tracking-wider">Profitability Rating</span>
-                          <p className={`text-lg font-black mt-2 ${profitability === "High" ? "text-green-755" : profitability === "Medium" ? "text-blue-600" : "text-red-500"}`}>
-                            {profitability}
+                          <p className={`text-lg font-black mt-2 ${
+                            profitabilityStatus === "Profitable"
+                              ? "text-green-700"
+                              : profitabilityStatus === "Break Even"
+                              ? "text-amber-600"
+                              : "text-red-600"
+                          }`}>
+                            {profitabilityStatus}
                           </p>
                         </div>
-                        <span className="text-[10px] text-slate-400 mt-3 block">Margin is {Math.round(marginPct)}%</span>
+                        <span className="text-[10px] text-slate-400 mt-3 block">
+                          {profitabilityStatus === "Profitable"
+                            ? `Margin is ${Math.round(marginPct)}%`
+                            : profitabilityStatus === "Break Even"
+                            ? "Selling at cost price (₹0 profit)"
+                            : `Loss of ₹${Math.abs(unitProfit).toLocaleString()} per unit`}
+                        </span>
                       </div>
                     )}
 

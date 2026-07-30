@@ -55,6 +55,8 @@ export default function CustomersPage() {
     getCustomerOutstandingBalance,
     updateCustomer,
     showToast,
+    getCustomerCreditBalance,
+    getTotalCustomerCreditLiability,
   } = useStore();
   const { loading, requireAuth } = useRole();
 
@@ -205,6 +207,7 @@ export default function CustomersPage() {
       (c) => (debtByCustomer[c.id] ?? 0) > 0 && (debtByCustomer[c.id] ?? 0) < HIGH_DEBT_THRESHOLD
     );
     const noDebt = customers.filter((c) => (debtByCustomer[c.id] ?? 0) === 0);
+    const totalCreditLiability = getTotalCustomerCreditLiability();
     return {
       total: customers.length,
       totalDebt,
@@ -212,8 +215,9 @@ export default function CustomersPage() {
       partialCount: partialDebt.length,
       noDebtCount: noDebt.length,
       debtByCustomer,
+      totalCreditLiability,
     };
-  }, [state.customers, state.invoices]);
+  }, [state.customers, state.invoices, state.customerCreditTransactions, getTotalCustomerCreditLiability]);
 
   // ── Filtered list ─────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -292,7 +296,7 @@ export default function CustomersPage() {
       <h1 className="text-2xl font-black text-navy-950 mb-6">Customers</h1>
 
       {/* ── Stat Cards ─────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-2xl border border-slate-200 p-5 flex items-center justify-between hover:shadow-sm transition-shadow">
           <div>
             <p className="text-xs text-slate-500 mb-1 uppercase tracking-wider font-bold">Total Registry</p>
@@ -328,6 +332,20 @@ export default function CustomersPage() {
           </div>
           <div className="w-12 h-12 rounded-xl bg-navy-800/50 flex items-center justify-center text-yellow-400 shrink-0">
             <TrendingUp size={20} />
+          </div>
+        </div>
+
+        <div className="bg-emerald-900 text-white rounded-2xl p-5 flex items-center justify-between shadow-sm border border-emerald-800 relative overflow-hidden">
+          <div className="absolute -right-4 -bottom-4 w-20 h-20 bg-emerald-800 rounded-full opacity-20 blur-xl" />
+          <div>
+            <p className="text-[10px] text-emerald-200 mb-1 uppercase tracking-wider font-bold">Store Credit Liability</p>
+            <p className="text-3xl font-extrabold text-emerald-300 font-mono">
+              ₹{stats.totalCreditLiability.toLocaleString()}
+            </p>
+            <p className="text-[11px] text-emerald-200 mt-0.5">Issued Unredeemed Credit</p>
+          </div>
+          <div className="w-12 h-12 rounded-xl bg-emerald-800/60 flex items-center justify-center text-emerald-300 shrink-0">
+            <Coins size={20} />
           </div>
         </div>
       </div>
@@ -438,6 +456,7 @@ export default function CustomersPage() {
                   <th className="px-5 py-3 text-left font-semibold">Name</th>
                   <th className="px-5 py-3 text-left font-semibold">Phone</th>
                   <th className="px-5 py-3 text-right font-semibold">Debt</th>
+                  <th className="px-5 py-3 text-right font-semibold">Store Credit</th>
                   <th className="px-5 py-3 text-right font-semibold hidden md:table-cell">Total Spent</th>
                   <th className="px-5 py-3 text-center font-semibold hidden lg:table-cell">Visits</th>
                   <th className="px-5 py-3 text-left font-semibold hidden lg:table-cell">Last Visit</th>
@@ -541,6 +560,21 @@ export default function CustomersPage() {
                           >
                             {derivedDebt > 0 ? `₹${derivedDebt.toLocaleString()}` : "Clear"}
                           </span>
+                        </td>
+
+                        {/* Store Credit */}
+                        <td className="px-5 py-3.5 text-right font-mono text-xs">
+                          {(() => {
+                            const cred = getCustomerCreditBalance(customer.id);
+                            return cred > 0 ? (
+                              <span className="font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
+                                <Coins size={10} className="text-emerald-600" />
+                                ₹{cred.toLocaleString()}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 font-medium">₹0</span>
+                            );
+                          })()}
                         </td>
 
                         {/* Total spent */}

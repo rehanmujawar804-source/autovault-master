@@ -62,7 +62,10 @@ export function InventoryIntelligenceDashboard({
     // Valuation calculations
     const inventoryCostValue = getInventoryValue(); // sum(currentCost * stock)
     const inventorySellValue = ps.reduce((s, p) => s + p.sellPrice * p.stock, 0);
-    const potentialMargin = Math.max(0, inventorySellValue - inventoryCostValue);
+    const potentialGrossProfit = inventorySellValue - inventoryCostValue;
+    const potentialGrossMarginPct = inventorySellValue > 0
+      ? ((inventorySellValue - inventoryCostValue) / inventorySellValue) * 100
+      : 0;
 
     // Stock health classification (Strictly applying status rules)
     const outOfStockActive = activeProducts.filter((p) => p.stock === 0);
@@ -86,7 +89,9 @@ export function InventoryIntelligenceDashboard({
       totalStockUnits,
       inventoryCostValue,
       inventorySellValue,
-      potentialMargin,
+      potentialGrossProfit,
+      potentialGrossMarginPct,
+      potentialMargin: potentialGrossProfit,
       outOfStockActive,
       lowStockActive,
       healthyStockActive,
@@ -133,7 +138,7 @@ export function InventoryIntelligenceDashboard({
       .map(([name, data]) => ({
         name,
         ...data,
-        margin: Math.max(0, data.sellValue - data.costValue),
+        margin: data.sellValue - data.costValue,
       }))
       .sort((a, b) => b.costValue - a.costValue);
   }, [state.products]);
@@ -389,9 +394,21 @@ export function InventoryIntelligenceDashboard({
           </div>
 
           <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-3">
-            <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Potential Margin</p>
-            <p className="text-lg font-black text-cyan-300 mt-1">₹{metrics.potentialMargin.toLocaleString()}</p>
-            <p className="text-[10px] text-slate-400 mt-1">Gross potential</p>
+            <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Potential Gross Profit</p>
+            <p className={`text-lg font-black mt-1 ${
+              metrics.potentialGrossProfit > 0
+                ? "text-emerald-400"
+                : metrics.potentialGrossProfit === 0
+                ? "text-slate-300"
+                : "text-red-400"
+            }`}>
+              {metrics.potentialGrossProfit < 0
+                ? `-₹${Math.abs(metrics.potentialGrossProfit).toLocaleString()}`
+                : `₹${metrics.potentialGrossProfit.toLocaleString()}`}
+            </p>
+            <p className="text-[10px] text-slate-400 mt-1">
+              Margin: {Math.round(metrics.potentialGrossMarginPct)}%
+            </p>
           </div>
 
           <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-3">
@@ -512,11 +529,38 @@ export function InventoryIntelligenceDashboard({
 
                 <div className="bg-slate-800/70 border border-slate-700/60 rounded-2xl p-4">
                   <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
-                    <span>Potential Gross Margin</span>
-                    <Sparkles size={16} className="text-cyan-400" />
+                    <span>Potential Gross Profit</span>
+                    <Sparkles size={16} className={
+                      metrics.potentialGrossProfit > 0
+                        ? "text-emerald-400"
+                        : metrics.potentialGrossProfit === 0
+                        ? "text-slate-400"
+                        : "text-red-400"
+                    } />
                   </div>
-                  <p className="text-2xl font-black text-cyan-300 mt-2">₹{metrics.potentialMargin.toLocaleString()}</p>
-                  <p className="text-xs text-slate-400 mt-1">Retail value - Capital invested</p>
+                  <p className={`text-2xl font-black mt-2 ${
+                    metrics.potentialGrossProfit > 0
+                      ? "text-emerald-400"
+                      : metrics.potentialGrossProfit === 0
+                      ? "text-slate-300"
+                      : "text-red-400"
+                  }`}>
+                    {metrics.potentialGrossProfit < 0
+                      ? `-₹${Math.abs(metrics.potentialGrossProfit).toLocaleString()}`
+                      : `₹${metrics.potentialGrossProfit.toLocaleString()}`}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1 flex justify-between">
+                    <span>Retail Value − Cost</span>
+                    <span className={`font-semibold ${
+                      metrics.potentialGrossMarginPct > 0
+                        ? "text-emerald-400"
+                        : metrics.potentialGrossMarginPct === 0
+                        ? "text-slate-400"
+                        : "text-red-400"
+                    }`}>
+                      {Math.round(metrics.potentialGrossMarginPct)}% margin
+                    </span>
+                  </p>
                 </div>
               </div>
 
@@ -756,7 +800,9 @@ export function InventoryIntelligenceDashboard({
                         <td className="p-3 text-right font-medium text-slate-300">{cat.units.toLocaleString()}</td>
                         <td className="p-3 text-right font-bold text-indigo-300">₹{cat.costValue.toLocaleString()}</td>
                         <td className="p-3 text-right font-bold text-emerald-400">₹{cat.sellValue.toLocaleString()}</td>
-                        <td className="p-3 text-right font-bold text-cyan-300">₹{cat.margin.toLocaleString()}</td>
+                        <td className={`p-3 text-right font-bold ${cat.margin > 0 ? "text-cyan-300" : cat.margin === 0 ? "text-slate-400" : "text-red-400"}`}>
+                          {cat.margin < 0 ? `-₹${Math.abs(cat.margin).toLocaleString()}` : `₹${cat.margin.toLocaleString()}`}
+                        </td>
                         <td className="p-3 text-center">
                           <div className="flex items-center justify-center gap-1.5">
                             {cat.outOfStock > 0 && (

@@ -1277,8 +1277,8 @@ export default function InvoiceDetailPage({
                   ))}
                 </div>
                 {returnMethod === "Adjustment" && (
-                  <p className="text-[10px] text-blue-600 mt-1.5 font-medium bg-blue-50 border border-blue-100 rounded-lg px-2.5 py-1.5">
-                    Adjustment = internal credit note. No cash leaves the business.
+                  <p className="text-[10px] text-emerald-800 mt-1.5 font-medium bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 leading-relaxed">
+                    💡 Adjustment offsets open invoice debt first (₹{invoice.dueAmount.toLocaleString()} due). Any excess return value creates <strong>Store Credit</strong> for the customer to redeem in POS Billing. No cash leaves the business.
                   </p>
                 )}
 

@@ -21,6 +21,7 @@ import {
   FileText,
   RotateCcw,
   Pencil,
+  Coins,
 } from "lucide-react";
 import type { Invoice, PaymentMethod, PaymentStatus } from "@/types";
 
@@ -63,12 +64,18 @@ export default function CustomerProfilePage({
     getInvoiceOutstanding,
     getCustomerOutstandingBalance,
     updateCustomer,
+    getCustomerCreditBalance,
+    getCustomerCreditTransactions,
+    applyStoreCreditToDebt,
   } = useStore();
   const { loading, requireAuth } = useRole();
 
   useEffect(() => {
     if (!loading) requireAuth();
   }, [loading, requireAuth]);
+
+  // ── Tab State ───────────────────────────────────────────────────────────────
+  const [activeRightTab, setActiveRightTab] = useState<"invoices" | "credit">("invoices");
 
   // ── Collect Payment Modal State ────────────────────────────────────────────
   const [collectInvoice, setCollectInvoice] = useState<Invoice | null>(null);
@@ -91,7 +98,48 @@ export default function CustomerProfilePage({
   const [editPhone, setEditPhone] = useState("");
   const [editError, setEditError] = useState("");
 
+  // ── Apply Store Credit to Debt Modal State ──────────────────────────────
+  const [showApplyCreditModal, setShowApplyCreditModal] = useState(false);
+  const [applyCreditAmountInput, setApplyCreditAmountInput] = useState("");
+  const [applyCreditNotes, setApplyCreditNotes] = useState("");
+  const [applyCreditBy, setApplyCreditBy] = useState<"Owner" | "Staff" | "">("");
+
   const customer = getCustomerById(id);
+
+  function openApplyCreditModal(availCredit: number, currDebt: number) {
+    const maxApplicable = Math.min(availCredit, currDebt);
+    setApplyCreditAmountInput(String(maxApplicable));
+    setApplyCreditNotes("");
+    setApplyCreditBy("");
+    setShowApplyCreditModal(true);
+  }
+
+  function handleApplyCreditSubmit() {
+    if (!customer) return;
+    if (!applyCreditBy) {
+      showToast("Please select who is applying this credit (Owner or Staff).", "error");
+      return;
+    }
+    const amt = Number(applyCreditAmountInput) || 0;
+    if (amt <= 0) {
+      showToast("Please enter a valid credit amount to apply.", "error");
+      return;
+    }
+    const availCredit = getCustomerCreditBalance(customer.id);
+    const currDebt = getCustomerOutstandingBalance(customer.id);
+    if (amt > availCredit) {
+      showToast(`Amount cannot exceed available store credit of ₹${availCredit.toLocaleString()}.`, "error");
+      return;
+    }
+    if (amt > currDebt) {
+      showToast(`Amount cannot exceed outstanding debt of ₹${currDebt.toLocaleString()}.`, "error");
+      return;
+    }
+
+    applyStoreCreditToDebt(customer.id, amt, applyCreditNotes.trim() || undefined, applyCreditBy);
+    showToast(`Successfully applied ₹${amt.toLocaleString()} Store Credit towards outstanding debt.`, "success");
+    setShowApplyCreditModal(false);
+  }
 
   function openLumpSumModal(currentDebt: number) {
     setLumpSumAmountInput(String(currentDebt));
@@ -210,6 +258,16 @@ export default function CustomerProfilePage({
     if (!customer) return 0;
     return calculateRevenue(state.invoices, state.salesReturns, undefined, customer.id);
   }, [state.invoices, state.salesReturns, customer]);
+
+  const availableStoreCredit = useMemo(() => {
+    if (!customer) return 0;
+    return getCustomerCreditBalance(customer.id);
+  }, [customer, getCustomerCreditBalance]);
+
+  const creditTransactions = useMemo(() => {
+    if (!customer) return [];
+    return getCustomerCreditTransactions(customer.id);
+  }, [customer, getCustomerCreditTransactions]);
 
   const outstandingInvoices = customer
     ? getCustomerOutstandingInvoices(customer.id)
@@ -399,6 +457,34 @@ export default function CustomerProfilePage({
                 </p>
               </div>
             )}
+
+            {/* Available Store Credit Card */}
+            {availableStoreCredit > 0 && (
+              <div className="mt-2.5 p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start justify-between">
+                <div>
+                  <p className="text-xs text-emerald-700 font-semibold uppercase tracking-wider mb-0.5 flex items-center gap-1">
+                    <Wallet size={12} className="text-emerald-600" />
+                    Available Store Credit
+                  </p>
+                  <p className="text-2xl font-bold text-emerald-800 font-mono">
+                    ₹{availableStoreCredit.toLocaleString()}
+                  </p>
+                  <p className="text-[10px] text-emerald-600 mt-0.5">
+                    Auto-redeemable at POS Checkout
+                  </p>
+                </div>
+                {derivedDebt > 0 && (
+                  <button
+                    onClick={() => openApplyCreditModal(availableStoreCredit, derivedDebt)}
+                    className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-2.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer shadow-xs shrink-0"
+                    title="Apply Store Credit to offset open debt"
+                  >
+                    <Coins size={12} />
+                    Apply to Debt
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Stats card */}
@@ -539,153 +625,281 @@ export default function CustomerProfilePage({
           </Link>
         </div>
 
-        {/* ── Right column: Invoice History ──────────────────────────────── */}
-        <div className="lg:col-span-2">
-          <div className="bg-white rounded-2xl border border-slate-200">
-            <div className="p-5 border-b border-slate-100">
-              <h2 className="font-semibold text-slate-800">
-                Invoice History
-                <span className="ml-2 text-sm font-normal text-slate-400">
-                  ({invoices.length} invoice{invoices.length !== 1 ? "s" : ""})
+        {/* ── Right column: Invoices & Customer Credit Ledger ───────────────── */}
+        <div className="lg:col-span-2 space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+            {/* Header Tabs */}
+            <div className="flex border-b border-slate-200 bg-slate-50/50">
+              <button
+                type="button"
+                onClick={() => setActiveRightTab("invoices")}
+                className={`flex-1 py-3.5 px-4 text-center font-bold text-sm border-b-2 transition-all cursor-pointer ${
+                  activeRightTab === "invoices"
+                    ? "border-navy-950 text-navy-950 bg-white"
+                    : "border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
+                }`}
+              >
+                <span className="flex items-center justify-center gap-2">
+                  <FileText size={16} />
+                  Invoice History ({invoices.length})
                 </span>
-              </h2>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveRightTab("credit")}
+                className={`flex-1 py-3.5 px-4 text-center font-bold text-sm border-b-2 transition-all cursor-pointer ${
+                  activeRightTab === "credit"
+                    ? "border-emerald-600 text-emerald-950 bg-white"
+                    : "border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
+                }`}
+              >
+                <span className="flex items-center justify-center gap-2">
+                  <Wallet size={16} className="text-emerald-600" />
+                  Customer Credit Ledger ({creditTransactions.length})
+                </span>
+              </button>
             </div>
 
-            {invoices.length === 0 ? (
-              <div className="p-12 flex flex-col items-center text-center gap-3">
-                <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center">
-                  <FileText size={24} className="text-slate-300" />
+            {/* TAB 1: Invoices */}
+            {activeRightTab === "invoices" && (
+              invoices.length === 0 ? (
+                <div className="p-12 flex flex-col items-center text-center gap-3">
+                  <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center">
+                    <FileText size={24} className="text-slate-300" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-500">No invoices yet</p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      This customer hasn&apos;t made any purchases yet.
+                    </p>
+                  </div>
+                  <Link
+                    href="/billing"
+                    className="mt-1 inline-flex items-center gap-1.5 text-xs text-amber-600 hover:text-amber-700 font-semibold hover:underline transition-colors"
+                  >
+                    <ReceiptText size={12} />
+                    Create first invoice
+                  </Link>
                 </div>
-                <div>
-                  <p className="text-sm font-semibold text-slate-500">No invoices yet</p>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    This customer hasn&apos;t made any purchases yet.
-                  </p>
-                </div>
-                <Link
-                  href="/billing"
-                  className="mt-1 inline-flex items-center gap-1.5 text-xs text-amber-600 hover:text-amber-700 font-semibold hover:underline transition-colors"
-                >
-                  <ReceiptText size={12} />
-                  Create first invoice
-                </Link>
-              </div>
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {invoices.map((inv) => {
-                  const payments = getDebtPaymentsByInvoice(inv.id);
-                  const repaidTotal = payments.reduce((s, p) => s + p.amount, 0);
-                  return (
-                    <div
-                      key={inv.id}
-                      className="p-5 hover:bg-slate-50 transition-colors"
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        {/* Invoice meta */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap mb-1">
-                            <span className="font-mono text-xs text-slate-600">
-                              {inv.invoiceNumber}
-                            </span>
-                            {inv.voided ? (
-                              <span className="text-xs px-2 py-0.5 rounded-full font-bold bg-red-100 text-red-700">
-                                Voided
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {invoices.map((inv) => {
+                    const payments = getDebtPaymentsByInvoice(inv.id);
+                    const repaidTotal = payments.reduce((s, p) => s + p.amount, 0);
+                    return (
+                      <div
+                        key={inv.id}
+                        className="p-5 hover:bg-slate-50 transition-colors"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          {/* Invoice meta */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                              <span className="font-mono text-xs text-slate-600">
+                                {inv.invoiceNumber}
                               </span>
-                            ) : (
-                              <span
-                                className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_BADGE[inv.paymentStatus]}`}
-                              >
-                                {inv.paymentStatus}
-                              </span>
-                            )}
-                            <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
-                              {inv.paymentMethod}
-                            </span>
-                          </div>
-
-                          <p className="text-xs text-slate-400">{formatInvoiceDate(inv)}</p>
-
-                          {/* Items list */}
-                          <div className="mt-2 space-y-0.5">
-                            {inv.items.map((item, idx) => (
-                              <p
-                                key={idx}
-                                className="text-xs text-slate-600"
-                              >
-                                • {item.name}{" "}
-                                <span className="text-slate-400">
-                                  ×{item.quantity} @ ₹
-                                  {item.price.toLocaleString()}
+                              {inv.voided ? (
+                                <span className="text-xs px-2 py-0.5 rounded-full font-bold bg-red-100 text-red-700">
+                                  Voided
                                 </span>
+                              ) : (
+                                <span
+                                  className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_BADGE[inv.paymentStatus]}`}
+                                >
+                                  {inv.paymentStatus}
+                                </span>
+                              )}
+                              <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
+                                {inv.paymentMethod}
+                              </span>
+                            </div>
+
+                            <p className="text-xs text-slate-400">{formatInvoiceDate(inv)}</p>
+
+                            {/* Items list */}
+                            <div className="mt-2 space-y-0.5">
+                              {inv.items.map((item, idx) => (
+                                <p
+                                  key={idx}
+                                  className="text-xs text-slate-600"
+                                >
+                                  • {item.name}{" "}
+                                  <span className="text-slate-400">
+                                    ×{item.quantity} @ ₹
+                                    {item.price.toLocaleString()}
+                                  </span>
+                                </p>
+                              ))}
+                            </div>
+
+                            {/* Vehicle */}
+                            {inv.vehicleModel && (
+                              <p className="text-xs text-slate-400 mt-1">
+                                🚗 {inv.vehicleModel}
+                                {inv.vehicleNumber
+                                  ? ` (${inv.vehicleNumber})`
+                                  : ""}
                               </p>
-                            ))}
+                            )}
+
+                            {/* Notes */}
+                            {inv.notes && (
+                              <p className="text-xs text-amber-600 mt-1 italic">
+                                &ldquo;{inv.notes}&rdquo;
+                              </p>
+                            )}
+
+                            {/* Repayment summary */}
+                            {repaidTotal > 0 && (
+                              <div className="mt-1.5 flex items-center gap-1 text-[10px] text-green-700">
+                                <History size={10} />
+                                <span className="font-semibold">₹{repaidTotal.toLocaleString()} repaid</span>
+                                <span className="text-green-500">({payments.length} payment{payments.length !== 1 ? "s" : ""})</span>
+                              </div>
+                            )}
                           </div>
 
-                          {/* Vehicle */}
-                          {inv.vehicleModel && (
-                            <p className="text-xs text-slate-400 mt-1">
-                              🚗 {inv.vehicleModel}
-                              {inv.vehicleNumber
-                                ? ` (${inv.vehicleNumber})`
-                                : ""}
+                          {/* Amount block */}
+                          <div className="text-right shrink-0">
+                            <p className="font-bold text-slate-800">
+                              ₹{inv.total.toLocaleString()}
                             </p>
-                          )}
-
-                          {/* Notes */}
-                          {inv.notes && (
-                            <p className="text-xs text-amber-600 mt-1 italic">
-                              &ldquo;{inv.notes}&rdquo;
-                            </p>
-                          )}
-
-                          {/* Repayment summary */}
-                          {repaidTotal > 0 && (
-                            <div className="mt-1.5 flex items-center gap-1 text-[10px] text-green-700">
-                              <History size={10} />
-                              <span className="font-semibold">₹{repaidTotal.toLocaleString()} repaid</span>
-                              <span className="text-green-500">({payments.length} payment{payments.length !== 1 ? "s" : ""})</span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Amount block */}
-                        <div className="text-right shrink-0">
-                          <p className="font-bold text-slate-800">
-                            ₹{inv.total.toLocaleString()}
-                          </p>
-                          {inv.amountPaid > 0 &&
-                            inv.amountPaid < inv.total && (
-                              <p className="text-xs text-blue-600">
-                                Paid: ₹{inv.amountPaid.toLocaleString()}
+                            {inv.amountPaid > 0 &&
+                              inv.amountPaid < inv.total && (
+                                <p className="text-xs text-blue-600">
+                                  Paid: ₹{inv.amountPaid.toLocaleString()}
+                                </p>
+                              )}
+                            {getInvoiceOutstanding(inv) > 0 && (
+                              <p className="text-xs text-red-600 font-medium">
+                                Due: ₹{getInvoiceOutstanding(inv).toLocaleString()}
                               </p>
                             )}
-                          {getInvoiceOutstanding(inv) > 0 && (
-                            <p className="text-xs text-red-600 font-medium">
-                              Due: ₹{getInvoiceOutstanding(inv).toLocaleString()}
-                            </p>
-                          )}
-                          <div className="mt-2 flex flex-col gap-1 items-end">
-                            {getInvoiceOutstanding(inv) > 0 && !inv.voided && (
-                              <button
-                                onClick={() => openCollect(inv)}
-                                className="text-[10px] bg-green-600 hover:bg-green-700 text-white px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer"
+                            <div className="mt-2 flex flex-col gap-1 items-end">
+                              {getInvoiceOutstanding(inv) > 0 && !inv.voided && (
+                                <button
+                                  onClick={() => openCollect(inv)}
+                                  className="text-[10px] bg-green-600 hover:bg-green-700 text-white px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer"
+                                >
+                                  Collect
+                                </button>
+                              )}
+                              <Link
+                                href={`/invoices/${inv.id}`}
+                                className="text-xs text-amber-600 hover:underline"
                               >
-                                Collect
-                              </button>
-                            )}
-                            <Link
-                              href={`/invoices/${inv.id}`}
-                              className="text-xs text-amber-600 hover:underline"
-                            >
-                              View invoice →
-                            </Link>
+                                View invoice →
+                              </Link>
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )
+            )}
+
+            {/* TAB 2: Customer Credit Ledger */}
+            {activeRightTab === "credit" && (
+              creditTransactions.length === 0 ? (
+                <div className="p-12 flex flex-col items-center text-center gap-3">
+                  <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center">
+                    <Wallet size={24} className="text-emerald-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-700">No Store Credit Transactions</p>
+                    <p className="text-xs text-slate-400 mt-0.5 max-w-sm">
+                      Store Credit is generated when a customer completes a Sales Return with &ldquo;Adjustment&rdquo; refund method on a fully-paid invoice, or when excess return value remains.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {creditTransactions.map((tx) => {
+                    const isIssue = tx.type === "Issue";
+                    const isRedeem = tx.type === "Redeem";
+                    const isReversal = tx.type === "Reversal";
+
+                    const salesReturnRecord = tx.salesReturnId
+                      ? (state.salesReturns || []).find((sr) => sr.id === tx.salesReturnId)
+                      : undefined;
+
+                    const invoiceRecord = tx.invoiceId
+                      ? state.invoices.find((i) => i.id === tx.invoiceId)
+                      : undefined;
+
+                    return (
+                      <div key={tx.id} className="p-5 hover:bg-slate-50/70 transition-colors">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {isIssue && (
+                                <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                  + Store Credit Issued
+                                </span>
+                              )}
+                              {isRedeem && (
+                                <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                                  − Store Credit Redeemed
+                                </span>
+                              )}
+                              {isReversal && (
+                                <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                  ↺ Credit Reversed
+                                </span>
+                              )}
+                              <span className="text-xs text-slate-400">
+                                {new Date(tx.date).toLocaleString("en-IN", {
+                                  day: "numeric",
+                                  month: "short",
+                                  year: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                              </span>
+                            </div>
+
+                            <p className="text-xs text-slate-700 font-medium pt-1">
+                              {tx.notes}
+                            </p>
+
+                            <div className="flex items-center gap-3 text-xs text-slate-500 pt-0.5">
+                              {salesReturnRecord && (
+                                <Link
+                                  href="/sales-returns"
+                                  className="text-amber-600 hover:underline font-mono"
+                                >
+                                  Return Ref: {salesReturnRecord.returnNumber}
+                                </Link>
+                              )}
+                              {invoiceRecord && (
+                                <Link
+                                  href={`/invoices/${invoiceRecord.id}`}
+                                  className="text-amber-600 hover:underline font-mono"
+                                >
+                                  Invoice Ref: {invoiceRecord.invoiceNumber}
+                                </Link>
+                              )}
+                              {tx.createdBy && (
+                                <span className="text-slate-400">By: {tx.createdBy}</span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <p className={`text-base font-extrabold font-mono ${
+                              isIssue ? "text-emerald-700" : isRedeem ? "text-blue-700" : "text-amber-700"
+                            }`}>
+                              {isIssue ? `+₹${tx.amount.toLocaleString()}` : isRedeem ? `−₹${tx.amount.toLocaleString()}` : `₹${tx.amount.toLocaleString()}`}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
             )}
           </div>
         </div>
@@ -1105,6 +1319,112 @@ export default function CustomerProfilePage({
           </div>
         );
       })()}
+      {/* ── Apply Store Credit Modal ───────────────────────────────────────── */}
+      {showApplyCreditModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-emerald-50/60">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700">
+                  <Coins size={18} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">Apply Store Credit to Debt</h3>
+                  <p className="text-[11px] text-slate-500">Offset customer debt using store credit balance</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowApplyCreditModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl space-y-1 text-xs">
+                <div className="flex justify-between font-semibold text-emerald-900">
+                  <span>Available Credit:</span>
+                  <span className="font-bold">₹{availableStoreCredit.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between font-semibold text-red-700">
+                  <span>Outstanding Debt:</span>
+                  <span className="font-bold">₹{derivedDebt.toLocaleString()}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                  Amount to Apply (₹)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max={Math.min(availableStoreCredit, derivedDebt)}
+                  value={applyCreditAmountInput}
+                  onChange={(e) => setApplyCreditAmountInput(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-bold bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                  Applied By <span className="text-red-500">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(["Owner", "Staff"] as const).map((who) => (
+                    <button
+                      key={who}
+                      type="button"
+                      onClick={() => setApplyCreditBy(who)}
+                      className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                        applyCreditBy === who
+                          ? "bg-slate-900 text-white border-slate-900 shadow-xs"
+                          : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                      }`}
+                    >
+                      {who}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                  Notes / Reason
+                </label>
+                <input
+                  type="text"
+                  value={applyCreditNotes}
+                  onChange={(e) => setApplyCreditNotes(e.target.value)}
+                  placeholder="e.g. Store credit applied towards overdue invoice debt"
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 px-5 py-4 bg-slate-50 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setShowApplyCreditModal(false)}
+                className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-xs font-semibold hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleApplyCreditSubmit}
+                disabled={!applyCreditAmountInput || Number(applyCreditAmountInput) <= 0 || !applyCreditBy}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+              >
+                <Coins size={14} />
+                Apply Credit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

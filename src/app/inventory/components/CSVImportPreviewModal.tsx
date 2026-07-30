@@ -58,8 +58,10 @@ export function CSVImportPreviewModal({
   const { state } = useStore();
   const [rows, setRows] = useState<CSVImportRowResult[]>(parsedRows);
   const [activeTab, setActiveTab] = useState<"all" | "new" | "update" | "error">("all");
+  const [costChangeConfirmationRows, setCostChangeConfirmationRows] = useState<Array<{ name: string; sku: string; oldCost: number; newCost: number }> | null>(null);
 
   useEffect(() => {
+    setCostChangeConfirmationRows(null);
     const seenSkusInFile = new Map<string, number>();
     const validated = parsedRows.map((r) => {
       const lowerSku = (r.sku || "").trim().toLowerCase();
@@ -204,14 +206,26 @@ export function CSVImportPreviewModal({
           }
         }
 
-        // Buy price validation
-        if (field === "buyPrice") {
-          const num = Number(value);
-          if (value === "" || value === null || value === undefined || isNaN(num) || num < 0) {
-            newFieldErrors.buyPrice = "Current Cost must be a valid non-negative number.";
+        // Opening Cost validation (distinguish blank vs 0 and check stock > 0)
+        if (field === "buyPrice" || field === "stock") {
+          const checkStock = field === "stock" ? Number(value) : Number(updated.stock);
+          const checkCost = field === "buyPrice" ? value : updated.buyPrice;
+
+          if (checkCost === "" || checkCost === null || checkCost === undefined) {
+            if (!isNaN(checkStock) && checkStock > 0) {
+              newFieldErrors.buyPrice = "Opening Cost is required when Initial Stock is greater than 0.";
+            } else {
+              delete newFieldErrors.buyPrice;
+            }
+            if (field === "buyPrice") updated.buyPrice = "";
           } else {
-            delete newFieldErrors.buyPrice;
-            updated.buyPrice = num;
+            const num = Number(checkCost);
+            if (isNaN(num) || num < 0) {
+              newFieldErrors.buyPrice = "Opening Cost must be a valid non-negative number.";
+            } else {
+              delete newFieldErrors.buyPrice;
+              if (field === "buyPrice") updated.buyPrice = num;
+            }
           }
         }
 
@@ -244,6 +258,24 @@ export function CSVImportPreviewModal({
 
   function handleApplyImport() {
     if (validCount === 0) return;
+
+    // Identify existing products whose Current Cost will change
+    const costChanges: Array<{ name: string; sku: string; oldCost: number; newCost: number }> = [];
+    for (const r of updateRows) {
+      if (r.existingProduct && typeof r.buyPrice === "number" && r.buyPrice !== r.existingProduct.currentCost) {
+        costChanges.push({
+          name: r.name || r.existingProduct.name,
+          sku: r.sku || r.existingProduct.sku,
+          oldCost: r.existingProduct.currentCost,
+          newCost: r.buyPrice,
+        });
+      }
+    }
+
+    if (costChanges.length > 0 && !costChangeConfirmationRows) {
+      setCostChangeConfirmationRows(costChanges);
+      return;
+    }
 
     const timestamp = new Date().toISOString();
 
@@ -445,7 +477,7 @@ export function CSVImportPreviewModal({
                     <th className="py-3 px-3">Brand</th>
                     <th className="py-3 px-3">Category *</th>
                     <th className="py-3 px-3">Stock *</th>
-                    <th className="py-3 px-3 text-right">Cost (₹) *</th>
+                    <th className="py-3 px-3 text-right">Opening Cost (₹)</th>
                     <th className="py-3 px-3 text-right">Sell (₹) *</th>
                     <th className="py-3 px-3">Status *</th>
                     <th className="py-3 px-3">Universal Fit</th>
@@ -559,7 +591,20 @@ export function CSVImportPreviewModal({
                           )}
                         </td>
                         <td className="py-2.5 px-3 font-mono text-right text-slate-700">
-                          {r.buyPrice === "" ? "—" : `₹${Number(r.buyPrice).toLocaleString()}`}
+                          {isUpdate && r.existingProduct && typeof r.buyPrice === "number" && r.buyPrice !== r.existingProduct.currentCost ? (
+                            <div>
+                              <div className="flex items-center justify-end gap-1">
+                                <span className="text-slate-400 line-through text-[11px]">₹{r.existingProduct.currentCost.toLocaleString()}</span>
+                                →
+                                <span className="font-bold text-amber-700">₹{r.buyPrice.toLocaleString()}</span>
+                              </div>
+                              <span className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded inline-block mt-0.5 whitespace-nowrap">
+                                ⚠ Cost Will Change
+                              </span>
+                            </div>
+                          ) : (
+                            <span>{r.buyPrice === "" ? "—" : `₹${Number(r.buyPrice).toLocaleString()}`}</span>
+                          )}
                           {r.fieldErrors?.buyPrice && (
                             <span className="text-[10px] text-red-600 font-semibold block mt-0.5 text-left">
                               ❌ {r.fieldErrors.buyPrice}
@@ -659,6 +704,78 @@ export function CSVImportPreviewModal({
           </div>
         </div>
       </div>
+
+      {/* Aggregated Current Cost Changes Confirmation Dialog */}
+      {costChangeConfirmationRows && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[70] animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3 text-amber-600 border-b border-slate-100 pb-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
+                <AlertTriangle size={20} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Current Cost Changes Detected</h3>
+                <p className="text-xs text-slate-500 font-medium">Administrative Inventory Cost Correction</p>
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-600 leading-relaxed space-y-3">
+              <p className="font-semibold text-slate-700">
+                The spreadsheet will update the Current Cost of <span className="font-bold text-slate-900">{costChangeConfirmationRows.length}</span> existing product{costChangeConfirmationRows.length > 1 ? "s" : ""}.
+              </p>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 max-h-40 overflow-y-auto space-y-1.5 font-mono text-[11px]">
+                <p className="font-sans font-bold text-slate-500 text-[10px] uppercase tracking-wider mb-1">Current Cost will change for:</p>
+                {costChangeConfirmationRows.map((c, idx) => (
+                  <div key={idx} className="flex items-center justify-between border-b border-slate-150 last:border-0 pb-1 last:pb-0">
+                    <span className="truncate font-semibold text-slate-800 mr-2 max-w-[240px]">{c.name} <span className="text-slate-400">({c.sku})</span></span>
+                    <span className="shrink-0">
+                      <span className="text-slate-400 line-through mr-1">₹{c.oldCost.toLocaleString()}</span>
+                      →
+                      <span className="font-bold text-amber-700 ml-1">₹{c.newCost.toLocaleString()}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-1 text-slate-600">
+                <p className="font-semibold text-slate-700">This will immediately affect:</p>
+                <ul className="list-disc pl-4 space-y-0.5 text-slate-600 font-medium">
+                  <li>Inventory Value</li>
+                  <li>Gross Profit</li>
+                  <li>Margin %</li>
+                  <li>Inventory Intelligence Dashboard</li>
+                  <li>Financial inventory valuation</li>
+                </ul>
+              </div>
+
+              <p className="text-[11px] text-slate-500 bg-amber-50/60 p-2.5 rounded-lg border border-amber-200/60 font-medium">
+                Continue only if these are intentional accounting corrections.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setCostChangeConfirmationRows(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCostChangeConfirmationRows(null);
+                  handleApplyImport();
+                }}
+                className="px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow transition-all cursor-pointer"
+              >
+                Update Current Costs & Import
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

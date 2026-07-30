@@ -68,9 +68,9 @@ export async function generateXLSXWorkbook(
     { header: "SKU *", key: "sku", width: 18 },
     { header: "Category *", key: "category", width: 16 },
     { header: "Status *", key: "status", width: 16 },
-    { header: "Initial Stock *", key: "stock", width: 14 },
-    { header: "Current Cost *", key: "buyPrice", width: 16 },
-    { header: "Sell Price *", key: "sellPrice", width: 16 },
+    {header: "Initial Stock *", key: "stock", width: 14},
+    {header: "Opening Cost *", key: "buyPrice", width: 16},
+    {header: "Sell Price *", key: "sellPrice", width: 16},
     { header: "Low Stock Alert *", key: "threshold", width: 20 },
     { header: "Brand", key: "brand", width: 16 },
     { header: "Universal Fit", key: "universal", width: 16 },
@@ -207,15 +207,15 @@ export async function generateXLSXWorkbook(
     error: "Stock must be a whole number 0 or greater.",
   });
 
-  // Current Cost decimal (Col F = 6): exactly one node for F2:F1000
+  // Opening Cost decimal (Col F = 6): exactly one node for F2:F1000
   (sheet1 as any).dataValidations.add("F2:F1000", {
     type: "decimal",
     operator: "greaterThanOrEqual",
     allowBlank: true,
     formulae: [0],
     showErrorMessage: true,
-    errorTitle: "Invalid Current Cost",
-    error: "Current Cost cannot be negative.",
+    errorTitle: "Invalid Opening Cost",
+    error: "Opening Cost cannot be negative.",
   });
 
   // Sell Price decimal (Col G = 7): exactly one node for G2:G1000
@@ -275,7 +275,7 @@ export async function generateXLSXWorkbook(
     ["  3. Category * — Product Category grouping (Required. Cannot be blank. Matches existing categories case-insensitively).", "TEXT"],
     ["  4. Status * — Product lifecycle status (Required. Must be Active, Inactive, or Discontinued).", "TEXT"],
     ["  5. Initial Stock * — Units on hand (Required non-negative whole number. Explicit 0 is valid; blank is invalid).", "TEXT"],
-    ["  6. Current Cost (₹) * — Buy cost per unit (Required non-negative number. Explicit 0 is valid; blank is invalid).", "TEXT"],
+    ["  6. Opening Cost (₹) — Initial cost per unit (Required when Initial Stock > 0; optional when Initial Stock = 0. Legacy spreadsheets using 'Current Cost' remain fully supported).", "TEXT"],
     ["  7. Sell Price (₹) * — Retail price per unit (Required non-negative number. Explicit 0 is valid; blank is invalid).", "TEXT"],
     ["  8. Low Stock Alert (units) * — Alert threshold (Required non-negative integer. Explicit 0 is valid; blank is invalid).", "TEXT"],
     ["", "EMPTY"],
@@ -285,10 +285,10 @@ export async function generateXLSXWorkbook(
     ["  • Compatible Vehicles — Specific vehicle fitments formatted as 'Brand | Model | YearFrom | YearTo' separated by ';'.", "TEXT"],
     ["", "EMPTY"],
     ["B. IMPORT VALIDATION & BLANK vs ZERO RULES", "SECTION"],
-    ["• Blank required fields (Name, SKU, Category, Status, Stock, Cost, Sell Price, Low Stock Alert) produce a validation error.", "TEXT"],
-    ["• An explicitly entered numeric '0' IS valid for Initial Stock, Current Cost, Sell Price, and Low Stock Alert.", "TEXT"],
-    ["• Blank Current Cost or Sell Price is NOT silently converted to 0.", "TEXT"],
-    ["• In Verification Preview, errors can be fixed inline or by selecting existing Brand/Category values.", "TEXT"],
+    ["• Opening Cost is REQUIRED when Initial Stock is greater than 0. If Initial Stock is 0, Opening Cost is optional.", "TEXT"],
+    ["• Blank required fields (Name, SKU, Category, Status, Initial Stock, Sell Price, Low Stock Alert) produce a validation error.", "TEXT"],
+    ["• An explicitly entered numeric '0' IS valid for Initial Stock, Opening Cost, Sell Price, and Low Stock Alert.", "TEXT"],
+    ["• In Verification Preview, errors can be fixed inline before applying imports to catalog state.", "TEXT"],
     ["", "EMPTY"],
     ["C. BRAND & CATEGORY CANONICALIZATION", "SECTION"],
     ["• Brand and Category matching is case-insensitive (e.g. 'honda' or 'HONDA' resolves to existing canonical 'Honda').", "TEXT"],
@@ -366,7 +366,7 @@ export function generateCSVText(products: Product[]): string {
     "Brand",
     "Category",
     "Stock",
-    "Current Price",
+    "Opening Cost",
     "Sell Price",
     "Low Stock Threshold",
     "Status",
@@ -530,7 +530,7 @@ export async function parseSpreadsheetFile(
   let idxBrand = findHeaderIndex(["brand", "make", "manufacturer"]);
   let idxCategory = findHeaderIndex(["category *", "category", "type", "group"]);
   let idxStock = findHeaderIndex(["initial stock *", "stock *", "stock", "qty", "quantity", "units", "count"]);
-  let idxBuy = findHeaderIndex(["current cost *", "current price *", "buy price *", "current cost", "current price", "buy price", "buy", "cost", "purchase price", "cost price", "buyprice"]);
+  let idxBuy = findHeaderIndex(["opening cost *", "opening cost", "current cost *", "current price *", "buy price *", "openingcost", "current cost", "current price", "buy price", "buy", "cost", "purchase price", "cost price", "buyprice"]);
   let idxSell = findHeaderIndex(["sell price *", "sell *", "price", "selling price", "rate", "sellprice"]);
   let idxThreshold = findHeaderIndex(["low stock alert *", "low stock threshold *", "threshold", "low stock", "alert qty", "alert"]);
   let idxStatus = findHeaderIndex(["status *", "status", "product status", "state"]);
@@ -660,15 +660,17 @@ export async function parseSpreadsheetFile(
       stockVal = parsedStock.num;
     }
 
-    // Current Cost validation (distinguish blank vs 0)
+    // Opening Cost validation (distinguish blank vs 0 and check stock > 0)
     const parsedBuy = parseNumberCell(rawBuyStr);
     let buyPriceVal: number | "" = "";
     if (parsedBuy.isBlank) {
-      fieldErrors.buyPrice = "Current Cost is required.";
-      rowErrors.push("Current Cost is required.");
+      if (typeof stockVal === "number" && stockVal > 0) {
+        fieldErrors.buyPrice = "Opening Cost is required when Initial Stock is greater than 0.";
+        rowErrors.push("Opening Cost is required when Initial Stock is greater than 0.");
+      }
     } else if (!parsedBuy.isValid || parsedBuy.num < 0) {
-      fieldErrors.buyPrice = "Current Cost must be a valid non-negative number.";
-      rowErrors.push("Current Cost must be a valid non-negative number.");
+      fieldErrors.buyPrice = "Opening Cost must be a valid non-negative number.";
+      rowErrors.push("Opening Cost must be a valid non-negative number.");
       buyPriceVal = parsedBuy.isValid ? parsedBuy.num : "";
     } else {
       buyPriceVal = parsedBuy.num;

@@ -2196,7 +2196,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                           {/* Events */}
                           {timelineEvents.map((ev, index) => {
                             if (ev.type === "payment") {
-                              const methodColors: Record<PaymentMethod, string> = {
+                              const methodColors: Record<string, string> = {
                                 Cash: "bg-emerald-100 text-emerald-800 border-emerald-200",
                                 UPI: "bg-blue-100 text-blue-800 border-blue-200",
                                 Card: "bg-purple-100 text-purple-800 border-purple-200",
@@ -2872,7 +2872,7 @@ function RecordSupplierPaymentModal({
 
   const INPUT = "w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-400";
 
-  const METHOD_COLORS: Record<PaymentMethod, string> = {
+  const METHOD_COLORS: Record<string, string> = {
     Cash: "bg-emerald-50 text-emerald-700 border-emerald-200",
     UPI: "bg-blue-50 text-blue-700 border-blue-200",
     Card: "bg-purple-50 text-purple-700 border-purple-200",

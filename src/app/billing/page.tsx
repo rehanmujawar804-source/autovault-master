@@ -41,7 +41,7 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function BillingPage() {
-  const { state, addInvoice, getNextInvoiceNumber, showToast, dispatch, createHoldBill, updateHoldBill, deleteHoldBill, getCustomerOutstandingBalance } = useStore();
+  const { state, addInvoice, getNextInvoiceNumber, showToast, dispatch, createHoldBill, updateHoldBill, deleteHoldBill, getCustomerOutstandingBalance, getCustomerCreditBalance } = useStore();
   const { loading, requireAuth } = useRole();
 
   useEffect(() => {
@@ -63,6 +63,7 @@ export default function BillingPage() {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [negativeStockConfirmItems, setNegativeStockConfirmItems] = useState<Array<{ name: string; currentStock: number; sellQty: number; resultStock: number }> | null>(null);
+  const [mobileTab, setMobileTab] = useState<"catalog" | "cart" | "checkout">("catalog");
 
   // ── Optional POS Vehicle Helper State ─────────────────────────────────────
   const [isPosVehicleHelperExpanded, setIsPosVehicleHelperExpanded] = useState(false);
@@ -200,19 +201,52 @@ export default function BillingPage() {
   const [heldBillsSearch, setHeldBillsSearch] = useState("");
   const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<string | null>(null);
 
-  // ── Cart Totals ───────────────────────────────────────────────────────────
+  // ── Store Credit State ───────────────────────────────────────────────────
+  const [useStoreCredit, setUseStoreCredit] = useState(false);
+  const [storeCreditToUseInput, setStoreCreditToUseInput] = useState("");
+
+  const selectedCustomerObj = useMemo(() => {
+    if (customerMode === "existing" && selectedCustomerId) {
+      return state.customers.find((c) => c.id === selectedCustomerId);
+    }
+    if (customerMode === "new" && customerPhone.trim()) {
+      return state.customers.find((c) => c.phone === customerPhone.trim());
+    }
+    return undefined;
+  }, [customerMode, selectedCustomerId, customerPhone, state.customers]);
+
+  const availableStoreCredit = useMemo(() => {
+    if (!selectedCustomerObj) return 0;
+    return getCustomerCreditBalance(selectedCustomerObj.id);
+  }, [selectedCustomerObj, getCustomerCreditBalance]);
+
+  const customerDebt = useMemo(() => {
+    if (!selectedCustomerObj) return 0;
+    return getCustomerOutstandingBalance(selectedCustomerObj.id);
+  }, [selectedCustomerObj, getCustomerOutstandingBalance]);
+
+  // ── Cart & Credit Totals ──────────────────────────────────────────────────
   const subtotal = cart.reduce((sum, item) => sum + item.product.sellPrice * item.quantity, 0);
   const discountAmount = Math.round((subtotal * discount) / 100);
   const total = subtotal - discountAmount;
 
+  const storeCreditRedeemed = useMemo(() => {
+    if (!useStoreCredit || availableStoreCredit <= 0) return 0;
+    const parsed = Number(storeCreditToUseInput);
+    const amountToUse = storeCreditToUseInput === "" || isNaN(parsed) ? availableStoreCredit : parsed;
+    return Math.max(0, Math.min(amountToUse, availableStoreCredit, total));
+  }, [useStoreCredit, availableStoreCredit, storeCreditToUseInput, total]);
+
+  const netPayable = Math.max(0, total - storeCreditRedeemed);
+
   const amountPaid = useMemo(() => {
-    if (paymentStatus === "Paid") return total;
+    if (paymentStatus === "Paid") return netPayable;
     if (paymentStatus === "Debt") return 0;
     const val = Number(amountPaidInput) || 0;
-    return Math.min(val, total);
-  }, [paymentStatus, total, amountPaidInput]);
+    return Math.min(val, netPayable);
+  }, [paymentStatus, netPayable, amountPaidInput]);
 
-  const dueAmount = total - amountPaid;
+  const dueAmount = netPayable - amountPaid;
   const totalItems = cart.reduce((s, i) => s + i.quantity, 0);
 
   // ── Hold / Recall Handlers ───────────────────────────────────────────────
@@ -577,7 +611,7 @@ export default function BillingPage() {
     };
 
     try {
-      addInvoice(invoice);
+      addInvoice(invoice, storeCreditRedeemed);
       showToast("Invoice generated successfully!", "success");
       setGeneratedInvoice(invoice);
       if (activeHoldBillId) {
@@ -608,6 +642,8 @@ export default function BillingPage() {
     setDiscount(0);
     setDiscountInput("0");
     setOrderNote("");
+    setUseStoreCredit(false);
+    setStoreCreditToUseInput("");
     setGeneratedInvoice(null);
     setBilledBy("");
     setValidationError("");
@@ -636,27 +672,28 @@ export default function BillingPage() {
   //  MAIN POS WORKSPACE
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-[calc(100vh-3rem)] gap-0 -m-6">
+    <div className="flex flex-col h-[calc(100vh-3rem)] gap-0 -m-4 sm:-m-6 overflow-hidden min-w-0 min-h-0">
       {/* ── Top Bar ─────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-slate-200 shrink-0">
+      <div className="flex flex-wrap items-center justify-between px-4 sm:px-6 py-2.5 sm:py-3 bg-white border-b border-slate-200 shrink-0 gap-2">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-navy-950 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-lg bg-navy-950 flex items-center justify-center shrink-0">
             <ReceiptText size={15} className="text-amber-400" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-slate-900 leading-tight">Billing / POS</h1>
-            <p className="text-xs text-slate-400 leading-tight">Workstation · {new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}</p>
+            <h1 className="text-base sm:text-lg font-bold text-slate-900 leading-tight">Billing / POS</h1>
+            <p className="text-[10px] sm:text-xs text-slate-400 leading-tight">Workstation · {new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
           {/* Held Bills Manager Button with count badge */}
           <button
             type="button"
             onClick={() => setHeldBillsDrawerOpen(true)}
-            className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs font-bold px-3.5 py-2 rounded-xl transition cursor-pointer relative"
+            className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs font-bold px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl transition cursor-pointer relative"
           >
             <ReceiptText size={14} className="text-slate-500" />
-            Held Bills
+            <span className="hidden sm:inline">Held Bills</span>
+            <span className="sm:hidden">Held</span>
             {state.holdBills && state.holdBills.length > 0 && (
               <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-black text-white shadow-sm ring-2 ring-white">
                 {state.holdBills.length}
@@ -669,31 +706,81 @@ export default function BillingPage() {
             type="button"
             onClick={handleHoldCurrentBill}
             disabled={cart.length === 0}
-            className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-650 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed border border-amber-600 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition cursor-pointer"
+            className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed border border-amber-600 text-white text-xs font-bold px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl transition cursor-pointer"
           >
             <Coins size={14} />
-            {activeHoldBillId ? "Update Hold" : "Hold Bill"}
+            <span className="hidden sm:inline">{activeHoldBillId ? "Update Hold" : "Hold Bill"}</span>
+            <span className="sm:hidden">{activeHoldBillId ? "Update" : "Hold"}</span>
           </button>
 
           {cart.length > 0 && (
-            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold px-3 py-1.5 rounded-full shrink-0">
+            <div className="hidden md:flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold px-3 py-1.5 rounded-full shrink-0">
               <ShoppingCart size={13} />
               {totalItems} item{totalItems !== 1 ? "s" : ""} · ₹{total.toLocaleString()}
             </div>
           )}
-          <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full font-mono shrink-0">
+          <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-2.5 py-1.5 rounded-full font-mono shrink-0">
             #{getNextInvoiceNumber()}
           </div>
         </div>
       </div>
 
+      {/* ── Tablet & Mobile Tab Navigation Bar (visible < 1024px) ───────────── */}
+      <div className="flex items-center justify-between bg-slate-900 text-white p-1 border-b border-slate-800 lg:hidden shrink-0">
+        <button
+          type="button"
+          onClick={() => setMobileTab("catalog")}
+          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+            mobileTab === "catalog" ? "bg-amber-500 text-slate-950 shadow-xs" : "text-slate-300 hover:text-white"
+          }`}
+        >
+          <Package size={14} />
+          Products
+          <span className="text-[10px] bg-slate-950/40 px-1.5 py-0.5 rounded-full font-mono">
+            {filteredProducts.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMobileTab("cart")}
+          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer relative ${
+            mobileTab === "cart" ? "bg-amber-500 text-slate-950 shadow-xs" : "text-slate-300 hover:text-white"
+          }`}
+        >
+          <ShoppingCart size={14} />
+          Cart
+          {totalItems > 0 && (
+            <span className="text-[10px] bg-slate-950 text-amber-400 px-1.5 py-0.5 rounded-full font-extrabold font-mono">
+              {totalItems}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMobileTab("checkout")}
+          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+            mobileTab === "checkout" ? "bg-amber-500 text-slate-950 shadow-xs" : "text-slate-300 hover:text-white"
+          }`}
+        >
+          <ReceiptText size={14} />
+          Checkout
+          {netPayable > 0 && (
+            <span className="text-[10px] bg-emerald-950 text-emerald-300 px-1.5 py-0.5 rounded-full font-mono">
+              ₹{netPayable.toLocaleString()}
+            </span>
+          )}
+        </button>
+      </div>
+
       {/* ── 3-Panel Workspace ───────────────────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden min-w-0 min-h-0">
 
         {/* ══════════════════════════════════════════════════════════════════
-            PANEL 1 — Products Catalog  (flex: 1.2)
+            PANEL 1 — Products Catalog  (flex: 1.2 on Desktop)
         ══════════════════════════════════════════════════════════════════ */}
-        <div className="flex flex-col bg-slate-50 border-r border-slate-200" style={{ width: "42%" }}>
+        <div className={`flex-col bg-slate-50 border-r border-slate-200 min-w-0 min-h-0 lg:w-[42%] lg:flex ${mobileTab === "catalog" ? "flex flex-1" : "hidden lg:flex"}`}>
           {/* POS Vehicle Filter Bar (Collapsible) */}
           <div className="px-5 py-2.5 bg-gradient-to-r from-slate-900 via-navy-950 to-slate-900 text-white shrink-0 border-b border-navy-800 transition-all">
             <div className="flex items-center justify-between gap-2">
@@ -851,7 +938,7 @@ export default function BillingPage() {
                 <p className="text-xs text-slate-400 mt-1">Try a different search or category</p>
               </div>
             ) : (
-              <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                 {filteredProducts.map((product) => {
                   const inCart = cart.find((i) => i.product.id === product.id);
                   const outOfStock = product.stock === 0;
@@ -945,9 +1032,9 @@ export default function BillingPage() {
         </div>
 
         {/* ══════════════════════════════════════════════════════════════════
-            PANEL 2 — Active Cart  (flex: 0.7)
+            PANEL 2 — Active Cart  (flex: 0.7 on Desktop)
         ══════════════════════════════════════════════════════════════════ */}
-        <div className="flex flex-col bg-white border-r border-slate-200" style={{ width: "28%" }}>
+        <div className={`flex-col bg-white border-r border-slate-200 min-w-0 min-h-0 lg:w-[28%] lg:flex ${mobileTab === "cart" ? "flex flex-1" : "hidden lg:flex"}`}>
           {/* Cart header */}
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 shrink-0">
             <div className="flex items-center gap-2">
@@ -1098,9 +1185,9 @@ export default function BillingPage() {
         </div>
 
         {/* ══════════════════════════════════════════════════════════════════
-            PANEL 3 — Checkout / Billing Form  (flex: 1)
+            PANEL 3 — Checkout / Billing Form  (flex: 1 on Desktop)
         ══════════════════════════════════════════════════════════════════ */}
-        <div className="flex flex-col bg-white" style={{ width: "30%" }}>
+        <div className={`flex-col bg-white min-w-0 min-h-0 lg:w-[30%] lg:flex ${mobileTab === "checkout" ? "flex flex-1" : "hidden lg:flex"}`}>
           {/* Panel heading */}
           <div className="flex items-center gap-2 px-5 py-3.5 border-b border-slate-100 shrink-0">
             <FileText size={15} className="text-slate-400" />
@@ -1165,18 +1252,23 @@ export default function BillingPage() {
                     <div>
                       <p className="font-extrabold text-slate-800 text-sm">{customerName}</p>
                       <p className="text-xs text-slate-500">{customerPhone}</p>
-                      {(() => {
-                        const currentDebt = selectedCustomerId ? getCustomerOutstandingBalance(selectedCustomerId) : 0;
-                        return currentDebt > 0 ? (
-                          <span className="mt-1 inline-block text-[10px] bg-red-50 text-red-600 border border-red-100 px-2 py-0.5 rounded-full font-bold">
-                            ⚠ ₹{currentDebt.toLocaleString()} debt
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {customerDebt > 0 && (
+                          <span className="text-[10px] bg-red-50 text-red-600 border border-red-100 px-2 py-0.5 rounded-full font-bold">
+                            ⚠ ₹{customerDebt.toLocaleString()} debt
                           </span>
-                        ) : null;
-                      })()}
+                        )}
+                        {availableStoreCredit > 0 && (
+                          <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                            <Coins size={10} className="text-emerald-600" />
+                            ₹{availableStoreCredit.toLocaleString()} Credit
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <button
                       type="button"
-                      onClick={() => { setSelectedCustomerId(""); setCustomerName(""); setCustomerPhone(""); }}
+                      onClick={() => { setSelectedCustomerId(""); setCustomerName(""); setCustomerPhone(""); setUseStoreCredit(false); setStoreCreditToUseInput(""); }}
                       className="text-[10px] bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 px-2.5 py-1 rounded-lg font-semibold transition cursor-pointer shrink-0"
                     >
                       Change
@@ -1244,6 +1336,66 @@ export default function BillingPage() {
                 </div>
               )}
             </div>
+
+            {/* ── SECTION: Store Credit Redemption ─────────────────── */}
+            {availableStoreCredit > 0 && (
+              <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={useStoreCredit}
+                      onChange={(e) => {
+                        setUseStoreCredit(e.target.checked);
+                        if (e.target.checked && !storeCreditToUseInput) {
+                          setStoreCreditToUseInput(String(Math.min(availableStoreCredit, total)));
+                        }
+                      }}
+                      className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 accent-emerald-600 cursor-pointer"
+                    />
+                    <span className="font-bold text-xs text-emerald-950 flex items-center gap-1.5">
+                      <Coins size={14} className="text-emerald-600" />
+                      Apply Store Credit
+                    </span>
+                  </label>
+                  <span className="text-[11px] font-extrabold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md">
+                    Avail: ₹{availableStoreCredit.toLocaleString()}
+                  </span>
+                </div>
+
+                {useStoreCredit && (
+                  <div className="space-y-2 pt-1 border-t border-emerald-200/60 animate-in slide-in-from-top-1 duration-150">
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">₹</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max={Math.min(availableStoreCredit, total)}
+                          placeholder={`Max ₹${Math.min(availableStoreCredit, total).toLocaleString()}`}
+                          value={storeCreditToUseInput}
+                          onChange={(e) => setStoreCreditToUseInput(e.target.value)}
+                          className="w-full border border-emerald-300 rounded-lg pl-7 pr-3 py-1.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-white"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setStoreCreditToUseInput(String(Math.min(availableStoreCredit, total)))}
+                        className="text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-2 rounded-lg font-bold transition cursor-pointer shrink-0"
+                      >
+                        Use Max
+                      </button>
+                    </div>
+                    {storeCreditRedeemed > 0 && (
+                      <p className="text-[11px] font-semibold text-emerald-700 flex justify-between items-center">
+                        <span>Redeeming:</span>
+                        <span className="font-bold">−₹{storeCreditRedeemed.toLocaleString()}</span>
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* ── SECTION: Vehicle ───────────────────────────────────── */}
             <div className="space-y-2.5">
@@ -1457,7 +1609,19 @@ export default function BillingPage() {
                   <span>−₹{discountAmount.toLocaleString()}</span>
                 </div>
               )}
-              {amountPaid > 0 && amountPaid < total && (
+              {storeCreditRedeemed > 0 && (
+                <div className="flex justify-between text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded">
+                  <span>Store Credit Applied</span>
+                  <span>−₹{storeCreditRedeemed.toLocaleString()}</span>
+                </div>
+              )}
+              {storeCreditRedeemed > 0 && (
+                <div className="flex justify-between font-bold text-slate-900 border-t border-slate-200 pt-1.5">
+                  <span>Net Payable</span>
+                  <span className="text-navy-950 font-extrabold">₹{netPayable.toLocaleString()}</span>
+                </div>
+              )}
+              {amountPaid > 0 && amountPaid < netPayable && (
                 <div className="flex justify-between text-blue-600 font-semibold">
                   <span>Paid</span>
                   <span>₹{amountPaid.toLocaleString()}</span>
@@ -1471,7 +1635,7 @@ export default function BillingPage() {
               )}
               <div className="flex justify-between font-extrabold text-slate-900 border-t border-slate-200 pt-2 mt-1">
                 <span className="text-base">Final Total</span>
-                <span className="text-navy-950 text-xl font-black">₹{total.toLocaleString()}</span>
+                <span className="text-navy-950 text-xl font-black">₹{netPayable.toLocaleString()}</span>
               </div>
             </div>
 
@@ -1489,7 +1653,7 @@ export default function BillingPage() {
               ) : (
                 <>
                   <ReceiptText size={16} />
-                  {cart.length === 0 ? "Add products to cart" : `Generate Bill · ₹${total.toLocaleString()}`}
+                  {cart.length === 0 ? "Add products to cart" : `Generate Bill · ₹${netPayable.toLocaleString()}`}
                 </>
               )}
             </button>
@@ -1505,7 +1669,7 @@ export default function BillingPage() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-white w-full max-w-md h-full flex flex-col shadow-2xl border-l border-slate-200 animate-in slide-in-from-right duration-200"
+            className="bg-white w-full max-w-full sm:max-w-md h-full flex flex-col shadow-2xl border-l border-slate-200 animate-in slide-in-from-right duration-200"
           >
             {/* Header */}
             <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50 shrink-0">
@@ -1702,7 +1866,7 @@ export default function BillingPage() {
 
       {negativeStockConfirmItems && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 border border-amber-200">
+          <div className="bg-white rounded-2xl p-5 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl space-y-4 border border-amber-200">
             <div className="flex items-center gap-3 text-amber-600">
               <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center shrink-0">
                 <AlertTriangle size={20} />

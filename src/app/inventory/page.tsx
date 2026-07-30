@@ -372,8 +372,8 @@ export default function InventoryPage() {
         case "sell-desc":   return (b.sellPrice - a.sellPrice)        || a.id.localeCompare(b.id);
         case "sell-asc":    return (a.sellPrice - b.sellPrice)        || a.id.localeCompare(b.id);
         case "margin-desc": {
-          const ma = a.sellPrice > 0 ? ((a.sellPrice - a.currentCost) / a.sellPrice) * 100 : -Infinity;
-          const mb = b.sellPrice > 0 ? ((b.sellPrice - b.currentCost) / b.sellPrice) * 100 : -Infinity;
+          const ma = a.sellPrice > 0 ? ((a.sellPrice - a.currentCost) / a.sellPrice) * 100 : -999999;
+          const mb = b.sellPrice > 0 ? ((b.sellPrice - b.currentCost) / b.sellPrice) * 100 : -999999;
           return (mb - ma) || a.id.localeCompare(b.id);
         }
         default:            return a.name.localeCompare(b.name)       || a.id.localeCompare(b.id);
@@ -1287,9 +1287,13 @@ export default function InventoryPage() {
                         {isOwner && (
                           <td className="px-4 py-3.5 text-right hidden md:table-cell">
                             <span className={`inline-block text-[11px] font-bold tabular-nums px-2 py-0.5 rounded border ${
-                              margin >= 30 ? 'bg-green-50 text-green-700 border-green-200'
-                              : margin >= 15 ? 'bg-amber-50 text-amber-700 border-amber-200'
-                              : 'bg-red-50 text-red-700 border-red-200'
+                              margin > 0
+                                ? margin >= 30
+                                  ? 'bg-green-50 text-green-700 border-green-200'
+                                  : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : margin === 0
+                                ? 'bg-slate-100 text-slate-700 border-slate-200'
+                                : 'bg-red-50 text-red-700 border-red-200'
                             }`}>
                               {margin}%
                             </span>

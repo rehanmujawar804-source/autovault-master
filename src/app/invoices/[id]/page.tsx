@@ -30,7 +30,6 @@ const METHOD_COLORS: Record<PaymentMethod, string> = {
   Cash:   "bg-emerald-50 text-emerald-700 border-emerald-200",
   UPI:    "bg-blue-50 text-blue-700 border-blue-200",
   Card:   "bg-purple-50 text-purple-700 border-purple-200",
-  Credit: "bg-red-50 text-red-600 border-red-200",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -963,8 +962,8 @@ export default function InvoiceDetailPage({
 
                   <div>
                     <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Method</label>
-                    <div className="grid grid-cols-4 gap-2">
-                      {(["Cash", "UPI", "Card", "Credit"] as PaymentMethod[]).map((m) => (
+                    <div className="grid grid-cols-3 gap-2">
+                      {(["Cash", "UPI", "Card"] as PaymentMethod[]).map((m) => (
                         <button
                           key={m}
                           type="button"

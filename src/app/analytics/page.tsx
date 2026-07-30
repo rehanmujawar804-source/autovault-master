@@ -176,7 +176,7 @@ export default function AnalyticsPage() {
     const avgOrderValue = filteredInvoices.length > 0 ? Math.round(totalBilled / filteredInvoices.length) : 0;
 
     // Payment method shares
-    const paymentMethods = ["Cash", "UPI", "Card", "Credit"] as const;
+    const paymentMethods = ["Cash", "UPI", "Card"] as const;
     const methodData = paymentMethods.map((method) => {
       const methodInvs = filteredInvoices.filter((i) => i.paymentMethod === method);
       return {

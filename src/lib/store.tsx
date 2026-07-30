@@ -1144,9 +1144,9 @@ function reducer(state: AppState, action: Action): AppState {
         newCustomers = state.customers;
       }
 
-      // Finance entry: Income for paid portion (skip Credit — no real cash movement)
+      // Finance entry: Income for paid portion
       const newInvoiceFinanceTxs = [...(state.financeTransactions || [])];
-      if (inv.amountPaid > 0 && inv.paymentMethod !== "Credit") {
+      if (inv.amountPaid > 0) {
         newInvoiceFinanceTxs.push({
           id: `ft-${crypto.randomUUID()}`,
           accountId: methodToAccountId(inv.paymentMethod),
@@ -1464,9 +1464,9 @@ function reducer(state: AppState, action: Action): AppState {
         };
       });
 
-      // 4. Append reversing Finance Expense — only if real money changed hands (not Credit)
+      // 4. Append reversing Finance Expense — only if money was paid
       const newFinanceTxs = [...(state.financeTransactions ?? [])];
-      if (targetPayment.method !== "Credit") {
+      if (targetPayment.amount > 0) {
         newFinanceTxs.push({
           id: `ft-${crypto.randomUUID()}`,
           accountId: methodToAccountId(targetPayment.method),
@@ -1563,7 +1563,7 @@ function reducer(state: AppState, action: Action): AppState {
 
       // 5. Append reversing finance transaction (only for amount actually paid)
       const newFinanceTransactions = [...(state.financeTransactions || [])];
-      if (invoice.amountPaid > 0 && invoice.paymentMethod !== "Credit") {
+      if (invoice.amountPaid > 0) {
         newFinanceTransactions.push({
           id: `ft-${crypto.randomUUID()}`,
           accountId: methodToAccountId(invoice.paymentMethod),
@@ -1754,7 +1754,7 @@ function reducer(state: AppState, action: Action): AppState {
       const newPayments = [...(state.supplierPayments || [])];
       const newFinanceTransactions = [...(state.financeTransactions || [])];
 
-      if (purchase.amountPaid > 0 && (paymentMethod || "Cash") !== "Credit") {
+      if (purchase.amountPaid > 0) {
         const method = paymentMethod || "Cash";
         // Log upfront supplier payment
         newPayments.push({
@@ -1896,9 +1896,9 @@ function reducer(state: AppState, action: Action): AppState {
       const payment = action.payment;
       const newPayments = [...(state.supplierPayments || []), payment];
 
-      // Finance entry — skip if Credit (no real cash movement)
+      // Finance entry for paid supplier amount
       const newFinanceTransactions = [...(state.financeTransactions || [])];
-      if (payment.method !== "Credit") {
+      if (payment.amount > 0) {
         newFinanceTransactions.push({
           id: `ft-${crypto.randomUUID()}`,
           accountId: methodToAccountId(payment.method),
@@ -1999,8 +1999,8 @@ function reducer(state: AppState, action: Action): AppState {
           newStatus,
         };
 
-        // Finance entry (Expense) for allocated payment amount only (skip Credit method)
-        if (method !== "Credit") {
+        // Finance entry (Expense) for allocated payment amount
+        if (alloc > 0) {
           newFinanceTxs.push({
             id: `ft-${crypto.randomUUID()}`,
             accountId: methodToAccountId(method),
@@ -2778,7 +2778,7 @@ function reducer(state: AppState, action: Action): AppState {
 
     case "RECORD_BUSINESS_EXPENSE": {
       const { category, amount, paymentMethod, date, notes, referenceId } = action;
-      if (amount <= 0 || paymentMethod === "Credit") {
+      if (amount <= 0) {
         return state;
       }
 
@@ -2834,7 +2834,7 @@ function reducer(state: AppState, action: Action): AppState {
 
     case "RECORD_BUSINESS_MONEY_IN": {
       const { category, amount, paymentMethod, date, notes, referenceId } = action;
-      if (amount <= 0 || paymentMethod === "Credit") {
+      if (amount <= 0) {
         return state;
       }
       if (!["Owner Capital", "Expense Refund", "Other Business Receipt"].includes(category)) {
@@ -4026,10 +4026,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     referenceId?: string;
   }): void {
     if (!isProcurementAllowed()) return;
-    if (params.paymentMethod === "Credit") {
-      showToast("Money In cannot be recorded with Credit method", "error");
-      return;
-    }
     if (params.amount <= 0) {
       showToast("Amount must be greater than 0", "error");
       return;

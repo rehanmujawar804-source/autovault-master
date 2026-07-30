@@ -2993,8 +2993,8 @@ function RecordSupplierPaymentModal({
               {/* Method */}
               <div>
                 <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Payment Method</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {(["Cash", "UPI", "Card", "Credit"] as PaymentMethod[]).map((m) => (
+                <div className="grid grid-cols-3 gap-2">
+                  {(["Cash", "UPI", "Card"] as PaymentMethod[]).map((m) => (
                     <button
                       key={m}
                       type="button"

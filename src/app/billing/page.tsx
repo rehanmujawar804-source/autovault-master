@@ -489,8 +489,8 @@ export default function BillingPage() {
       }
     }
 
-    // Business validation: Credit/Debt/Partial must have registered customer details
-    if (paymentMethod === "Credit" || paymentStatus === "Debt" || paymentStatus === "Partial") {
+    // Business validation: Debt/Partial must have registered customer details
+    if (paymentStatus === "Debt" || paymentStatus === "Partial") {
       if (!selectedCustomerId && (!finalName || finalName.toLowerCase() === "walk-in customer")) {
         setValidationError("Credit sales require a registered customer.");
         showToast("Credit sales require a registered customer.", "error");
@@ -1316,36 +1316,43 @@ export default function BillingPage() {
             </div>
 
             {/* ── SECTION: Payment Method ────────────────────────────── */}
-            <div className="space-y-2.5">
-              <div className="flex items-center gap-2">
-                <Coins size={13} className="text-slate-400" />
-                <h3 className="font-bold text-slate-700 text-xs uppercase tracking-wider">Payment Method</h3>
+            {paymentStatus === "Debt" ? (
+              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2.5 text-xs text-amber-800 font-medium">
+                <AlertCircle size={16} className="text-amber-600 shrink-0" />
+                <span>Credit Sale — No payment received. Customer balance will increase.</span>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { id: "Cash", label: "Cash", icon: <Coins size={14} /> },
-                  { id: "UPI", label: "UPI", icon: <Smartphone size={14} /> },
-                  { id: "Card", label: "Card", icon: <CreditCard size={14} /> },
-                  { id: "Credit", label: "Credit", icon: <AlertCircle size={14} /> },
-                ].map((item) => {
-                  const active = paymentMethod === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => setPaymentMethod(item.id as PaymentMethod)}
-                      className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-all cursor-pointer active:scale-95 ${active
-                          ? "bg-navy-950 border-navy-950 text-white shadow-md"
-                          : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600"
+            ) : (
+              <div className="space-y-2.5">
+                <div className="flex items-center gap-2">
+                  <Coins size={13} className="text-slate-400" />
+                  <h3 className="font-bold text-slate-700 text-xs uppercase tracking-wider">Payment Method</h3>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { id: "Cash", label: "Cash", icon: <Coins size={14} /> },
+                    { id: "UPI", label: "UPI", icon: <Smartphone size={14} /> },
+                    { id: "Card", label: "Card", icon: <CreditCard size={14} /> },
+                  ].map((item) => {
+                    const active = paymentMethod === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setPaymentMethod(item.id as PaymentMethod)}
+                        className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-all cursor-pointer active:scale-95 ${
+                          active
+                            ? "bg-navy-950 border-navy-950 text-white shadow-md"
+                            : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600"
                         }`}
-                    >
-                      {item.icon}
-                      {item.label}
-                    </button>
-                  );
-                })}
+                      >
+                        {item.icon}
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* ── SECTION: Payment Status ────────────────────────────── */}
             <div className="space-y-2.5">

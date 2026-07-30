@@ -132,7 +132,7 @@ export default function DashboardPage() {
     const outOfStock = state.products.filter((p) => (p.status || "Active") === "Active" && p.stock === 0);
 
     // Payment method breakdown
-    const methods = ["Cash", "UPI", "Card", "Credit"] as const;
+    const methods = ["Cash", "UPI", "Card"] as const;
     const paymentMethodTotals = methods.map((method) => ({
       method,
       total: invoices.filter((inv) => inv.paymentMethod === method).reduce((s, inv) => s + inv.amountPaid, 0),

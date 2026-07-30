@@ -167,7 +167,7 @@ export interface StockMovement {
 
 // ── Invoice ───────────────────────────────────
 
-export type PaymentMethod = "Cash" | "UPI" | "Card" | "Credit";
+export type PaymentMethod = "Cash" | "UPI" | "Card";
 export type PaymentStatus = "Paid" | "Partial" | "Debt";
 
 export interface InvoiceItem {

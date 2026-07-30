@@ -373,11 +373,6 @@ export default function FinancePage() {
       return;
     }
 
-    if (expenseMethod === "Credit") {
-      setExpenseFormError("Operating expenses must be paid via Cash, UPI, or Card/Bank.");
-      return;
-    }
-
     setIsSubmittingExpense(true);
 
     try {
@@ -409,11 +404,6 @@ export default function FinancePage() {
     const parsedAmount = parseFloat(moneyInAmountInput);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
       setMoneyInFormError("Please enter a valid amount greater than 0.");
-      return;
-    }
-
-    if (moneyInMethod === "Credit") {
-      setMoneyInFormError("Money In cannot be recorded with Credit payment method.");
       return;
     }
 
@@ -1478,7 +1468,7 @@ export default function FinancePage() {
                   ))}
                 </div>
                 <p className="text-[10px] text-slate-400 mt-1">
-                  Target Account: {moneyInMethod === "Cash" ? "acc-cash" : moneyInMethod === "UPI" ? "acc-upi" : "acc-bank"} (Credit blocked)
+                  Target Account: {moneyInMethod === "Cash" ? "acc-cash" : moneyInMethod === "UPI" ? "acc-upi" : "acc-bank"}
                 </p>
               </div>
 

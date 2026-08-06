@@ -27,6 +27,8 @@ import {
   Wallet,
   ShoppingCart,
   Pencil,
+  Copy,
+  Phone,
 } from "lucide-react";
 import type { Customer } from "@/types";
 
@@ -99,7 +101,7 @@ export default function CustomersPage() {
   function handleLumpSumSubmit() {
     if (!lumpSumCustomer) return;
     if (!lumpSumCollectedBy) {
-      alert("Please select who collected this payment (Owner or Staff).");
+      showToast("Please select who collected this payment (Owner or Staff).", "error");
       return;
     }
     const numAmount = Math.max(0, Number(lumpSumAmountInput) || 0);
@@ -268,7 +270,7 @@ export default function CustomersPage() {
   function handleCollectSubmit() {
     if (!collectInvoice || !collectCustomerId) return;
     if (!collectCollectedBy) {
-      alert("Please select who collected this payment (Owner or Staff).");
+      showToast("Please select who collected this payment (Owner or Staff).", "error");
       return;
     }
     const amount = Math.min(
@@ -290,9 +292,19 @@ export default function CustomersPage() {
     setTimeout(() => closeCollectModal(), 1400);
   }
 
+  function handleCopyPhone(phone: string, e?: React.MouseEvent) {
+    if (e) e.stopPropagation();
+    if (!phone) {
+      showToast("No phone number available.", "error");
+      return;
+    }
+    navigator.clipboard.writeText(phone);
+    showToast("Phone number copied to clipboard.", "success");
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div>
+    <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-6">
       <h1 className="text-2xl font-black text-navy-950 mb-6">Customers</h1>
 
       {/* ── Stat Cards ─────────────────────────────────────────────────────── */}
@@ -420,9 +432,6 @@ export default function CustomersPage() {
         {filtered.length === 0 ? (
           state.customers.length === 0 ? (
             <div className="p-16 text-center bg-white border border-slate-200 rounded-2xl shadow-sm">
-              <Users size={40} className="text-slate-350 mx-auto mb-3" />
-              <p className="text-slate-450 text-base font-bold">No registered customers</p>
-              <p className="text-slate-350 text-xs mt-1 max-w-sm mx-auto">There are no customer profiles yet. Walk-in bills do not automatically register a profile, but credit/debt sales will create accounts.</p>
               <Link
                 href="/billing"
                 className="mt-4 inline-flex items-center gap-1.5 bg-yellow-400 hover:bg-yellow-300 text-navy-950 text-xs font-black px-5 py-2.5 rounded-xl transition-all shadow-md active:scale-95 cursor-pointer font-sans"
@@ -448,334 +457,534 @@ export default function CustomersPage() {
             </div>
           )
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide border-b border-slate-200">
-                  <th className="px-5 py-3 text-left font-semibold w-8" />
-                  <th className="px-5 py-3 text-left font-semibold">Name</th>
-                  <th className="px-5 py-3 text-left font-semibold">Phone</th>
-                  <th className="px-5 py-3 text-right font-semibold">Debt</th>
-                  <th className="px-5 py-3 text-right font-semibold">Store Credit</th>
-                  <th className="px-5 py-3 text-right font-semibold hidden md:table-cell">Total Spent</th>
-                  <th className="px-5 py-3 text-center font-semibold hidden lg:table-cell">Visits</th>
-                  <th className="px-5 py-3 text-left font-semibold hidden lg:table-cell">Last Visit</th>
-                  <th className="px-5 py-3 text-center font-semibold">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((customer) => {
-                  const derivedDebt = stats.debtByCustomer[customer.id] ?? 0;
-                  const isExpanded = expandedCustomerId === customer.id;
-                  const isHighDebt = derivedDebt >= HIGH_DEBT_THRESHOLD;
-                  const isPartial = derivedDebt > 0 && derivedDebt < HIGH_DEBT_THRESHOLD;
-                  const customerTotalSpent = calculateRevenue(state.invoices, state.salesReturns, undefined, customer.id);
-                  const isHighValue = customerTotalSpent >= 15000;
-                  const isLoyal = customer.visits >= 5;
+          <>
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide border-b border-slate-200">
+                    <th className="px-5 py-3 text-left font-semibold w-8" />
+                    <th className="px-5 py-3 text-left font-semibold">Name</th>
+                    <th className="px-5 py-3 text-left font-semibold">Phone</th>
+                    <th className="px-5 py-3 text-right font-semibold">Debt</th>
+                    <th className="px-5 py-3 text-right font-semibold">Store Credit</th>
+                    <th className="px-5 py-3 text-right font-semibold hidden md:table-cell">Total Spent</th>
+                    <th className="px-5 py-3 text-center font-semibold hidden lg:table-cell">Visits</th>
+                    <th className="px-5 py-3 text-left font-semibold hidden lg:table-cell">Last Visit</th>
+                    <th className="px-5 py-3 text-center font-semibold">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((customer) => {
+                    const derivedDebt = stats.debtByCustomer[customer.id] ?? 0;
+                    const isExpanded = expandedCustomerId === customer.id;
+                    const isHighDebt = derivedDebt >= HIGH_DEBT_THRESHOLD;
+                    const isPartial = derivedDebt > 0 && derivedDebt < HIGH_DEBT_THRESHOLD;
+                    const customerTotalSpent = calculateRevenue(state.invoices, state.salesReturns, undefined, customer.id);
+                    const isHighValue = customerTotalSpent >= 15000;
+                    const isLoyal = customer.visits >= 5;
 
-                  const outstandingInvoices = getCustomerOutstandingInvoices(customer.id);
-                  const customerPayments = getDebtPaymentsByCustomer(customer.id);
-                  const totalRecovered = customerPayments.reduce((s, p) => s + p.amount, 0);
+                    const outstandingInvoices = getCustomerOutstandingInvoices(customer.id);
+                    const customerPayments = getDebtPaymentsByCustomer(customer.id);
+                    const totalRecovered = customerPayments.reduce((s, p) => s + p.amount, 0);
 
-                  let borderClass = "border-l-4 border-l-transparent";
-                  let bgClass = "hover:bg-slate-50/80";
-                  if (isHighDebt) {
-                    borderClass = "border-l-4 border-l-red-500";
-                    bgClass = "bg-red-50/10 hover:bg-red-50/20";
-                  } else if (isPartial) {
-                    borderClass = "border-l-4 border-l-orange-400";
-                    bgClass = "bg-orange-50/5 hover:bg-orange-50/15";
-                  } else {
-                    borderClass = "border-l-4 border-l-emerald-500";
-                  }
-                  if (isExpanded) bgClass = "bg-slate-50/60";
+                    let borderClass = "border-l-4 border-l-transparent";
+                    let bgClass = "hover:bg-slate-50/80";
+                    if (isHighDebt) {
+                      borderClass = "border-l-4 border-l-red-500";
+                      bgClass = "bg-red-50/10 hover:bg-red-50/20";
+                    } else if (isPartial) {
+                      borderClass = "border-l-4 border-l-orange-400";
+                      bgClass = "bg-orange-50/5 hover:bg-orange-50/15";
+                    } else {
+                      borderClass = "border-l-4 border-l-emerald-500";
+                    }
+                    if (isExpanded) bgClass = "bg-slate-50/60";
 
-                  return (
-                    <Fragment key={customer.id}>
-                      <tr className={`transition-colors border-b border-slate-100 ${borderClass} ${bgClass}`}>
-                        {/* Expand toggle */}
-                        <td className="px-4 py-3.5">
-                          <button
-                            onClick={() =>
-                              setExpandedCustomerId(isExpanded ? null : customer.id)
-                            }
-                            className="p-1 hover:bg-slate-200/80 rounded-lg text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
-                          >
-                            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                          </button>
-                        </td>
-
-                        {/* Name */}
-                        <td className="px-5 py-3.5">
-                          <div
-                            className="font-semibold text-slate-800 hover:text-slate-600 cursor-pointer"
-                            onClick={() => setExpandedCustomerId(isExpanded ? null : customer.id)}
-                          >
-                            {customer.name}
-                          </div>
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {isHighDebt && (
-                              <span className="text-[9px] uppercase tracking-wider font-extrabold bg-red-50 text-red-600 border border-red-200 px-1.5 py-0.5 rounded">
-                                High Debt
-                              </span>
-                            )}
-                            {isHighValue && (
-                              <span className="text-[9px] uppercase tracking-wider font-extrabold bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded">
-                                High Value
-                              </span>
-                            )}
-                            {isLoyal && (
-                              <span className="text-[9px] uppercase tracking-wider font-extrabold bg-purple-50 text-purple-700 border border-purple-200 px-1.5 py-0.5 rounded">
-                                Loyal Patron
-                              </span>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Phone */}
-                        <td className="px-5 py-3.5">
-                          <div className="flex items-center gap-2">
-                            <span className="text-slate-700 font-medium">{customer.phone || "—"}</span>
-                            {customer.phone && (
-                              <a
-                                href={`https://wa.me/91${customer.phone}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 text-[10px] bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded font-semibold transition-colors"
-                              >
-                                <MessageCircle size={11} />
-                                Chat
-                              </a>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Debt */}
-                        <td className="px-5 py-3.5 text-right">
-                          <span
-                            className={`inline-block px-2 py-0.5 rounded border text-xs font-bold ${derivedDebt > 0
-                                ? "bg-red-50 text-red-600 border-red-200"
-                                : "bg-emerald-50 text-emerald-700 border-emerald-200"
-                              }`}
-                          >
-                            {derivedDebt > 0 ? `₹${derivedDebt.toLocaleString()}` : "Clear"}
-                          </span>
-                        </td>
-
-                        {/* Store Credit */}
-                        <td className="px-5 py-3.5 text-right font-mono text-xs">
-                          {(() => {
-                            const cred = getCustomerCreditBalance(customer.id);
-                            return cred > 0 ? (
-                              <span className="font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
-                                <Coins size={10} className="text-emerald-600" />
-                                ₹{cred.toLocaleString()}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 font-medium">₹0</span>
-                            );
-                          })()}
-                        </td>
-
-                        {/* Total spent */}
-                        <td className="px-5 py-3.5 text-right font-semibold text-slate-800 hidden md:table-cell">
-                          ₹{customerTotalSpent.toLocaleString()}
-                        </td>
-
-                        {/* Visits */}
-                        <td className="px-5 py-3.5 text-center text-slate-700 font-medium hidden lg:table-cell">
-                          {customer.visits}
-                        </td>
-
-                        {/* Last visit */}
-                        <td className="px-5 py-3.5 text-slate-500 font-medium hidden lg:table-cell">
-                          {customer.lastVisit || "—"}
-                        </td>
-
-                        {/* Actions */}
-                        <td className="px-5 py-3.5 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            {derivedDebt > 0 && (
-                              <button
-                                onClick={() => openLumpSumModal(customer, derivedDebt)}
-                                className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg transition-colors font-bold cursor-pointer inline-flex items-center gap-1 shadow-xs"
-                                title="Collect Customer Debt (FIFO Auto-Apply)"
-                              >
-                                <Wallet size={12} />
-                                Collect Debt
-                              </button>
-                            )}
+                    return (
+                      <Fragment key={customer.id}>
+                        <tr className={`transition-colors border-b border-slate-100 ${borderClass} ${bgClass}`}>
+                          {/* Expand toggle */}
+                          <td className="px-4 py-3.5">
                             <button
-                              onClick={() => openEditModal(customer)}
-                              className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg transition-colors font-semibold cursor-pointer inline-flex items-center gap-1"
-                              title="Edit Customer"
+                              onClick={() =>
+                                setExpandedCustomerId(isExpanded ? null : customer.id)
+                              }
+                              className="p-1 hover:bg-slate-200/80 rounded-lg text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
                             >
-                              <Pencil size={12} />
-                              Edit
+                              {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                             </button>
-                            <button
+                          </td>
+
+                          {/* Name */}
+                          <td className="px-5 py-3.5">
+                            <div
+                              className="font-semibold text-slate-800 hover:text-slate-600 cursor-pointer"
                               onClick={() => setExpandedCustomerId(isExpanded ? null : customer.id)}
-                              className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg transition-colors font-semibold cursor-pointer"
                             >
-                              Ledger
-                            </button>
-                            <Link
-                              href={`/customers/${customer.id}`}
-                              className="bg-slate-900 hover:bg-slate-700 text-white text-xs px-3 py-1.5 rounded-lg transition-colors font-semibold inline-block"
+                              {customer.name}
+                            </div>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {isHighDebt && (
+                                <span className="text-[9px] uppercase tracking-wider font-extrabold bg-red-50 text-red-600 border border-red-200 px-1.5 py-0.5 rounded">
+                                  High Debt
+                                </span>
+                              )}
+                              {isHighValue && (
+                                <span className="text-[9px] uppercase tracking-wider font-extrabold bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded">
+                                  High Value
+                                </span>
+                              )}
+                              {isLoyal && (
+                                <span className="text-[9px] uppercase tracking-wider font-extrabold bg-purple-50 text-purple-700 border border-purple-200 px-1.5 py-0.5 rounded">
+                                  Loyal Patron
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Phone */}
+                          <td className="px-5 py-3.5">
+                            <div className="flex items-center gap-2">
+                              {customer.phone ? (
+                                <a
+                                  href={`tel:${customer.phone}`}
+                                  className="text-slate-700 hover:text-blue-600 font-medium hover:underline flex items-center gap-1"
+                                  title="Click to call"
+                                >
+                                  <Phone size={12} className="text-slate-400" />
+                                  {customer.phone}
+                                </a>
+                              ) : (
+                                <span className="text-slate-400">—</span>
+                              )}
+                              {customer.phone && (
+                                <>
+                                  <button
+                                    onClick={(e) => handleCopyPhone(customer.phone, e)}
+                                    className="p-1 min-w-[32px] min-h-[32px] flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                                    title="Copy Phone Number"
+                                  >
+                                    <Copy size={13} />
+                                  </button>
+                                  <a
+                                    href={`https://wa.me/91${customer.phone.replace(/\D/g, "")}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 text-[10px] bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded font-semibold transition-colors"
+                                  >
+                                    <MessageCircle size={11} />
+                                    Chat
+                                  </a>
+                                </>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Debt */}
+                          <td className="px-5 py-3.5 text-right">
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded border text-xs font-bold ${derivedDebt > 0
+                                  ? "bg-red-50 text-red-600 border-red-200"
+                                  : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                }`}
                             >
-                              Profile
-                            </Link>
-                          </div>
-                        </td>
-                      </tr>
+                              {derivedDebt > 0 ? `₹${derivedDebt.toLocaleString()}` : "Clear"}
+                            </span>
+                          </td>
 
-                      {/* ── Expandable Row ─────────────────────────────────── */}
-                      {isExpanded && (
-                        <tr className={`${borderClass} bg-slate-50/30 border-b border-slate-100`}>
-                          <td colSpan={8} className="px-6 py-5">
-                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                          {/* Store Credit */}
+                          <td className="px-5 py-3.5 text-right font-mono text-xs">
+                            {(() => {
+                              const cred = getCustomerCreditBalance(customer.id);
+                              return cred > 0 ? (
+                                <span className="font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
+                                  <Coins size={10} className="text-emerald-600" />
+                                  ₹{cred.toLocaleString()}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 font-medium">₹0</span>
+                              );
+                            })()}
+                          </td>
 
-                              {/* Column 1: Account Overview */}
-                              <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-                                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100">
-                                  <User size={14} className="text-slate-500" />
-                                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Account Overview</h4>
-                                </div>
-                                <div className="space-y-2 text-xs">
-                                  <div className="flex justify-between py-0.5">
-                                    <span className="text-slate-500">Customer Class:</span>
-                                    <span className="font-semibold text-slate-800">
-                                      {isHighValue && isLoyal ? "Premium VIP" : isHighValue ? "Key Account" : isLoyal ? "Regular Patron" : "Standard"}
-                                    </span>
-                                  </div>
-                                  <div className="flex justify-between py-0.5">
-                                    <span className="text-slate-500">Lifetime Value:</span>
-                                    <span className="font-bold text-slate-800">₹{customerTotalSpent.toLocaleString()}</span>
-                                  </div>
-                                  <div className="flex justify-between py-0.5">
-                                    <span className="text-slate-500">Total Visits:</span>
-                                    <span className="font-semibold text-slate-700">{customer.visits}×</span>
-                                  </div>
-                                  <div className="flex justify-between py-0.5">
-                                    <span className="text-slate-500">Avg Spend:</span>
-                                    <span className="font-semibold text-emerald-700">
-                                      ₹{customer.visits > 0 ? Math.round(customerTotalSpent / customer.visits).toLocaleString() : "0"}/visit
-                                    </span>
-                                  </div>
-                                  <div className="flex justify-between py-0.5 border-t border-slate-50 pt-2">
-                                    <span className="text-slate-500">Total Recovered:</span>
-                                    <span className="font-bold text-green-700">
-                                      ₹{totalRecovered.toLocaleString()}
-                                    </span>
-                                  </div>
-                                  <div className="flex justify-between py-0.5">
-                                    <span className="text-slate-500">Still Outstanding:</span>
-                                    <span className={`font-bold ${derivedDebt > 0 ? "text-red-600" : "text-emerald-700"}`}>
-                                      ₹{derivedDebt.toLocaleString()}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
+                          {/* Total spent */}
+                          <td className="px-5 py-3.5 text-right font-semibold text-slate-800 hidden md:table-cell">
+                            ₹{customerTotalSpent.toLocaleString()}
+                          </td>
 
-                              {/* Column 2: Outstanding Invoices */}
-                              <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-                                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100">
-                                  <ReceiptText size={14} className="text-slate-500" />
-                                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Outstanding Invoices</h4>
-                                  {outstandingInvoices.length > 0 && (
-                                    <span className="ml-auto bg-red-50 text-red-600 text-[10px] font-bold px-2 py-0.5 rounded-full border border-red-200">
-                                      {outstandingInvoices.length}
-                                    </span>
-                                  )}
-                                </div>
-                                {outstandingInvoices.length === 0 ? (
-                                  <div className="flex flex-col items-center py-4 text-center">
-                                    <CheckCircle size={24} className="text-emerald-400 mb-2" />
-                                    <p className="text-xs text-emerald-700 font-semibold">All clear!</p>
-                                    <p className="text-[10px] text-slate-400 mt-0.5">No outstanding dues.</p>
-                                  </div>
-                                ) : (
-                                  <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
-                                    {outstandingInvoices.map((inv) => (
-                                      <div
-                                        key={inv.id}
-                                        className="bg-red-50/40 border border-red-100 rounded-lg p-2.5 flex items-center justify-between gap-2"
-                                      >
-                                        <div className="min-w-0">
-                                          <p className="text-[10px] font-bold text-slate-700 font-mono">{inv.invoiceNumber}</p>
-                                          <p className="text-[10px] text-slate-400 mt-0.5">{formatInvoiceDate(inv)}</p>
-                                          <p className="text-[10px] text-red-600 font-bold mt-0.5">
-                                            Due: ₹{getInvoiceOutstanding(inv).toLocaleString()}
-                                          </p>
-                                        </div>
-                                        <button
-                                          onClick={() => openCollectModal(inv, customer.id)}
-                                          className="shrink-0 bg-green-600 hover:bg-green-700 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
-                                        >
-                                          Collect
-                                        </button>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
+                          {/* Visits */}
+                          <td className="px-5 py-3.5 text-center text-slate-700 font-medium hidden lg:table-cell">
+                            {customer.visits}
+                          </td>
 
-                              {/* Column 3: Communication & Actions */}
-                              <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex flex-col justify-between">
-                                <div>
-                                  <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100">
-                                    <History size={14} className="text-slate-500" />
-                                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Engagement Controls</h4>
-                                  </div>
-                                  <div className="space-y-2">
-                                    {customer.phone ? (
-                                      <>
-                                        <a
-                                          href={`https://wa.me/91${customer.phone}?text=Dear%20${encodeURIComponent(customer.name)},%20this%20is%20a%20reminder%20regarding%20your%20outstanding%20due%20of%20%E2%82%B9${derivedDebt}%20at%20AutoVault.`}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="w-full flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs py-2 px-3 rounded-lg font-semibold transition-colors"
-                                        >
-                                          <MessageCircle size={13} className="text-green-600" />
-                                          Send WhatsApp Reminder
-                                        </a>
-                                        <a
-                                          href={`tel:${customer.phone}`}
-                                          className="w-full flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs py-2 px-3 rounded-lg font-semibold transition-colors"
-                                        >
-                                          <PhoneCall size={13} className="text-blue-600" />
-                                          Call {customer.phone}
-                                        </a>
-                                      </>
-                                    ) : (
-                                      <p className="text-xs text-slate-400 italic">No contact available.</p>
-                                    )}
-                                    <Link
-                                      href={`/customers/${customer.id}`}
-                                      className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-700 text-white text-xs py-2.5 px-3 rounded-lg font-semibold transition-colors shadow-sm"
-                                    >
-                                      <Plus size={13} />
-                                      View Full Profile
-                                    </Link>
-                                  </div>
-                                </div>
-                                <div className="text-[10px] text-slate-400 mt-4 pt-2 border-t border-slate-50 italic">
-                                  {derivedDebt > 0
-                                    ? `⚠ ₹${derivedDebt.toLocaleString()} due — collect payment above.`
-                                    : "✅ Account in healthy standing."}
-                                </div>
-                              </div>
+                          {/* Last visit */}
+                          <td className="px-5 py-3.5 text-slate-500 font-medium hidden lg:table-cell">
+                            {customer.lastVisit || "—"}
+                          </td>
 
+                          {/* Actions */}
+                          <td className="px-5 py-3.5 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {derivedDebt > 0 && (
+                                <button
+                                  onClick={() => openLumpSumModal(customer, derivedDebt)}
+                                  className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg transition-colors font-bold cursor-pointer inline-flex items-center gap-1 shadow-xs"
+                                  title="Collect Customer Debt (FIFO Auto-Apply)"
+                                >
+                                  <Wallet size={12} />
+                                  Collect Debt
+                                </button>
+                              )}
+                              <button
+                                onClick={() => openEditModal(customer)}
+                                className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg transition-colors font-semibold cursor-pointer inline-flex items-center gap-1"
+                                title="Edit Customer"
+                              >
+                                <Pencil size={12} />
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => setExpandedCustomerId(isExpanded ? null : customer.id)}
+                                className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg transition-colors font-semibold cursor-pointer"
+                              >
+                                Ledger
+                              </button>
+                              <Link
+                                href={`/customers/${customer.id}`}
+                                className="bg-slate-900 hover:bg-slate-700 text-white text-xs px-3 py-1.5 rounded-lg transition-colors font-semibold inline-block"
+                              >
+                                Profile
+                              </Link>
                             </div>
                           </td>
                         </tr>
+
+                        {/* ── Expandable Row ─────────────────────────────────── */}
+                        {isExpanded && (
+                          <tr className={`${borderClass} bg-slate-50/30 border-b border-slate-100`}>
+                            <td colSpan={9} className="px-6 py-5">
+                              <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+
+                                {/* Column 1: Account Overview */}
+                                <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+                                  <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100">
+                                    <User size={14} className="text-slate-500" />
+                                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Account Overview</h4>
+                                  </div>
+                                  <div className="space-y-2 text-xs">
+                                    <div className="flex justify-between py-0.5">
+                                      <span className="text-slate-500">Customer Class:</span>
+                                      <span className="font-semibold text-slate-800">
+                                        {isHighValue && isLoyal ? "Premium VIP" : isHighValue ? "Key Account" : isLoyal ? "Regular Patron" : "Standard"}
+                                      </span>
+                                    </div>
+                                    <div className="flex justify-between py-0.5">
+                                      <span className="text-slate-500">Lifetime Value:</span>
+                                      <span className="font-bold text-slate-800">₹{customerTotalSpent.toLocaleString()}</span>
+                                    </div>
+                                    <div className="flex justify-between py-0.5">
+                                      <span className="text-slate-500">Total Visits:</span>
+                                      <span className="font-semibold text-slate-700">{customer.visits}×</span>
+                                    </div>
+                                    <div className="flex justify-between py-0.5">
+                                      <span className="text-slate-500">Avg Spend:</span>
+                                      <span className="font-semibold text-emerald-700">
+                                        ₹{customer.visits > 0 ? Math.round(customerTotalSpent / customer.visits).toLocaleString() : "0"}/visit
+                                      </span>
+                                    </div>
+                                    <div className="flex justify-between py-0.5 border-t border-slate-50 pt-2">
+                                      <span className="text-slate-500">Total Recovered:</span>
+                                      <span className="font-bold text-green-700">
+                                        ₹{totalRecovered.toLocaleString()}
+                                      </span>
+                                    </div>
+                                    <div className="flex justify-between py-0.5">
+                                      <span className="text-slate-500">Still Outstanding:</span>
+                                      <span className={`font-bold ${derivedDebt > 0 ? "text-red-600" : "text-emerald-700"}`}>
+                                        ₹{derivedDebt.toLocaleString()}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Column 2: Outstanding Invoices */}
+                                <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+                                  <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100">
+                                    <ReceiptText size={14} className="text-slate-500" />
+                                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Outstanding Invoices</h4>
+                                    {outstandingInvoices.length > 0 && (
+                                      <span className="ml-auto bg-red-50 text-red-600 text-[10px] font-bold px-2 py-0.5 rounded-full border border-red-200">
+                                        {outstandingInvoices.length}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {outstandingInvoices.length === 0 ? (
+                                    <div className="flex flex-col items-center py-4 text-center">
+                                      <CheckCircle size={24} className="text-emerald-400 mb-2" />
+                                      <p className="text-xs text-emerald-700 font-semibold">All clear!</p>
+                                      <p className="text-[10px] text-slate-400 mt-0.5">No outstanding dues.</p>
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                                      {outstandingInvoices.map((inv) => (
+                                        <div
+                                          key={inv.id}
+                                          className="bg-red-50/40 border border-red-100 rounded-lg p-2.5 flex items-center justify-between gap-2"
+                                        >
+                                          <div className="min-w-0">
+                                            <p className="text-[10px] font-bold text-slate-700 font-mono">{inv.invoiceNumber}</p>
+                                            <p className="text-[10px] text-slate-400 mt-0.5">{formatInvoiceDate(inv)}</p>
+                                            <p className="text-[10px] text-red-600 font-bold mt-0.5">
+                                              Due: ₹{getInvoiceOutstanding(inv).toLocaleString()}
+                                            </p>
+                                          </div>
+                                          <button
+                                            onClick={() => openCollectModal(inv, customer.id)}
+                                            className="shrink-0 bg-green-600 hover:bg-green-700 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                                          >
+                                            Collect
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Column 3: Communication & Actions */}
+                                <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex flex-col justify-between">
+                                  <div>
+                                    <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100">
+                                      <History size={14} className="text-slate-500" />
+                                      <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Engagement Controls</h4>
+                                    </div>
+                                    <div className="space-y-2">
+                                      {customer.phone ? (
+                                        <>
+                                          <a
+                                            href={`https://wa.me/91${customer.phone.replace(/\D/g, "")}?text=Dear%20${encodeURIComponent(customer.name)},%20this%20is%20a%20reminder%20regarding%20your%20outstanding%20due%20of%20%E2%82%B9${derivedDebt}%20at%20AutoVault.`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="w-full flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs py-2 px-3 rounded-lg font-semibold transition-colors"
+                                          >
+                                            <MessageCircle size={13} className="text-green-600" />
+                                            Send WhatsApp Reminder
+                                          </a>
+                                          <a
+                                            href={`tel:${customer.phone}`}
+                                            className="w-full flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs py-2 px-3 rounded-lg font-semibold transition-colors"
+                                          >
+                                            <PhoneCall size={13} className="text-blue-600" />
+                                            Call {customer.phone}
+                                          </a>
+                                        </>
+                                      ) : (
+                                        <p className="text-xs text-slate-400 italic">No contact available.</p>
+                                      )}
+                                      <Link
+                                        href={`/customers/${customer.id}`}
+                                        className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-700 text-white text-xs py-2.5 px-3 rounded-lg font-semibold transition-colors shadow-sm"
+                                      >
+                                        <Plus size={13} />
+                                        View Full Profile
+                                      </Link>
+                                    </div>
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 mt-4 pt-2 border-t border-slate-50 italic">
+                                    {derivedDebt > 0
+                                      ? `⚠ ₹${derivedDebt.toLocaleString()} due — collect payment above.`
+                                      : "✅ Account in healthy standing."}
+                                  </div>
+                                </div>
+
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Dedicated Mobile Customer Cards (<768px) */}
+            <div className="md:hidden divide-y divide-slate-100">
+              {filtered.map((customer) => {
+                const derivedDebt = stats.debtByCustomer[customer.id] ?? 0;
+                const isExpanded = expandedCustomerId === customer.id;
+                const isHighDebt = derivedDebt >= HIGH_DEBT_THRESHOLD;
+                const isPartial = derivedDebt > 0 && derivedDebt < HIGH_DEBT_THRESHOLD;
+                const customerTotalSpent = calculateRevenue(state.invoices, state.salesReturns, undefined, customer.id);
+                const isHighValue = customerTotalSpent >= 15000;
+                const isLoyal = customer.visits >= 5;
+                const cred = getCustomerCreditBalance(customer.id);
+                const cleanPhone = customer.phone ? customer.phone.replace(/\D/g, "") : "";
+
+                return (
+                  <div key={customer.id} className="p-4 space-y-3 hover:bg-slate-50/50 transition-colors">
+                    {/* Top Row: Name & Badges */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <Link href={`/customers/${customer.id}`} className="font-bold text-slate-900 text-base hover:text-blue-600 transition-colors truncate block">
+                          {customer.name}
+                        </Link>
+                        <div className="flex flex-wrap gap-1.5 mt-1">
+                          {isHighDebt && (
+                            <span className="text-[10px] uppercase tracking-wider font-extrabold bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-md">
+                              High Debt
+                            </span>
+                          )}
+                          {isPartial && (
+                            <span className="text-[10px] uppercase tracking-wider font-extrabold bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-md">
+                              Partial Debt
+                            </span>
+                          )}
+                          {!isHighDebt && !isPartial && (
+                            <span className="text-[10px] uppercase tracking-wider font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md">
+                              Clear
+                            </span>
+                          )}
+                          {cred > 0 && (
+                            <span className="text-[10px] uppercase tracking-wider font-extrabold bg-purple-50 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-md flex items-center gap-1">
+                              <Coins size={10} /> ₹{cred.toLocaleString()} Credit
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setExpandedCustomerId(isExpanded ? null : customer.id)}
+                        className="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer shrink-0"
+                        title="Toggle Overview"
+                      >
+                        {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                      </button>
+                    </div>
+
+                    {/* Second Row: Phone & Actions */}
+                    <div className="flex items-center justify-between gap-2 text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                      {customer.phone ? (
+                        <a
+                          href={`tel:${customer.phone}`}
+                          className="font-medium text-slate-800 hover:text-blue-600 flex items-center gap-1.5 font-mono"
+                        >
+                          <Phone size={13} className="text-slate-500" />
+                          <span>{customer.phone}</span>
+                        </a>
+                      ) : (
+                        <span className="text-slate-400 italic">No phone recorded</span>
                       )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                      {customer.phone && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={(e) => handleCopyPhone(customer.phone, e)}
+                            className="min-w-[44px] min-h-[44px] p-2 flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                            title="Copy Phone Number"
+                          >
+                            <Copy size={15} />
+                          </button>
+                          <a
+                            href={`https://wa.me/91${cleanPhone}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="min-w-[44px] min-h-[44px] px-3 flex items-center justify-center gap-1 text-xs bg-green-500 hover:bg-green-600 text-white rounded-lg font-semibold transition-colors cursor-pointer shadow-xs"
+                            title="WhatsApp"
+                          >
+                            <MessageCircle size={14} />
+                          </a>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Third Row: Debt & Credit */}
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="bg-red-50/60 border border-red-100 p-2.5 rounded-xl">
+                        <span className="text-[10px] uppercase font-bold text-red-600 block">Outstanding Debt</span>
+                        <span className={`font-mono font-bold text-sm ${derivedDebt > 0 ? "text-red-700" : "text-emerald-700"}`}>
+                          {derivedDebt > 0 ? `₹${derivedDebt.toLocaleString()}` : "₹0 (Clear)"}
+                        </span>
+                      </div>
+                      <div className="bg-emerald-50/60 border border-emerald-100 p-2.5 rounded-xl">
+                        <span className="text-[10px] uppercase font-bold text-emerald-700 block">Store Credit</span>
+                        <span className="font-mono font-bold text-sm text-emerald-800">
+                          ₹{cred.toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Fourth Row: Spend & Last Visit */}
+                    <div className="flex items-center justify-between text-xs text-slate-500 px-1 pt-1">
+                      <div>
+                        <span>Total Spent: </span>
+                        <span className="font-bold text-slate-800 font-mono">₹{customerTotalSpent.toLocaleString()}</span>
+                      </div>
+                      <div>
+                        <span>Last Visit: </span>
+                        <span className="font-medium text-slate-700">{customer.lastVisit || "—"}</span>
+                      </div>
+                    </div>
+
+                    {/* Bottom Row: Touch-friendly action buttons (min 44px) */}
+                    <div className="flex items-center gap-2 pt-1">
+                      <Link
+                        href={`/customers/${customer.id}`}
+                        className="flex-1 min-h-[44px] bg-navy-950 hover:bg-navy-800 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+                      >
+                        Open Profile
+                      </Link>
+
+                      {customer.phone && (
+                        <a
+                          href={`tel:${customer.phone}`}
+                          className="min-h-[44px] px-3.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold rounded-xl flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                          title="Call Customer"
+                        >
+                          <PhoneCall size={14} />
+                          Call
+                        </a>
+                      )}
+
+                      {derivedDebt > 0 && (
+                        <button
+                          onClick={() => openLumpSumModal(customer, derivedDebt)}
+                          className="min-h-[44px] px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1 transition-colors cursor-pointer shadow-xs"
+                          title="Collect Debt"
+                        >
+                          <Wallet size={14} />
+                          Collect
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => openEditModal(customer)}
+                        className="min-h-[44px] min-w-[44px] p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl flex items-center justify-center transition-colors cursor-pointer"
+                        title="Edit Profile"
+                      >
+                        <Pencil size={15} />
+                      </button>
+                    </div>
+
+                    {/* Expandable Overview on Mobile */}
+                    {isExpanded && (
+                      <div className="mt-3 pt-3 border-t border-slate-200 text-xs space-y-2 bg-slate-50/70 p-3 rounded-xl">
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Total Visits:</span>
+                          <span className="font-semibold">{customer.visits}×</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Customer Class:</span>
+                          <span className="font-semibold">{isHighValue && isLoyal ? "VIP" : isHighValue ? "Key Account" : isLoyal ? "Regular Patron" : "Standard"}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Open Dues:</span>
+                          <span className="font-semibold text-red-600">{getCustomerOutstandingInvoices(customer.id).length} invoice(s)</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
 
@@ -790,7 +999,7 @@ export default function CustomersPage() {
       ─────────────────────────────────────────────────────────────────────── */}
       {collectInvoice && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
             {/* Header */}
             <div className="flex items-center justify-between p-5 border-b border-slate-200">
               <div>
@@ -944,7 +1153,7 @@ export default function CustomersPage() {
       {/* ── Edit Customer Modal ──────────────────────────────────────────────── */}
       {editingCustomer && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-slate-50/50">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center text-white">
@@ -1037,7 +1246,7 @@ export default function CustomersPage() {
 
         return (
           <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
               <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-slate-50/50">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white">

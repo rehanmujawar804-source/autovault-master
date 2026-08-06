@@ -168,7 +168,14 @@ export interface StockMovement {
 // ── Invoice ───────────────────────────────────
 
 export type PaymentMethod = "Cash" | "UPI" | "Card";
-export type PaymentStatus = "Paid" | "Partial" | "Debt";
+export type PaymentStatus =
+  | "Paid"
+  | "Partial"
+  | "Debt"
+  | "Partially Returned"
+  | "Fully Returned"
+  | "Refunded"
+  | "Voided";
 
 export interface InvoiceItem {
   id?: string;          // optional unique ID per line item
@@ -182,6 +189,7 @@ export interface InvoiceItem {
 
 export interface InvoiceShopSnapshot {
   shopName?: string;
+  ownerName?: string;
   phone?: string;
   address?: string;
   gstNumber?: string;
@@ -279,6 +287,7 @@ export interface CustomerCreditTransaction {
 
 export interface DebtPayment {
   id: string;
+  receiptNumber?: string; // Sequential identifier e.g. PAY-000001
   customerId: string;
   invoiceId: string;   // always linked to a specific invoice
   amount: number;
@@ -347,6 +356,7 @@ export interface FinanceTransaction {
   type: "Income" | "Expense";
   category: FinanceCategory;
   referenceId: string;        // Purchase ID, Invoice ID, or Payment ID
+  reversalOf?: string;        // Reference to original FinanceTransaction ID
   supplierId?: string;
   customerId?: string;
   amount: number;
@@ -438,6 +448,7 @@ export interface AppState {
   purchaseOrderCounter?: number;
   salesReturns?: SalesReturn[];
   salesReturnCounter?: number;
+  paymentReceiptCounter?: number;
   customerCreditTransactions?: CustomerCreditTransaction[];
 }
 
@@ -474,7 +485,9 @@ export interface SalesReturn {
   items: SalesReturnItem[];
   totalRefund: number;
   status: SalesReturnStatus;
-  debtAdjusted?: number;          // Amount of refund used to reduce open invoice due
+  cashRefunded?: number;          // Cash actually refunded to customer
+  debtCancelled?: number;         // Debt cancelled / reduced on invoice
+  debtAdjusted?: number;          // Amount of refund used to reduce open invoice due (alias/legacy)
   creditCreated?: number;         // Amount of refund issued as Customer Store Credit
   // Exchange properties
   exchangeItems?: ExchangeItem[];

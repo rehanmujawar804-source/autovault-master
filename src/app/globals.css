@@ -52,12 +52,14 @@ table {
   box-shadow: 0 0 0 2px #f5c518;
 }
 
-/* Scrollbar hide utility for clean sidebar navigation */
-.scrollbar-hide {
+/* Scrollbar hide utility for clean sidebar navigation and horizontal scroll chips */
+.scrollbar-hide,
+.no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
-.scrollbar-hide::-webkit-scrollbar {
+.scrollbar-hide::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar {
   display: none;
 }
 
@@ -126,30 +128,49 @@ html.dark select {
   border-color: #273b5c !important;
 }
 
-/* MANDATORY SAFETY RULE: Printable Invoice ALWAYS stays crisp white paper in Dark Mode */
+/* MANDATORY SAFETY RULE: Printable Invoice & Receipt ALWAYS stay crisp white paper in Dark Mode */
 html.dark #invoice-print,
-html.dark #invoice-print * {
+html.dark #invoice-print *,
+html.dark #invoice-print-preview,
+html.dark #invoice-print-preview *,
+html.dark #receipt-print,
+html.dark #receipt-print * {
   color: #0f172a !important;
 }
 
-html.dark #invoice-print {
+html.dark #invoice-print,
+html.dark #invoice-print-preview,
+html.dark #receipt-print {
   background-color: #ffffff !important;
   border-color: #0a121f !important;
 }
 
 html.dark #invoice-print .bg-slate-50\/70,
 html.dark #invoice-print .bg-slate-50,
-html.dark #invoice-print .bg-slate-100\/80 {
+html.dark #invoice-print .bg-slate-100\/80,
+html.dark #invoice-print-preview .bg-slate-50\/70,
+html.dark #invoice-print-preview .bg-slate-50,
+html.dark #invoice-print-preview .bg-slate-100\/80,
+html.dark #receipt-print .bg-slate-50,
+html.dark #receipt-print .bg-slate-100 {
   background-color: #f8fafc !important;
 }
 
 html.dark #invoice-print .text-slate-400,
-html.dark #invoice-print .text-slate-500 {
+html.dark #invoice-print .text-slate-500,
+html.dark #invoice-print-preview .text-slate-400,
+html.dark #invoice-print-preview .text-slate-500,
+html.dark #receipt-print .text-slate-400,
+html.dark #receipt-print .text-slate-500 {
   color: #64748b !important;
 }
 
 html.dark #invoice-print .text-slate-800,
-html.dark #invoice-print .text-navy-950 {
+html.dark #invoice-print .text-navy-950,
+html.dark #invoice-print-preview .text-slate-800,
+html.dark #invoice-print-preview .text-navy-950,
+html.dark #receipt-print .text-slate-800,
+html.dark #receipt-print .text-navy-950 {
   color: #0a121f !important;
 }
 
@@ -199,10 +220,12 @@ html.dark #invoice-print .text-navy-950 {
     print-color-adjust: exact !important;
   }
 
-  /* Printable receipt container styling */
-  #invoice-print {
+  /* Printable invoice & receipt container styling */
+  #invoice-print,
+  #invoice-print-preview,
+  #receipt-print {
     border: 4px double #0a121f !important;
-    padding: 24px !important;
+    padding: 12px 16px !important;
     margin: 0 !important;
     width: 100% !important;
     max-width: 100% !important;
@@ -212,3 +235,4 @@ html.dark #invoice-print .text-navy-950 {
     border-radius: 0 !important;
   }
 }
+

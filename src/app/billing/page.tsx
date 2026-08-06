@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import type { Product, Invoice, CartItem, PaymentMethod, PaymentStatus, HoldBill } from "@/types";
-import PrintableInvoice from "@/components/PrintableInvoice";
+import PrintableInvoice, { applyDynamicPrintPageStyle } from "@/components/PrintableInvoice";
 import { toLocalDateStr, formatInvoiceDate } from "@/lib/dateUtils";
 import { isFitmentMatch } from "@/lib/fitmentUtils";
 import { SearchableSelect } from "@/components/SearchableSelect";
@@ -599,6 +599,7 @@ export default function BillingPage() {
       billedBy,
       shopSnapshot: shopSettings ? {
         shopName: shopSettings.shopName,
+        ownerName: shopSettings.ownerName,
         phone: shopSettings.phone,
         address: shopSettings.address,
         gstNumber: shopSettings.gstNumber,
@@ -1933,13 +1934,29 @@ const METHOD_STYLES: Record<string, string> = {
 };
 
 function InvoiceReceipt({ invoice, onNewBill, shopSettings }: { invoice: Invoice; onNewBill: () => void; shopSettings?: any }) {
-  function handlePrint() { window.print(); }
+  function handlePrint() {
+    applyDynamicPrintPageStyle("A4");
+    window.print();
+  }
 
   function handleWhatsApp() {
     if (!invoice.customerPhone) { alert("No customer phone number to send to."); return; }
-    const lines = invoice.items
+    const cleanPhone = invoice.customerPhone.replace(/\D/g, "");
+    const MAX_ITEMS = 15;
+    const itemsToShow = invoice.items.slice(0, MAX_ITEMS);
+    const hiddenCount = Math.max(0, invoice.items.length - MAX_ITEMS);
+
+    let lines = itemsToShow
       .map((item) => `• ${item.name} ×${item.quantity} = ₹${(item.price * item.quantity).toLocaleString()}`)
       .join("\n");
+
+    if (hiddenCount > 0) {
+      lines += `\n• ... +${hiddenCount} more items`;
+    }
+
+    const creditApplied = invoice.creditRedeemed || 0;
+    const netPayable = Math.max(0, invoice.total - creditApplied);
+
     const msg =
       `*${invoice.invoiceNumber}*\n` +
       `Date: ${formatInvoiceDate(invoice)}\n` +
@@ -1950,12 +1967,16 @@ function InvoiceReceipt({ invoice, onNewBill, shopSettings }: { invoice: Invoice
       (invoice.discount > 0
         ? `Discount (${invoice.discount}%): −₹${Math.round((invoice.subtotal * invoice.discount) / 100).toLocaleString()}\n`
         : "") +
-      `*Total: ₹${invoice.total.toLocaleString()}*\n` +
-      (invoice.dueAmount > 0 ? `Due: ₹${invoice.dueAmount.toLocaleString()}\n` : "") +
+      (creditApplied > 0
+        ? `Store Credit Applied: −₹${creditApplied.toLocaleString()}\n`
+        : "") +
+      `*Net Payable: ₹${netPayable.toLocaleString()}*\n` +
+      `Paid: ₹${invoice.amountPaid.toLocaleString()}\n` +
+      (invoice.dueAmount > 0 ? `*Due Balance: ₹${invoice.dueAmount.toLocaleString()}*\n` : "") +
       `Payment: ${invoice.paymentMethod} · ${invoice.paymentStatus}\n` +
       (invoice.notes ? `\nNote: ${invoice.notes}\n` : "") +
       `\nThank you! — 7 Star Car Accessories`;
-    window.open(`https://wa.me/91${invoice.customerPhone}?text=${encodeURIComponent(msg)}`, "_blank");
+    window.open(`https://wa.me/91${cleanPhone}?text=${encodeURIComponent(msg)}`, "_blank");
   }
 
   return (

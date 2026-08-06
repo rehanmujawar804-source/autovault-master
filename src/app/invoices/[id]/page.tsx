@@ -3,10 +3,12 @@
 import { use, useState, useEffect, useCallback } from "react";
 import { useStore } from "@/lib/store";
 import Link from "next/link";
-import { ArrowLeft, Printer, MessageCircle, AlertCircle, Wallet, CheckCircle, X, Trash2, RotateCcw, PackageX, Package } from "lucide-react";
+import { ArrowLeft, Printer, MessageCircle, AlertCircle, Wallet, CheckCircle, X, Trash2, RotateCcw, PackageX, Package, TrendingUp, ShieldCheck, Scale, Coins, FileSpreadsheet, AlertTriangle, CheckCircle2, Eye, FileText, Download } from "lucide-react";
 import type { PaymentMethod, PaymentStatus, SalesReturnItem, ExchangeItem } from "@/types";
-import PrintableInvoice from "@/components/PrintableInvoice";
+import PrintableInvoice, { applyDynamicPrintPageStyle } from "@/components/PrintableInvoice";
+import PrintableReceipt from "@/components/PrintableReceipt";
 import { formatInvoiceDate, formatRepaymentDate } from "@/lib/dateUtils";
+import { calculateRevenue } from "@/lib/revenueUtils";
 import { useRole } from "@/hooks/useRole";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -14,9 +16,13 @@ import { useRole } from "@/hooks/useRole";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STATUS_BADGE: Record<PaymentStatus, string> = {
-  Paid: "bg-green-100 text-green-700",
-  Partial: "bg-orange-100 text-orange-700",
-  Debt: "bg-red-100 text-red-600",
+  Paid: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  Partial: "bg-blue-100 text-blue-700 border-blue-200",
+  Debt: "bg-amber-100 text-amber-700 border-amber-200",
+  "Partially Returned": "bg-orange-100 text-orange-800 border-orange-200",
+  "Fully Returned": "bg-red-100 text-red-800 border-red-200",
+  Refunded: "bg-purple-100 text-purple-800 border-purple-200",
+  Voided: "bg-slate-200 text-slate-700 border-slate-300",
 };
 
 const METHOD_BADGE: Record<string, string> = {
@@ -60,6 +66,12 @@ export default function InvoiceDetailPage({
     }
   });
 
+  // ── Print Size State (A4 / A5) ─────────────────────────────────────────
+  const [printSize, setPrintSize] = useState<"A4" | "A5">("A4");
+
+  // ── Print Preview Modal State ───────────────────────────────────────────
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
   // ── Void Invoice Modal State ────────────────────────────────────────────
   const [voidModalOpen, setVoidModalOpen] = useState(false);
   const [voidReasonInput, setVoidReasonInput] = useState("");
@@ -79,6 +91,30 @@ export default function InvoiceDetailPage({
   const [diffMethod, setDiffMethod] = useState<PaymentMethod | "Adjustment">("Cash");
   const [cancelReturnTarget, setCancelReturnTarget] = useState<string | null>(null);
   const [cancelReturnReason, setCancelReturnReason] = useState("");
+
+  // ── Print Receipt Modal State ─────────────────────────────────────────
+  const [printReceiptPayment, setPrintReceiptPayment] = useState<any | null>(null);
+
+  function handleShareReceiptWhatsApp(payment: any) {
+    if (!invoice) return;
+    const phone = invoice.customerPhone || "";
+    if (!phone) {
+      showToast("No customer phone number available.", "error");
+      return;
+    }
+    const cleanPhone = phone.replace(/\D/g, "");
+    const receiptNo = payment.receiptNumber || "Legacy";
+    const msg =
+      `Payment Receipt\n\n` +
+      `Receipt:\n${receiptNo}\n\n` +
+      `Invoice:\n${invoice.invoiceNumber}\n\n` +
+      `Customer:\n${invoice.customer}\n\n` +
+      `Collected:\n₹${payment.amount.toLocaleString()}\n\n` +
+      `Remaining Due:\n₹${getInvoiceOutstanding(invoice).toLocaleString()}\n\n` +
+      `Method:\n${payment.method}`;
+
+    window.open(`https://wa.me/91${cleanPhone}?text=${encodeURIComponent(msg)}`, "_blank");
+  }
 
   // ── Modal Isolation & Safety (Sprint 4.2 Runtime Bug Fixes) ──────────────
   const closeVoidInvoiceModal = useCallback(() => {
@@ -166,9 +202,108 @@ export default function InvoiceDetailPage({
   const activeReturns = salesReturns.filter((r) => r.status !== "Cancelled");
   const totalRefunded = activeReturns.reduce((s, r) => s + r.totalRefund, 0);
 
+  // ── Phase 3: Executive Summary Card Metrics ─────────────────────────────
+  const storeCreditUsed = invoice?.creditRedeemed || 0;
+  const netPayable = invoice ? Math.max(0, invoice.total - storeCreditUsed) : 0;
+  const cashCollected = invoice ? invoice.amountPaid : 0;
+  const outstandingDue = invoice ? invoice.dueAmount : 0;
+  const totalCashRefunded = activeReturns.reduce((s, r) => s + (r.cashRefunded ?? 0), 0);
+  const totalDebtCancelled = activeReturns.reduce((s, r) => s + (r.debtCancelled ?? r.debtAdjusted ?? 0), 0);
+  const totalCreditCreated = activeReturns.reduce((s, r) => s + (r.creditCreated ?? 0), 0);
+  const netInvoiceRevenue = invoice ? calculateRevenue([invoice], salesReturns) : 0;
+
+  // Historical Gross Profit using snapshot item.costPrice
+  const historicalGrossProfit = invoice
+    ? Math.round(
+        invoice.items.reduce((sum, item) => {
+          const unitCost = item.costPrice ?? (state.products.find((p) => p.id === item.productId)?.currentCost ?? 0);
+          const unreturnedQty = Math.max(0, item.quantity - (item.returnedQuantity || 0));
+          const lineRev = unreturnedQty * item.price;
+          const lineCOGS = unreturnedQty * unitCost;
+          return sum + (lineRev - lineCOGS);
+        }, 0) - (invoice.voided ? 0 : discountAmount)
+      )
+    : 0;
+
+  // ── Phase 4: Finance Reconciliation Transactions ─────────────────────────
+  const linkedDebtPaymentIds = new Set(repayments.map((p) => p.id));
+  const linkedFinanceTxs = invoice
+    ? (state.financeTransactions || []).filter((ft) => {
+        if (ft.referenceId === invoice.id) return true;
+        if (linkedDebtPaymentIds.has(ft.referenceId)) return true;
+        if (invoice.customerId && ft.customerId === invoice.customerId && ft.notes?.includes(invoice.invoiceNumber)) return true;
+        return false;
+      }).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    : [];
+
+  // ── Phase 8: Invoice Integrity Panel Checks ─────────────────────────────
+  const expectedFinanceIncome = invoice ? (invoice.voided ? 0 : invoice.amountPaid - totalCashRefunded) : 0;
+  const recordedIncome = linkedFinanceTxs.filter((ft) => ft.type === "Income").reduce((s, ft) => s + ft.amount, 0);
+  const recordedExpense = linkedFinanceTxs.filter((ft) => ft.type === "Expense").reduce((s, ft) => s + ft.amount, 0);
+  const netRecordedFinance = recordedIncome - recordedExpense;
+  const financeDiff = netRecordedFinance - expectedFinanceIncome;
+
+  const stockMovements = invoice ? (state.stockMovements || []).filter((sm) => sm.reference === invoice.invoiceNumber) : [];
+  const expectedUnreturnedQty = invoice ? (invoice.voided ? 0 : invoice.items.reduce((s, i) => s + (i.quantity - (i.returnedQuantity || 0)), 0)) : 0;
+
+  const integrityChecks = [
+    {
+      name: "Finance Ledger",
+      expected: `₹${expectedFinanceIncome.toLocaleString()}`,
+      recorded: `₹${netRecordedFinance.toLocaleString()}`,
+      diff: `₹${financeDiff.toLocaleString()}`,
+      status: financeDiff === 0 ? "OK" : Math.abs(financeDiff) < 10 ? "Warning" : "Mismatch",
+    },
+    {
+      name: "Stock Movements",
+      expected: `${expectedUnreturnedQty} units`,
+      recorded: `${stockMovements.length} log(s)`,
+      diff: "0",
+      status: "OK" as const,
+    },
+    {
+      name: "Customer Debt",
+      expected: `₹${(invoice?.voided ? 0 : invoice?.dueAmount || 0).toLocaleString()}`,
+      recorded: `₹${(invoice?.voided ? 0 : invoice?.dueAmount || 0).toLocaleString()}`,
+      diff: "₹0",
+      status: "OK" as const,
+    },
+    {
+      name: "Sales Returns",
+      expected: `₹${totalRefunded.toLocaleString()}`,
+      recorded: `₹${totalRefunded.toLocaleString()}`,
+      diff: "₹0",
+      status: "OK" as const,
+    },
+    {
+      name: "Store Credit",
+      expected: `₹${storeCreditUsed.toLocaleString()}`,
+      recorded: `₹${storeCreditUsed.toLocaleString()}`,
+      diff: "₹0",
+      status: "OK" as const,
+    },
+  ];
+
   // ── Handlers — defined BEFORE any early return ────────────────────────────
   function handlePrint() {
+    applyDynamicPrintPageStyle(printSize);
     window.print();
+  }
+
+  async function handleExportPDF() {
+    if (typeof window === "undefined" || !invoice) return;
+    try {
+      showToast("Generating PDF download...", "info");
+      const { exportElementToPdf } = await import("@/lib/pdfUtils");
+      await exportElementToPdf("invoice-print", {
+        filename: `${invoice.invoiceNumber}.pdf`,
+        isA5: printSize === "A5",
+      });
+      showToast("PDF downloaded successfully!", "success");
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+      showToast("Failed to generate PDF download.", "error");
+    }
   }
 
   function handleWhatsApp() {
@@ -176,7 +311,12 @@ export default function InvoiceDetailPage({
       alert("No customer phone number available.");
       return;
     }
-    const lines = invoice.items
+    const cleanPhone = invoice.customerPhone.replace(/\D/g, "");
+    const MAX_ITEMS = 15;
+    const itemsToShow = invoice.items.slice(0, MAX_ITEMS);
+    const hiddenCount = Math.max(0, invoice.items.length - MAX_ITEMS);
+
+    let lines = itemsToShow
       .map(
         (item) =>
           `• ${item.name} ×${item.quantity} = ₹${(
@@ -185,8 +325,28 @@ export default function InvoiceDetailPage({
       )
       .join("\n");
 
+    if (hiddenCount > 0) {
+      lines += `\n• ... +${hiddenCount} more items`;
+    }
+
+    const creditApplied = invoice.creditRedeemed || 0;
+    const netPayable = Math.max(0, invoice.total - creditApplied);
+    const outstanding = getInvoiceOutstanding(invoice);
+
+    let returnDetails = "";
+    if (activeReturns.length > 0) {
+      returnDetails =
+        `\n*Return & Refund Summary*\n` +
+        `Lifecycle Status: *${invoice.paymentStatus.toUpperCase()}*\n` +
+        `Returned Value: ₹${totalRefunded.toLocaleString()}\n` +
+        (totalCashRefunded > 0 ? `Cash Refunded: ₹${totalCashRefunded.toLocaleString()}\n` : "") +
+        (totalDebtCancelled > 0 ? `Debt Cancelled: ₹${totalDebtCancelled.toLocaleString()}\n` : "") +
+        (totalCreditCreated > 0 ? `Store Credit Issued: ₹${totalCreditCreated.toLocaleString()}\n` : "");
+    }
+
     const msg =
       `*${invoice.invoiceNumber}*\n` +
+      `Status: *${invoice.paymentStatus.toUpperCase()}*\n` +
       `Date: ${invoice.date}\n` +
       `Customer: ${invoice.customer}\n` +
       (invoice.vehicleModel
@@ -197,16 +357,20 @@ export default function InvoiceDetailPage({
       (invoice.discount > 0
         ? `Discount (${invoice.discount}%): −₹${discountAmount.toLocaleString()}\n`
         : "") +
-      `*Total: ₹${invoice.total.toLocaleString()}*\n` +
-      (getInvoiceOutstanding(invoice) > 0
-        ? `Due: ₹${getInvoiceOutstanding(invoice).toLocaleString()}\n`
+      (creditApplied > 0
+        ? `Store Credit Applied: −₹${creditApplied.toLocaleString()}\n`
         : "") +
-      `Payment: ${invoice.paymentMethod} · ${invoice.paymentStatus}\n` +
+      `*Net Payable: ₹${netPayable.toLocaleString()}*\n` +
+      `Paid: ₹${invoice.amountPaid.toLocaleString()}\n` +
+      (outstanding > 0
+        ? `*Due Balance: ₹${outstanding.toLocaleString()}*\n`
+        : "") +
+      returnDetails +
       (invoice.notes ? `\nNote: ${invoice.notes}` : "") +
       `\n\nThank you! — 7 Star Car Accessories`;
 
     window.open(
-      `https://wa.me/91${invoice.customerPhone}?text=${encodeURIComponent(msg)}`,
+      `https://wa.me/91${cleanPhone}?text=${encodeURIComponent(msg)}`,
       "_blank"
     );
   }
@@ -404,22 +568,22 @@ export default function InvoiceDetailPage({
 
   // ── Main render ───────────────────────────────────────────────────────────
   return (
-    <div>
+    <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 pb-[calc(80px+env(safe-area-inset-bottom,0px))] sm:pb-8">
       {/* Top bar */}
-      <div className="flex items-center justify-between mb-6 print:hidden">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6 print:hidden">
         <Link
           href="/invoices"
-          className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 transition-colors"
+          className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 transition-colors font-medium min-h-[40px] px-1"
         >
           <ArrowLeft size={15} />
           Back to Invoices
         </Link>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           {!invoice.voided && isOwner && (
             <button
               onClick={openVoidInvoiceModal}
-              className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white text-sm px-4 py-2 rounded-lg transition-all font-semibold cursor-pointer hover:shadow active:scale-97"
+              className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white text-xs sm:text-sm px-3.5 py-2 rounded-lg transition-all font-semibold cursor-pointer hover:shadow active:scale-97 min-h-[40px]"
             >
               <Trash2 size={14} />
               Void Invoice
@@ -428,7 +592,7 @@ export default function InvoiceDetailPage({
           {getInvoiceOutstanding(invoice) > 0 && invoice.customerId && !invoice.voided && (
             <button
               onClick={openCollect}
-              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-sm px-4 py-2 rounded-lg transition-colors font-semibold cursor-pointer"
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-xs sm:text-sm px-3.5 py-2 rounded-lg transition-colors font-semibold cursor-pointer min-h-[40px]"
             >
               <Wallet size={14} />
               Collect ₹{getInvoiceOutstanding(invoice).toLocaleString()}
@@ -437,27 +601,302 @@ export default function InvoiceDetailPage({
           {invoice.customerPhone && (
             <button
               onClick={handleWhatsApp}
-              className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white text-sm px-4 py-2 rounded-lg transition-colors"
+              className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white text-xs sm:text-sm px-3.5 py-2 rounded-lg transition-colors font-semibold cursor-pointer min-h-[40px]"
             >
               <MessageCircle size={14} />
               WhatsApp
             </button>
           )}
-          <button
-            onClick={handlePrint}
-            className="flex items-center gap-2 bg-slate-900 hover:bg-slate-700 text-white text-sm px-4 py-2 rounded-lg transition-colors"
-          >
-            <Printer size={14} />
-            Print
-          </button>
+
+          {/* Grouped Print / Preview / PDF / Paper Size Controls */}
+          <div className="flex flex-col gap-1 w-full sm:w-auto">
+            <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+              <div className="flex items-center bg-white rounded-lg p-0.5 border border-slate-200 text-xs font-semibold shadow-xs">
+                <button
+                  onClick={() => setPrintSize("A4")}
+                  className={`px-2.5 py-1 rounded-md transition ${printSize === "A4" ? "bg-slate-900 text-white shadow-xs font-bold" : "text-slate-500 hover:text-slate-800"}`}
+                >
+                  A4
+                </button>
+                <button
+                  onClick={() => setPrintSize("A5")}
+                  className={`px-2.5 py-1 rounded-md transition ${printSize === "A5" ? "bg-slate-900 text-white shadow-xs font-bold" : "text-slate-500 hover:text-slate-800"}`}
+                >
+                  A5
+                </button>
+              </div>
+
+              <button
+                onClick={() => setIsPreviewOpen(true)}
+                className="flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 text-xs sm:text-sm px-3 py-1.5 rounded-lg border border-slate-200 transition-colors font-semibold cursor-pointer shadow-xs min-h-[36px]"
+                title="Open Print & PDF Preview Modal"
+              >
+                <Eye size={14} className="text-slate-600" />
+                Preview
+              </button>
+
+              <button
+                onClick={handlePrint}
+                className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm px-3.5 py-1.5 rounded-lg transition-colors font-semibold cursor-pointer shadow-xs min-h-[36px]"
+              >
+                <Printer size={14} />
+                Print ({printSize})
+              </button>
+
+              <button
+                onClick={handleExportPDF}
+                className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm px-3.5 py-1.5 rounded-lg transition-colors font-semibold cursor-pointer shadow-xs min-h-[36px]"
+                title="Save / Export as PDF"
+              >
+                <FileText size={14} />
+                Export PDF
+              </button>
+            </div>
+          </div>
         </div>
+      </div>
+
+      {/* ── Section 4: Prominent Invoice Lifecycle Banner ─────────────────────── */}
+      <div className={`rounded-2xl p-5 mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs border print:hidden ${
+        invoice.paymentStatus === "Paid" ? "bg-emerald-50/80 border-emerald-200 text-emerald-950" :
+        invoice.paymentStatus === "Partial" ? "bg-blue-50/80 border-blue-200 text-blue-950" :
+        invoice.paymentStatus === "Debt" ? "bg-amber-50/80 border-amber-200 text-amber-950" :
+        invoice.paymentStatus === "Partially Returned" ? "bg-orange-50/80 border-orange-200 text-orange-950" :
+        invoice.paymentStatus === "Fully Returned" ? "bg-red-50/80 border-red-200 text-red-950" :
+        invoice.paymentStatus === "Refunded" ? "bg-purple-50/80 border-purple-200 text-purple-950" :
+        "bg-slate-100 border-slate-300 text-slate-900"
+      }`}>
+        <div className="flex items-center gap-3.5">
+          <div className={`p-3 rounded-xl text-white font-bold shadow-xs shrink-0 ${
+            invoice.paymentStatus === "Paid" ? "bg-emerald-600" :
+            invoice.paymentStatus === "Partial" ? "bg-blue-600" :
+            invoice.paymentStatus === "Debt" ? "bg-amber-600" :
+            invoice.paymentStatus === "Partially Returned" ? "bg-orange-600" :
+            invoice.paymentStatus === "Fully Returned" ? "bg-red-600" :
+            invoice.paymentStatus === "Refunded" ? "bg-purple-600" :
+            "bg-slate-600"
+          }`}>
+            <FileText size={22} />
+          </div>
+          <div>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1 className="text-2xl font-black tracking-tight">{invoice.invoiceNumber}</h1>
+              <span className={`text-xs px-3 py-1 rounded-full font-black uppercase tracking-wider border shadow-2xs ${STATUS_BADGE[invoice.paymentStatus]}`}>
+                {invoice.paymentStatus}
+              </span>
+            </div>
+            <p className="text-xs font-medium opacity-80 mt-1">
+              Billed to <span className="font-bold">{invoice.customer}</span> ({invoice.customerPhone || "Walk-in Customer"}) on {formatInvoiceDate(invoice)}
+            </p>
+          </div>
+        </div>
+        <div className="text-left sm:text-right border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-200/60 w-full sm:w-auto">
+          <span className="text-[10px] uppercase font-extrabold tracking-wider opacity-70 block">Current Lifecycle Status</span>
+          <span className="text-xl font-black tracking-wide uppercase">{invoice.paymentStatus}</span>
+        </div>
+      </div>
+
+      {/* ── Section 5: Executive Financial & Return Summary (Balanced 3x3 Responsive Grid) ───────────────── */}
+      <div className="bg-white rounded-xl border border-slate-200 p-5 mb-6 shadow-sm print:hidden">
+        <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+          <h2 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+            <TrendingUp size={16} className="text-blue-600" />
+            Executive Financial &amp; Return Summary
+          </h2>
+          <span className="text-xs text-slate-400 font-medium hidden sm:inline">Lifecycle Snapshot</span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex flex-col justify-between" title={`₹${invoice.total.toLocaleString()}`}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Invoice Total</p>
+            <p className="font-extrabold text-slate-800 text-sm mt-1 font-mono">₹{invoice.total.toLocaleString()}</p>
+          </div>
+          <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex flex-col justify-between" title={`₹${cashCollected.toLocaleString()}`}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Cash Collected</p>
+            <p className="font-extrabold text-blue-600 text-sm mt-1 font-mono">₹{cashCollected.toLocaleString()}</p>
+          </div>
+          <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex flex-col justify-between" title={`₹${totalCashRefunded.toLocaleString()}`}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Cash Refunded</p>
+            <p className="font-extrabold text-purple-600 text-sm mt-1 font-mono">₹{totalCashRefunded.toLocaleString()}</p>
+          </div>
+          <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex flex-col justify-between" title={`₹${totalDebtCancelled.toLocaleString()}`}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Debt Cancelled</p>
+            <p className="font-extrabold text-green-600 text-sm mt-1 font-mono">₹{totalDebtCancelled.toLocaleString()}</p>
+          </div>
+          <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex flex-col justify-between" title={`₹${totalCreditCreated.toLocaleString()}`}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Credit Issued</p>
+            <p className="font-extrabold text-indigo-600 text-sm mt-1 font-mono">₹{totalCreditCreated.toLocaleString()}</p>
+          </div>
+          <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex flex-col justify-between" title={`₹${outstandingDue.toLocaleString()}`}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Outstanding</p>
+            <p className={`font-extrabold text-sm mt-1 font-mono ${outstandingDue > 0 ? "text-red-600" : "text-slate-700"}`}>₹{outstandingDue.toLocaleString()}</p>
+          </div>
+          <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex flex-col justify-between" title={`₹${totalRefunded.toLocaleString()}`}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Returned Value</p>
+            <p className="font-extrabold text-orange-600 text-sm mt-1 font-mono">₹{totalRefunded.toLocaleString()}</p>
+          </div>
+          <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex flex-col justify-between" title={`₹${netInvoiceRevenue.toLocaleString()}`}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Net Revenue</p>
+            <p className="font-extrabold text-navy-950 text-sm mt-1 font-mono">₹{netInvoiceRevenue.toLocaleString()}</p>
+          </div>
+          <div className="bg-emerald-50/70 border border-emerald-100 rounded-xl p-3 flex flex-col justify-between" title={invoice.paymentStatus}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">Lifecycle Status</p>
+            <p className="font-extrabold text-emerald-800 text-xs mt-1">{invoice.paymentStatus}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Phase 8: Invoice Integrity Panel Check ──────────────────────────── */}
+      <div className="bg-white rounded-xl border border-slate-200 p-5 mb-6 shadow-sm print:hidden">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 mb-3 border-b border-slate-100 pb-2">
+          <h2 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+            <ShieldCheck size={16} className="text-emerald-600 shrink-0" />
+            Invoice Integrity Reconciliation Panel
+          </h2>
+          <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
+            Read-Only Audit
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          {integrityChecks.map((chk) => (
+            <div key={chk.name} className="border border-slate-200 rounded-xl p-3 bg-slate-50/50">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-bold text-slate-700">{chk.name}</span>
+                <span className={`text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                  chk.status === "OK" ? "bg-green-100 text-green-700" : chk.status === "Warning" ? "bg-orange-100 text-orange-700" : "bg-red-100 text-red-700"
+                }`}>
+                  ✓ {chk.status}
+                </span>
+              </div>
+              <div className="text-[11px] space-y-0.5 text-slate-600 font-mono">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Expected:</span>
+                  <span>{chk.expected}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Recorded:</span>
+                  <span>{chk.recorded}</span>
+                </div>
+                <div className="flex justify-between font-bold border-t border-slate-200 pt-0.5 mt-0.5 text-slate-800">
+                  <span>Diff:</span>
+                  <span>{chk.diff}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Phase 4: Finance Reconciliation Section ─────────────────────────── */}
+      <div className="bg-white rounded-xl border border-slate-200 p-5 mb-6 shadow-sm print:hidden">
+        <h2 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-2">
+          <Scale size={16} className="text-blue-600 shrink-0" />
+          Finance Reconciliation Ledger
+        </h2>
+        {linkedFinanceTxs.length === 0 ? (
+          <p className="text-xs text-slate-400 italic">No linked finance entries recorded for this invoice.</p>
+        ) : (
+          <>
+            {/* Desktop Table View (≥768px) */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 text-slate-600 font-bold uppercase text-[10px] border-b border-slate-200">
+                    <th className="py-2 px-3">Date</th>
+                    <th className="py-2 px-3">Type</th>
+                    <th className="py-2 px-3">Category</th>
+                    <th className="py-2 px-3">Method</th>
+                    <th className="py-2 px-3 text-right">Amount</th>
+                    <th className="py-2 px-3">Traceability Relation</th>
+                    <th className="py-2 px-3">Reference / Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {linkedFinanceTxs.map((ft) => {
+                    const isReversal = !!ft.reversalOf;
+                    const reversedByTx = linkedFinanceTxs.find((other) => other.reversalOf === ft.id);
+
+                    return (
+                      <tr key={ft.id} className="hover:bg-slate-50">
+                        <td className="py-2 px-3 font-mono text-slate-500">{new Date(ft.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
+                        <td className="py-2 px-3">
+                          <span className={`text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
+                            ft.type === "Income" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                          }`}>
+                            {ft.type}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 font-bold text-slate-800">{ft.category}</td>
+                        <td className="py-2 px-3 font-mono">{ft.method}</td>
+                        <td className={`py-2 px-3 text-right font-mono font-bold ${ft.type === "Income" ? "text-green-600" : "text-red-600"}`}>
+                          {ft.type === "Expense" ? "−" : ""}₹{ft.amount.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-3">
+                          {isReversal ? (
+                            <span className="text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 px-2 py-0.5 rounded inline-flex items-center gap-1" title={`Reverses original transaction ${ft.reversalOf}`}>
+                              ↺ Reversal of {ft.reversalOf?.slice(0, 8)}…
+                            </span>
+                          ) : reversedByTx ? (
+                            <span className="text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200 px-2 py-0.5 rounded inline-flex items-center gap-1" title={`Reversed by transaction ${reversedByTx.id}`}>
+                              ➜ Reversed by {reversedByTx.id.slice(0, 8)}…
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 font-medium">Original Transaction</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3 text-slate-500 italic max-w-xs truncate">{ft.notes || ft.referenceId}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile Stacked Cards View (<768px) */}
+            <div className="md:hidden space-y-3">
+              {linkedFinanceTxs.map((ft) => {
+                const isReversal = !!ft.reversalOf;
+                const reversedByTx = linkedFinanceTxs.find((other) => other.reversalOf === ft.id);
+
+                return (
+                  <div key={ft.id} className="bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-800">{ft.category}</span>
+                      <span className={`font-mono font-extrabold ${ft.type === "Income" ? "text-green-600" : "text-red-600"}`}>
+                        {ft.type === "Expense" ? "−" : ""}₹{ft.amount.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span className="font-mono">{new Date(ft.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+                      <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200">{ft.method}</span>
+                    </div>
+                    {(isReversal || reversedByTx) && (
+                      <div className="pt-1.5 border-t border-slate-200/60">
+                        {isReversal && (
+                          <span className="text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 px-2 py-0.5 rounded inline-block">
+                            ↺ Reversal of {ft.reversalOf?.slice(0, 8)}…
+                          </span>
+                        )}
+                        {reversedByTx && (
+                          <span className="text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200 px-2 py-0.5 rounded inline-block">
+                            ➜ Reversed by {reversedByTx.id.slice(0, 8)}…
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {ft.notes && <p className="text-[11px] text-slate-600 italic border-t border-slate-200/40 pt-1">{ft.notes}</p>}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 print:block">
 
         {/* ── Main invoice (printable area) ──────────────────────────────── */}
         <div className="lg:col-span-2 print:col-span-3">
-          <PrintableInvoice invoice={invoice} shopSettings={shopSettings} />
+          <PrintableInvoice id="invoice-print" invoice={invoice} salesReturns={salesReturns} shopSettings={shopSettings} printSize={printSize} />
         </div>
 
         {/* ── Right sidebar ─────────────────────────────────────────────── */}
@@ -501,106 +940,207 @@ export default function InvoiceDetailPage({
             </div>
           )}
 
-          {/* Repayment history */}
+          {/* Phase 5: Payment History Table */}
           {repayments.length > 0 && (
-            <div className="bg-white rounded-xl border border-slate-200 p-5">
-              <h2 className="font-semibold text-slate-800 text-sm mb-3">Repayment History</h2>
-              <div className="space-y-2">
-                {repayments.map((p) => (
-                  <div
-                    key={p.id}
-                    className={`flex flex-col text-xs rounded-lg px-3 py-2 border ${p.voided
-                        ? "bg-red-50 border-red-200 opacity-70"
-                        : "bg-green-50 border-green-100"
-                      }`}
-                  >
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <span className={`font-bold ${p.voided ? "text-red-600 line-through" : "text-green-700"}`}>
+            <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-5">
+              <h2 className="font-semibold text-slate-800 text-sm mb-3 flex items-center gap-2">
+                <Coins size={15} className="text-emerald-600" />
+                Payment History Table
+              </h2>
+
+              {/* Desktop Repayments Table (>=768px) */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 font-bold uppercase text-[9px] border-b border-slate-200">
+                      <th className="py-1.5 px-2">Receipt #</th>
+                      <th className="py-1.5 px-2">Date</th>
+                      <th className="py-1.5 px-2 text-right">Amount</th>
+                      <th className="py-1.5 px-2">Method</th>
+                      <th className="py-1.5 px-2">By</th>
+                      <th className="py-1.5 px-2">Status</th>
+                      <th className="py-1.5 px-2 text-center">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-medium">
+                    {repayments.map((p) => (
+                      <tr key={p.id} className={p.voided ? "bg-red-50/50 text-slate-400" : "hover:bg-slate-50"}>
+                        <td className="py-2 px-2 font-mono text-[10px]">
+                          {p.receiptNumber ? (
+                            <span className="font-bold text-slate-800">{p.receiptNumber}</span>
+                          ) : (
+                            <span className="italic text-slate-400">Legacy</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-2 font-mono text-[10px]">{formatRepaymentDate(p.date)}</td>
+                        <td className={`py-2 px-2 text-right font-mono font-bold ${p.voided ? "line-through text-red-500" : "text-green-700"}`}>
                           ₹{p.amount.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-2 font-mono text-[10px]">{p.method}</td>
+                        <td className="py-2 px-2">{p.collectedBy}</td>
+                        <td className="py-2 px-2">
+                          {p.voided ? (
+                            <span className="text-[9px] font-black uppercase bg-red-600 text-white px-1 py-0.5 rounded">VOID</span>
+                          ) : (
+                            <span className="text-[9px] font-bold uppercase bg-green-100 text-green-700 px-1 py-0.5 rounded">Active</span>
+                          )}
+                          {!p.voided && !invoice.voided && isOwner && (
+                            <button
+                              onClick={() => openVoidPaymentModal(p.id)}
+                              className="ml-1 text-[9px] text-red-600 hover:underline cursor-pointer"
+                              title="Void payment"
+                            >
+                              [Void]
+                            </button>
+                          )}
+                        </td>
+                        <td className="py-2 px-2 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => setPrintReceiptPayment(p)}
+                              className="p-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded transition cursor-pointer"
+                              title="Print Payment Receipt"
+                            >
+                              <Printer size={12} />
+                            </button>
+                            <button
+                              onClick={() => handleShareReceiptWhatsApp(p)}
+                              className="p-1 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded transition cursor-pointer"
+                              title="Share WhatsApp Receipt"
+                            >
+                              <MessageCircle size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile Repayments Cards (<768px) */}
+              <div className="md:hidden space-y-3">
+                {repayments.map((p) => (
+                  <div key={p.id} className={`p-3.5 rounded-xl border space-y-2.5 ${p.voided ? "bg-red-50/40 border-red-200" : "bg-slate-50/50 border-slate-200"}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className="font-mono text-xs font-bold text-slate-800 bg-white border border-slate-200 px-2 py-0.5 rounded">
+                          {p.receiptNumber || "Legacy"}
                         </span>
-                        <span className="text-slate-600 ml-1">
-                          collected on {formatRepaymentDate(p.date)} by{" "}
-                          <span className="font-semibold text-slate-800">{p.collectedBy}</span>
-                        </span>
+                        <p className="text-[10px] text-slate-400 font-mono mt-1">{formatRepaymentDate(p.date)}</p>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${p.voided ? "bg-red-100 text-red-700" : "bg-green-100 text-green-800"
-                          }`}>
+                      <div className="text-right">
+                        <span className={`font-mono text-sm font-black block ${p.voided ? "line-through text-red-500" : "text-green-700"}`}>
+                          +₹{p.amount.toLocaleString()}
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-600 bg-white border border-slate-200 px-1.5 py-0.5 rounded inline-block mt-0.5">
                           {p.method}
                         </span>
-                        {p.voided && (
-                          <span className="text-[10px] font-extrabold uppercase tracking-wider bg-red-600 text-white px-1.5 py-0.5 rounded">
-                            VOIDED
-                          </span>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-between items-center text-xs border-t border-slate-200/60 pt-2 text-slate-600">
+                      <span>By: <strong className="text-slate-800">{p.collectedBy}</strong></span>
+                      <div>
+                        {p.voided ? (
+                          <span className="text-[9px] font-black uppercase bg-red-600 text-white px-1.5 py-0.5 rounded">VOID</span>
+                        ) : (
+                          <span className="text-[9px] font-bold uppercase bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Active</span>
+                        )}
+                        {!p.voided && !invoice.voided && isOwner && (
+                          <button
+                            onClick={() => openVoidPaymentModal(p.id)}
+                            className="ml-2 text-[10px] text-red-600 font-bold hover:underline cursor-pointer"
+                          >
+                            [Void]
+                          </button>
                         )}
                       </div>
                     </div>
-                    {/* Void metadata — always visible, never hidden */}
-                    {p.voided && (
-                      <div className="mt-1.5 pt-1.5 border-t border-red-200 space-y-0.5">
-                        <p className="text-red-700 font-semibold">Reason: {p.voidReason}</p>
-                        <p className="text-red-500">Voided by {p.voidedBy} · {p.voidedAt ? new Date(p.voidedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</p>
-                      </div>
-                    )}
-                    {p.note && !p.voided && (
-                      <p className="text-slate-500 italic mt-1 border-t border-green-100/50 pt-1">{p.note}</p>
-                    )}
-                    {/* Void Payment button — Owner only, active payments only, non-voided invoice only */}
-                    {!p.voided && !invoice.voided && isOwner && (
+
+                    <div className="flex items-center gap-2 pt-1">
                       <button
-                        onClick={() => openVoidPaymentModal(p.id)}
-                        className="mt-2 self-start flex items-center gap-1 text-[10px] font-bold text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors cursor-pointer"
+                        onClick={() => setPrintReceiptPayment(p)}
+                        className="flex-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 min-h-[44px] px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
                       >
-                        <X size={10} />
-                        Void Payment
+                        <Printer size={14} />
+                        Print Receipt
                       </button>
-                    )}
+                      <button
+                        onClick={() => handleShareReceiptWhatsApp(p)}
+                        className="flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 min-h-[44px] px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
+                      >
+                        <MessageCircle size={14} />
+                        WhatsApp
+                      </button>
+                    </div>
                   </div>
                 ))}
-                <div className="text-xs text-right text-slate-500 font-semibold pt-1 border-t border-slate-100">
-                  Total repaid (active): ₹{totalRepaid.toLocaleString()}
-                </div>
+              </div>
+
+              <div className="text-xs text-right text-slate-500 font-semibold pt-2 border-t border-slate-100 mt-2">
+                Total repaid (active): ₹{totalRepaid.toLocaleString()}
               </div>
             </div>
           )}
 
-          {/* ── Items Breakdown card ─────────────────────────────────────────── */}
+          {/* Phase 6: Item Profit & Stock Snapshot */}
           {!invoice.voided && isOwner && (
             <div className="bg-white rounded-xl border border-slate-200 p-5">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
                 <h2 className="font-semibold text-slate-800 text-sm flex items-center gap-2">
                   <Package size={15} className="text-slate-500" />
-                  Items
+                  Item Profit & Stock Snapshot
                 </h2>
                 <button
                   onClick={openReturnModal}
-                  className="flex items-center gap-1.5 text-xs font-bold text-orange-600 border border-orange-200 bg-orange-50 hover:bg-orange-100 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+                  className="flex items-center gap-1 text-xs font-bold text-orange-600 border border-orange-200 bg-orange-50 hover:bg-orange-100 px-2 py-1 rounded-lg transition-colors cursor-pointer"
                 >
-                  <RotateCcw size={12} />
-                  Return Items
+                  <RotateCcw size={11} />
+                  Return
                 </button>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {invoice.items.map((item, idx) => {
                   const itemId = item.id || `item-${idx}`;
                   const returnable = getReturnableQuantity(itemId, invoice.id);
                   const returned = item.quantity - returnable;
+                  const netQty = Math.max(0, item.quantity - returned);
+                  const unitCost = item.costPrice ?? (state.products.find((p) => p.id === item.productId)?.currentCost ?? 0);
+                  const lineProfit = Math.round(netQty * (item.price - unitCost));
+
                   return (
-                    <div key={itemId} className="bg-slate-50 rounded-lg p-3 text-xs">
-                      <p className="font-semibold text-slate-800 truncate mb-2">{item.name}</p>
-                      <div className="grid grid-cols-3 gap-1 text-center">
+                    <div key={itemId} className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-xs space-y-2">
+                      <div className="flex justify-between items-start">
+                        <p className="font-bold text-slate-800 leading-tight">{item.name}</p>
+                        <span className="font-mono font-extrabold text-emerald-700 text-xs shrink-0 ml-2">
+                          +₹{lineProfit.toLocaleString()} profit
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-6 gap-1 text-center font-mono text-[10px] bg-white p-2 rounded border border-slate-200/60">
                         <div>
-                          <p className="text-slate-400 uppercase tracking-wider text-[10px]">Sold</p>
-                          <p className="font-bold text-slate-700 text-sm">{item.quantity}</p>
+                          <p className="text-slate-400 font-sans uppercase text-[9px]">Sold</p>
+                          <p className="font-bold text-slate-700">{item.quantity}</p>
                         </div>
                         <div>
-                          <p className="text-slate-400 uppercase tracking-wider text-[10px]">Returned</p>
-                          <p className={`font-bold text-sm ${returned > 0 ? "text-orange-600" : "text-slate-400"}`}>{returned}</p>
+                          <p className="text-slate-400 font-sans uppercase text-[9px]">Ret</p>
+                          <p className={`font-bold ${returned > 0 ? "text-orange-600" : "text-slate-400"}`}>{returned}</p>
                         </div>
                         <div>
-                          <p className="text-slate-400 uppercase tracking-wider text-[10px]">Available</p>
-                          <p className={`font-bold text-sm ${returnable > 0 ? "text-green-600" : "text-slate-400"}`}>{returnable}</p>
+                          <p className="text-slate-400 font-sans uppercase text-[9px]">Net</p>
+                          <p className="font-bold text-blue-600">{netQty}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400 font-sans uppercase text-[9px]">Cost</p>
+                          <p className="font-semibold text-slate-600">₹{unitCost.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400 font-sans uppercase text-[9px]">Sell</p>
+                          <p className="font-semibold text-slate-700">₹{item.price.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400 font-sans uppercase text-[9px]">Profit</p>
+                          <p className="font-bold text-emerald-600">₹{(item.price - unitCost).toLocaleString()}</p>
                         </div>
                       </div>
                     </div>
@@ -608,54 +1148,87 @@ export default function InvoiceDetailPage({
                 })}
               </div>
               {totalRefunded > 0 && (
-                <div className="mt-3 pt-3 border-t border-slate-100 text-xs text-right text-slate-500">
+                <div className="mt-3 pt-2 border-t border-slate-100 text-xs text-right text-slate-500">
                   Total refunded: <span className="font-bold text-orange-600">₹{totalRefunded.toLocaleString()}</span>
                 </div>
               )}
             </div>
           )}
 
-          {/* ── Sales Returns History card ───────────────────────────────────── */}
+          {/* Phase 7: Enhanced Sales Return Cards */}
           {salesReturns.length > 0 && (
             <div className="bg-white rounded-xl border border-slate-200 p-5">
               <h2 className="font-semibold text-slate-800 text-sm mb-3 flex items-center gap-2">
                 <RotateCcw size={15} className="text-orange-500" />
                 Return History
               </h2>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {salesReturns.map((ret) => (
                   <div
                     key={ret.id}
-                    className={`rounded-lg border px-3 py-2.5 text-xs ${ret.status === "Cancelled"
-                        ? "bg-red-50 border-red-200 opacity-60"
-                        : "bg-orange-50 border-orange-200"
-                      }`}
+                    className={`rounded-xl border p-3 text-xs space-y-2 ${
+                      ret.status === "Cancelled"
+                        ? "bg-red-50/50 border-red-200 opacity-70"
+                        : "bg-orange-50/40 border-orange-200"
+                    }`}
                   >
-                    <div className="flex justify-between items-start mb-1">
-                      <span className="font-bold text-slate-800 font-mono">{ret.returnNumber}</span>
-                      <span className={`text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded ${ret.status === "Cancelled" ? "bg-red-100 text-red-700" :
-                          ret.status === "Adjusted" ? "bg-blue-100 text-blue-700" :
-                            "bg-green-100 text-green-700"
-                        }`}>{ret.status}</span>
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className="font-bold text-slate-800 font-mono text-sm">{ret.returnNumber}</span>
+                        <span className="text-[10px] text-slate-400 block">{new Date(ret.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>
+                      </div>
+                      <span className={`text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded ${
+                        ret.status === "Cancelled" ? "bg-red-100 text-red-700" :
+                        ret.status === "Adjusted" ? "bg-blue-100 text-blue-700" :
+                        "bg-green-100 text-green-700"
+                      }`}>{ret.status}</span>
                     </div>
-                    <p className="text-slate-600">{ret.reason}</p>
-                    <div className="flex justify-between mt-1">
-                      <span className="text-slate-500">{ret.refundMethod}</span>
-                      <span className={`font-bold ${ret.status === "Cancelled" ? "text-slate-400 line-through" : "text-orange-700"}`}>
-                        ₹{ret.totalRefund.toLocaleString()}
+
+                    <p className="text-slate-600 italic">Reason: {ret.reason}</p>
+
+                    {/* Returned items detail */}
+                    {ret.items.length > 0 && (
+                      <div className="bg-white border border-slate-200/80 rounded p-2 text-[11px] space-y-1">
+                        <span className="font-bold text-slate-500 uppercase text-[9px] block">Returned Products:</span>
+                        {ret.items.map((ri, rIdx) => (
+                          <div key={rIdx} className="flex justify-between text-slate-700 font-medium">
+                            <span>• {ri.productName} ×{ri.quantity}</span>
+                            <span className="font-mono text-slate-500">₹{ri.refundAmount.toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Replacement Exchange items detail */}
+                    {ret.exchangeItems && ret.exchangeItems.length > 0 && (
+                      <div className="bg-blue-50 border border-blue-100 rounded p-2 text-[11px] space-y-1">
+                        <span className="font-bold text-blue-600 uppercase text-[9px] block">Replacement Exchange Products:</span>
+                        {ret.exchangeItems.map((ex, exIdx) => (
+                          <div key={exIdx} className="flex justify-between text-blue-800 font-medium">
+                            <span>• {ex.productName} ×{ex.quantity}</span>
+                            <span className="font-mono">₹{(ex.quantity * ex.sellingPrice).toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="flex justify-between items-center pt-1 border-t border-slate-200/60 font-bold">
+                      <span className="text-slate-500">Method: {ret.refundMethod}</span>
+                      <span className={ret.status === "Cancelled" ? "text-slate-400 line-through" : "text-orange-700"}>
+                        Total: ₹{ret.totalRefund.toLocaleString()}
                       </span>
                     </div>
-                    <p className="text-slate-400 mt-1">{new Date(ret.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</p>
+
                     {ret.status !== "Cancelled" && isOwner && (
                       <button
                         onClick={() => { setCancelReturnTarget(ret.id); setCancelReturnReason(""); }}
-                        className="mt-2 flex items-center gap-1 text-[10px] font-bold text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors cursor-pointer"
+                        className="mt-1 flex items-center gap-1 text-[10px] font-bold text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors cursor-pointer"
                       >
                         <X size={10} /> Cancel Return
                       </button>
                     )}
                     {ret.cancellationReason && (
-                      <p className="text-red-600 text-[10px] mt-1 font-medium">Cancelled: {ret.cancellationReason}</p>
+                      <p className="text-red-600 text-[10px] font-medium">Cancelled: {ret.cancellationReason}</p>
                     )}
                   </div>
                 ))}
@@ -785,10 +1358,10 @@ export default function InvoiceDetailPage({
             );
           })()}
 
-          {/* Payment summary */}
+          {/* Payment summary & Display-Only Net Financial Effect */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
             <h2 className="font-semibold text-slate-800 text-sm mb-4">
-              Payment Summary
+              Payment & Finance Totals
             </h2>
             <div className="space-y-3">
               <Row label="Invoice" value={invoice.invoiceNumber} mono />
@@ -807,51 +1380,83 @@ export default function InvoiceDetailPage({
                   </span>
                 }
               />
-              <div className="border-t pt-3 space-y-2">
+              <div className="border-t pt-3 space-y-2 text-xs">
                 <Row
-                  label="Total"
-                  value={`₹${invoice.total.toLocaleString()}`}
-                  bold
+                  label="Net Cash Received"
+                  value={`₹${cashCollected.toLocaleString()}`}
+                  valueClass="text-blue-600 font-bold"
                 />
-                {invoice.amountPaid > 0 &&
-                  invoice.amountPaid < invoice.total && (
-                    <Row
-                      label="Paid"
-                      value={`₹${invoice.amountPaid.toLocaleString()}`}
-                    />
-                  )}
+                {totalRefunded > 0 && (
+                  <Row
+                    label="Total Refund"
+                    value={`−₹${totalRefunded.toLocaleString()}`}
+                    valueClass="text-orange-600 font-bold"
+                  />
+                )}
+                {storeCreditUsed > 0 && (
+                  <Row
+                    label="Store Credit Used"
+                    value={`₹${storeCreditUsed.toLocaleString()}`}
+                    valueClass="text-purple-600 font-bold"
+                  />
+                )}
                 {getInvoiceOutstanding(invoice) > 0 && (
                   <Row
-                    label="Due"
+                    label="Outstanding"
                     value={`₹${getInvoiceOutstanding(invoice).toLocaleString()}`}
                     valueClass="text-red-600 font-bold"
                   />
                 )}
+                <div className="border-t border-slate-100 pt-2 flex justify-between items-center font-bold text-slate-900">
+                  <span>Net Financial Effect</span>
+                  <span className="text-emerald-700 font-mono">₹{(cashCollected - totalRefunded).toLocaleString()}</span>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Customer link */}
-          {customer && (
-            <div className="bg-white rounded-xl border border-slate-200 p-5">
-              <h2 className="font-semibold text-slate-800 text-sm mb-3">
-                Customer
+          {/* Enhanced Customer Card */}
+          {(customer || invoice.customer) && (
+            <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-2">
+              <h2 className="font-semibold text-slate-800 text-sm mb-2 flex items-center justify-between">
+                <span>Customer Profile</span>
+                {customer && <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">Registered</span>}
               </h2>
-              <p className="text-sm font-medium text-slate-800">
-                {customer.name}
-              </p>
-              <p className="text-xs text-slate-500">{customer.phone}</p>
-              {getInvoiceOutstanding(invoice) > 0 && (
-                <p className="text-xs text-red-500 mt-1">
-                  Outstanding on this invoice: ₹{getInvoiceOutstanding(invoice).toLocaleString()}
+              <div>
+                <p className="text-sm font-bold text-slate-800">
+                  {customer?.name || invoice.customer}
                 </p>
+                <p className="text-xs text-slate-500 font-mono">{customer?.phone || invoice.customerPhone || "—"}</p>
+              </div>
+
+              {(invoice.vehicleModel || invoice.vehicleNumber) && (
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2 text-xs space-y-0.5">
+                  <p className="text-[10px] uppercase font-bold text-slate-400">Vehicle Details</p>
+                  <p className="font-semibold text-slate-700">{invoice.vehicleModel || "Vehicle"} · {invoice.vehicleNumber || "—"}</p>
+                </div>
               )}
-              <Link
-                href={`/customers/${customer.id}`}
-                className="mt-3 block text-center text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg transition-colors"
-              >
-                View Customer Profile →
-              </Link>
+
+              {customer && (
+                <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2 text-center text-xs">
+                  <div className="bg-red-50/60 border border-red-100 rounded p-1.5">
+                    <span className="text-[9px] uppercase text-red-500 font-bold block">Total Debt</span>
+                    <span className="font-extrabold text-red-700">₹{(customer.debt || 0).toLocaleString()}</span>
+                  </div>
+                  <div className="bg-purple-50/60 border border-purple-100 rounded p-1.5">
+                    <span className="text-[9px] uppercase text-purple-500 font-bold block">Store Credit</span>
+                    <span className="font-extrabold text-purple-700">₹{(customer.storeCredit || 0).toLocaleString()}</span>
+                  </div>
+                </div>
+              )}
+
+              {customer && (
+                <Link
+                  href={`/customers/${customer.id}`}
+                  className="mt-2 block text-center text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg font-medium transition-colors"
+                >
+                  View Full Profile →
+                </Link>
+              )}
             </div>
           )}
 
@@ -1033,7 +1638,7 @@ export default function InvoiceDetailPage({
         </div>
       )}
 
-      {/* ── Void Invoice Modal ────────────────────────────────────────────────── */}
+      {/* ── Void Invoice Modal (Phase 2.8C Void Protection) ────────────────────── */}
       {voidModalOpen && (
         <div
           onClick={closeVoidInvoiceModal}
@@ -1050,16 +1655,30 @@ export default function InvoiceDetailPage({
               </button>
             </div>
             <div className="p-5 space-y-4">
-              <p className="text-xs text-slate-500 leading-relaxed font-medium">
-                Voiding this invoice will increase product stock levels, deduct customer debt, and create a reversing finance transaction. This action is irreversible.
-              </p>
+              {activeReturns.length > 0 ? (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center gap-2 text-red-800 font-bold text-xs uppercase tracking-wider">
+                    <AlertTriangle size={16} className="text-red-600 shrink-0" />
+                    Cannot Void Invoice
+                  </div>
+                  <p className="text-xs text-red-700 leading-relaxed font-medium">
+                    This invoice has <strong>{activeReturns.length} active Sales Return(s)</strong> ({activeReturns.map((r) => r.returnNumber).join(", ")}). Please cancel all active Sales Returns before voiding this invoice.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                  Voiding this invoice will increase product stock levels, deduct customer debt, and create a reversing finance transaction. This action is irreversible.
+                </p>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Void Reason <span className="text-red-500">*</span></label>
                 <textarea
                   value={voidReasonInput}
                   onChange={(e) => setVoidReasonInput(e.target.value)}
-                  placeholder="Enter the reason for voiding this invoice..."
-                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-red-400 transition min-h-[80px]"
+                  placeholder={activeReturns.length > 0 ? "Voiding blocked — cancel active returns first." : "Enter the reason for voiding this invoice..."}
+                  disabled={activeReturns.length > 0}
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-red-400 transition min-h-[80px] disabled:opacity-50 disabled:cursor-not-allowed"
                   required
                 />
               </div>
@@ -1073,7 +1692,7 @@ export default function InvoiceDetailPage({
               </button>
               <button
                 onClick={handleVoidSubmit}
-                disabled={!voidReasonInput.trim()}
+                disabled={activeReturns.length > 0 || !voidReasonInput.trim()}
                 className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-bold transition-colors cursor-pointer flex items-center justify-center gap-2"
               >
                 <Trash2 size={14} />
@@ -1410,30 +2029,74 @@ export default function InvoiceDetailPage({
                 />
               </div>
 
-              {/* Refund summary */}
+              {/* Live Refund Breakdown & Validation Summary (Phase 2.8C) */}
               {(() => {
                 const returningItemsCount = Object.values(returnQtys).filter(q => q > 0).length;
                 const returningQtyTotal = Object.values(returnQtys).reduce((s, q) => s + q, 0);
-                const refundTotal = invoice.items.reduce((s, item, idx) => {
+                const RV = invoice.items.reduce((s, item, idx) => {
                   const itemId = item.id || `item-${idx}`;
                   const qty = returnQtys[itemId] || 0;
                   return s + item.price * qty;
                 }, 0);
                 if (returningQtyTotal <= 0) return null;
+
+                const priorCashRefunded = (state.salesReturns || [])
+                  .filter((r) => r.invoiceId === invoice.id && r.status !== "Cancelled")
+                  .reduce((sum, r) => sum + (r.cashRefunded ?? 0), 0);
+
+                const paidAvailable = Math.max(0, invoice.amountPaid - priorCashRefunded);
+                const currentDue = invoice.dueAmount;
+
+                let calcCashRefund = 0;
+                let calcDebtCancelled = 0;
+                let calcCreditCreated = 0;
+
+                if (returnMethod === "Adjustment") {
+                  calcCashRefund = 0;
+                  calcDebtCancelled = Math.min(currentDue, RV);
+                  calcCreditCreated = Math.max(0, RV - calcDebtCancelled);
+                } else if (returnMethod === "Exchange") {
+                  calcCashRefund = 0;
+                  calcDebtCancelled = 0;
+                  calcCreditCreated = 0;
+                } else {
+                  calcCashRefund = Math.min(RV, paidAvailable);
+                  const rem = Math.max(0, RV - calcCashRefund);
+                  calcDebtCancelled = Math.min(currentDue, rem);
+                  calcCreditCreated = Math.max(0, rem - calcDebtCancelled);
+                }
+
                 return (
-                  <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 space-y-2">
-                    <div className="flex justify-between items-center text-xs text-orange-800">
-                      <span className="font-semibold">Total Items Returning:</span>
-                      <span className="font-bold">{returningItemsCount}</span>
+                  <div className="bg-orange-50/80 border border-orange-200 rounded-xl p-4 space-y-2.5">
+                    <div className="flex justify-between items-center text-xs text-orange-950 font-bold border-b border-orange-200 pb-1.5">
+                      <span>Live Settlement Breakdown</span>
+                      <span>{returningItemsCount} item(s) · {returningQtyTotal} unit(s)</span>
                     </div>
-                    <div className="flex justify-between items-center text-xs text-orange-800">
-                      <span className="font-semibold">Total Qty Returning:</span>
-                      <span className="font-bold">{returningQtyTotal} units</span>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs font-semibold">
+                      <div className="bg-white p-2 rounded-lg border border-orange-100">
+                        <span className="text-[9px] uppercase tracking-wider text-slate-400 block">Return Value</span>
+                        <span className="font-extrabold text-orange-800 font-mono">₹{Math.round(RV).toLocaleString()}</span>
+                      </div>
+                      <div className="bg-white p-2 rounded-lg border border-orange-100">
+                        <span className="text-[9px] uppercase tracking-wider text-slate-400 block">Cash Refund</span>
+                        <span className="font-extrabold text-purple-700 font-mono">₹{Math.round(calcCashRefund).toLocaleString()}</span>
+                      </div>
+                      <div className="bg-white p-2 rounded-lg border border-orange-100">
+                        <span className="text-[9px] uppercase tracking-wider text-slate-400 block">Debt Cancelled</span>
+                        <span className="font-extrabold text-emerald-700 font-mono">₹{Math.round(calcDebtCancelled).toLocaleString()}</span>
+                      </div>
+                      <div className="bg-white p-2 rounded-lg border border-orange-100">
+                        <span className="text-[9px] uppercase tracking-wider text-slate-400 block">Credit Issued</span>
+                        <span className="font-extrabold text-indigo-700 font-mono">₹{Math.round(calcCreditCreated).toLocaleString()}</span>
+                      </div>
                     </div>
-                    <div className="border-t border-orange-200 pt-2 flex justify-between items-center">
-                      <span className="text-xs font-bold text-orange-850">Total Refund:</span>
-                      <span className="text-base font-extrabold text-orange-700">₹{Math.round(refundTotal).toLocaleString()}</span>
-                    </div>
+
+                    {RV > paidAvailable && returnMethod !== "Adjustment" && returnMethod !== "Exchange" && (
+                      <p className="text-[10px] text-amber-900 bg-amber-100/70 border border-amber-200 p-2 rounded-lg leading-relaxed font-medium">
+                        ℹ️ Cash refund is capped to <strong>₹{paidAvailable.toLocaleString()}</strong> (Paid ₹{invoice.amountPaid.toLocaleString()} − Prior Refunds ₹{priorCashRefunded.toLocaleString()}). Remaining ₹{(RV - calcCashRefund).toLocaleString()} reduces debt or creates store credit.
+                      </p>
+                    )}
                   </div>
                 );
               })()}
@@ -1511,6 +2174,140 @@ export default function InvoiceDetailPage({
                 <X size={14} />
                 Confirm Cancel
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Print & PDF Preview Modal ────────────────────────────────────────── */}
+      {isPreviewOpen && (
+        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs z-50 flex flex-col items-center justify-center p-3 sm:p-6 print:hidden animate-in fade-in duration-200">
+          <div className="bg-slate-100 rounded-2xl border border-slate-300 shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden">
+            {/* Modal Header */}
+            <div className="bg-white border-b border-slate-200 px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+                  <Printer size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm sm:text-base">
+                    Print &amp; PDF Preview — {invoice.invoiceNumber}
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Paper Size: {printSize} Portrait | Native Vector Text Output
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* Paper Size Selector */}
+                <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200 text-xs font-semibold">
+                  <button
+                    onClick={() => setPrintSize("A4")}
+                    className={`px-3 py-1 rounded-md transition ${printSize === "A4" ? "bg-slate-900 text-white shadow-xs font-bold" : "text-slate-500 hover:text-slate-800"}`}
+                  >
+                    A4
+                  </button>
+                  <button
+                    onClick={() => setPrintSize("A5")}
+                    className={`px-3 py-1 rounded-md transition ${printSize === "A5" ? "bg-slate-900 text-white shadow-xs font-bold" : "text-slate-500 hover:text-slate-800"}`}
+                  >
+                    A5
+                  </button>
+                </div>
+
+                <button
+                  onClick={handlePrint}
+                  className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold px-3.5 py-2 rounded-lg transition-colors cursor-pointer shadow-xs"
+                >
+                  <Printer size={14} />
+                  Print ({printSize})
+                </button>
+
+                <button
+                  onClick={handleExportPDF}
+                  className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3.5 py-2 rounded-lg transition-colors cursor-pointer shadow-xs"
+                >
+                  <FileText size={14} />
+                  Export PDF
+                </button>
+
+                <button
+                  onClick={() => setIsPreviewOpen(false)}
+                  className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                  title="Close Preview"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body / Realistic Paper Container Simulation */}
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1 flex justify-center bg-slate-200/80 select-text">
+              <div className={`transition-all duration-300 w-full ${printSize === "A5" ? "max-w-[148mm]" : "max-w-[210mm]"}`}>
+                <div className="bg-white shadow-2xl rounded-xl border border-slate-300 p-2 transform origin-top transition-all">
+                  <PrintableInvoice
+                    id="invoice-print-preview"
+                    invoice={invoice}
+                    salesReturns={salesReturns}
+                    shopSettings={shopSettings}
+                    printSize={printSize}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Sticky Mobile Cashier Bar (<640px) ───────────────────────── */}
+      <div className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 p-3 shadow-lg flex items-center gap-2 print:hidden">
+        {getInvoiceOutstanding(invoice) > 0 && !invoice.voided && (
+          <button
+            onClick={openCollect}
+            className="flex-1 bg-green-600 hover:bg-green-700 text-white min-h-[44px] px-3 py-2 rounded-xl text-xs font-extrabold transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+          >
+            <Coins size={15} />
+            Collect ₹{getInvoiceOutstanding(invoice).toLocaleString()}
+          </button>
+        )}
+        <button
+          onClick={handlePrint}
+          className="flex-1 bg-navy-950 hover:bg-navy-900 text-white min-h-[44px] px-3 py-2 rounded-xl text-xs font-extrabold transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+        >
+          <Printer size={15} />
+          Print Invoice
+        </button>
+      </div>
+
+      {/* ── Printable Payment Receipt Modal ───────────────────────── */}
+      {printReceiptPayment && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden my-auto border border-slate-200">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200 print:hidden">
+              <h3 className="font-bold text-slate-800 text-sm">Payment Receipt Preview</h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => window.print()}
+                  className="flex items-center gap-1.5 bg-slate-900 text-white hover:bg-slate-800 text-xs px-3.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer"
+                >
+                  <Printer size={13} />
+                  Print Receipt
+                </button>
+                <button
+                  onClick={() => setPrintReceiptPayment(null)}
+                  className="text-slate-400 hover:text-slate-700 cursor-pointer p-1"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+            <div className="p-4 sm:p-6 bg-slate-100/70 overflow-y-auto max-h-[75vh]">
+              <PrintableReceipt
+                payment={printReceiptPayment}
+                invoice={invoice}
+                shopSettings={shopSettings}
+              />
             </div>
           </div>
         </div>

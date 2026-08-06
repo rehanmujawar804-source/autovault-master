@@ -22,17 +22,25 @@ import {
   RotateCcw,
   Pencil,
   Coins,
+  Printer,
+  Copy,
+  PhoneCall,
 } from "lucide-react";
-import type { Invoice, PaymentMethod, PaymentStatus } from "@/types";
+import type { Invoice, PaymentMethod, PaymentStatus, DebtPayment } from "@/types";
+import PrintableReceipt from "@/components/PrintableReceipt";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  STYLE MAPS
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STATUS_BADGE: Record<PaymentStatus, string> = {
-  Paid:    "bg-green-100 text-green-700",
-  Partial: "bg-orange-100 text-orange-700",
-  Debt:    "bg-red-100 text-red-600",
+  Paid: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  Partial: "bg-blue-100 text-blue-700 border-blue-200",
+  Debt: "bg-amber-100 text-amber-700 border-amber-200",
+  "Partially Returned": "bg-orange-100 text-orange-800 border-orange-200",
+  "Fully Returned": "bg-red-100 text-red-800 border-red-200",
+  Refunded: "bg-purple-100 text-purple-800 border-purple-200",
+  Voided: "bg-slate-200 text-slate-700 border-slate-300",
 };
 
 const METHOD_COLORS: Record<PaymentMethod, string> = {
@@ -75,7 +83,7 @@ export default function CustomerProfilePage({
   }, [loading, requireAuth]);
 
   // ── Tab State ───────────────────────────────────────────────────────────────
-  const [activeRightTab, setActiveRightTab] = useState<"invoices" | "credit">("invoices");
+  const [activeRightTab, setActiveRightTab] = useState<"invoices" | "ledger" | "credit">("invoices");
 
   // ── Collect Payment Modal State ────────────────────────────────────────────
   const [collectInvoice, setCollectInvoice] = useState<Invoice | null>(null);
@@ -102,6 +110,31 @@ export default function CustomerProfilePage({
   const [showApplyCreditModal, setShowApplyCreditModal] = useState(false);
   const [applyCreditAmountInput, setApplyCreditAmountInput] = useState("");
   const [applyCreditNotes, setApplyCreditNotes] = useState("");
+
+  // ── Print Receipt Modal State ─────────────────────────────────────────────
+  const [printReceiptPayment, setPrintReceiptPayment] = useState<any | null>(null);
+
+  function handleShareReceiptWhatsApp(p: any) {
+    const inv = state.invoices.find((i) => i.id === p.invoiceId);
+    const phone = customer?.phone || inv?.customerPhone || "";
+    if (!phone) {
+      showToast("No customer phone number available.", "error");
+      return;
+    }
+    const cleanPhone = phone.replace(/\D/g, "");
+    const receiptNo = p.receiptNumber || "Legacy";
+    const due = inv ? getInvoiceOutstanding(inv) : 0;
+    const msg =
+      `Payment Receipt\n\n` +
+      `Receipt:\n${receiptNo}\n\n` +
+      `Invoice:\n${inv?.invoiceNumber || "Invoice"}\n\n` +
+      `Customer:\n${customer?.name || "Customer"}\n\n` +
+      `Collected:\n₹${p.amount.toLocaleString()}\n\n` +
+      `Remaining Due:\n₹${due.toLocaleString()}\n\n` +
+      `Method:\n${p.method}`;
+
+    window.open(`https://wa.me/91${cleanPhone}?text=${encodeURIComponent(msg)}`, "_blank");
+  }
   const [applyCreditBy, setApplyCreditBy] = useState<"Owner" | "Staff" | "">("");
 
   const customer = getCustomerById(id);
@@ -159,7 +192,7 @@ export default function CustomerProfilePage({
   function handleLumpSumSubmit() {
     if (!customer) return;
     if (!lumpSumCollectedBy) {
-      alert("Please select who collected this payment (Owner or Staff).");
+      showToast("Please select who collected this payment (Owner or Staff).", "error");
       return;
     }
     const numAmount = Math.max(0, Number(lumpSumAmountInput) || 0);
@@ -269,6 +302,116 @@ export default function CustomerProfilePage({
     return getCustomerCreditTransactions(customer.id);
   }, [customer, getCustomerCreditTransactions]);
 
+  // ── Phase 2.8C: Chronological Customer Ledger Timeline ──────────────────
+  const chronologicalLedger = useMemo(() => {
+    if (!customer) return [];
+    type LedgerEvent = {
+      id: string;
+      date: string;
+      title: string;
+      type: "Invoice" | "Payment" | "Return" | "Credit";
+      badge: string;
+      badgeColor: string;
+      details: string;
+      reference: string;
+      amount?: number;
+      debtDelta?: number;
+      creditDelta?: number;
+      paymentObj?: DebtPayment;
+    };
+
+    const list: LedgerEvent[] = [];
+
+    // Invoices
+    invoices.forEach((inv) => {
+      list.push({
+        id: `inv-${inv.id}`,
+        date: inv.createdAt || inv.date,
+        title: `Invoice ${inv.invoiceNumber}`,
+        type: "Invoice",
+        badge: inv.voided ? "Voided Invoice" : inv.paymentStatus,
+        badgeColor: inv.voided ? "bg-red-100 text-red-700" : STATUS_BADGE[inv.paymentStatus] || "bg-slate-100 text-slate-700",
+        details: `Billed: ₹${inv.total.toLocaleString()} · Paid POS: ₹${inv.amountPaid.toLocaleString()} · Method: ${inv.paymentMethod}`,
+        reference: inv.invoiceNumber,
+        amount: inv.total,
+        debtDelta: inv.voided ? 0 : inv.dueAmount,
+      });
+    });
+
+    // Debt repayments
+    const custDebtPayments = (state.debtPayments || []).filter(
+      (p) => p.customerId === customer.id || invoices.some((inv) => inv.id === p.invoiceId)
+    );
+    custDebtPayments.forEach((p) => {
+      const targetInv = state.invoices.find((i) => i.id === p.invoiceId);
+      const receiptNo = p.receiptNumber || "Legacy";
+      list.push({
+        id: `pmt-${p.id}`,
+        date: p.date,
+        title: p.voided ? `Payment Voided (${receiptNo} · ${targetInv?.invoiceNumber || "Debt"})` : `Debt Payment (${receiptNo} · ${targetInv?.invoiceNumber || "Debt"})`,
+        type: "Payment",
+        badge: p.voided ? "Voided Payment" : `Payment (${p.method})`,
+        badgeColor: p.voided ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-800",
+        details: `Receipt #: ${receiptNo} · Amount: ₹${p.amount.toLocaleString()} · Method: ${p.method} · Collected by: ${p.collectedBy}${p.note ? ` (${p.note})` : ""}`,
+        reference: targetInv?.invoiceNumber || "Payment",
+        amount: p.amount,
+        debtDelta: p.voided ? 0 : -p.amount,
+        paymentObj: p,
+      });
+    });
+
+    // Sales Returns
+    const custSalesReturns = (state.salesReturns || []).filter(
+      (r) => r.customerId === customer.id || invoices.some((inv) => inv.id === r.invoiceId)
+    );
+    custSalesReturns.forEach((r) => {
+      const targetInv = state.invoices.find((i) => i.id === r.invoiceId);
+      const itemsStr = r.items.map((it) => `${it.productName} ×${it.quantity}`).join(", ");
+      const isCancelled = r.status === "Cancelled";
+
+      list.push({
+        id: `sr-${r.id}`,
+        date: r.createdAt,
+        title: `Sales Return ${r.returnNumber} (${targetInv?.invoiceNumber || "Invoice"})`,
+        type: "Return",
+        badge: isCancelled ? "Cancelled Return" : `Return (${r.refundMethod})`,
+        badgeColor: isCancelled ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-800",
+        details: `Items: ${itemsStr} · Cash Refund: ₹${(r.cashRefunded ?? 0).toLocaleString()} · Debt Cancelled: ₹${(r.debtCancelled ?? r.debtAdjusted ?? 0).toLocaleString()}${r.creditCreated ? ` · Credit Created: ₹${r.creditCreated.toLocaleString()}` : ""}`,
+        reference: r.returnNumber,
+        amount: r.totalRefund,
+        debtDelta: isCancelled ? 0 : -(r.debtCancelled ?? r.debtAdjusted ?? 0),
+        creditDelta: isCancelled ? 0 : (r.creditCreated ?? 0),
+      });
+    });
+
+    // Store Credit Txs
+    creditTransactions.forEach((tx) => {
+      if (tx.salesReturnId) return; // Skip returns to avoid duplication
+      list.push({
+        id: `cct-${tx.id}`,
+        date: tx.date,
+        title: `Store Credit ${tx.type}`,
+        type: "Credit",
+        badge: tx.type,
+        badgeColor: tx.type === "Issue" ? "bg-emerald-100 text-emerald-800" : tx.type === "Redeem" ? "bg-blue-100 text-blue-800" : "bg-amber-100 text-amber-800",
+        details: `${tx.notes || "Store Credit transaction"}`,
+        reference: tx.invoiceId ? (state.invoices.find((i) => i.id === tx.invoiceId)?.invoiceNumber || "Invoice") : "Store Credit",
+        amount: tx.amount,
+        creditDelta: tx.type === "Issue" ? tx.amount : -tx.amount,
+      });
+    });
+
+    return list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [customer, invoices, state.debtPayments, state.salesReturns, state.invoices, creditTransactions]);
+
+  const totalCreditIssued = useMemo(() => {
+    return creditTransactions.filter((t) => t.type === "Issue").reduce((s, t) => s + t.amount, 0);
+  }, [creditTransactions]);
+
+  const totalCreditUsed = useMemo(() => {
+    return creditTransactions.filter((t) => t.type === "Redeem").reduce((s, t) => s + t.amount, 0);
+  }, [creditTransactions]);
+
   const outstandingInvoices = customer
     ? getCustomerOutstandingInvoices(customer.id)
     : [];
@@ -276,7 +419,16 @@ export default function CustomerProfilePage({
   // WhatsApp handler — before early return
   function handleWhatsApp() {
     if (!customer?.phone) return;
-    window.open(`https://wa.me/91${customer.phone}`, "_blank");
+    window.open(`https://wa.me/91${customer.phone.replace(/\D/g, "")}`, "_blank");
+  }
+
+  function handleCopyPhone() {
+    if (!customer?.phone) {
+      showToast("No phone number available.", "error");
+      return;
+    }
+    navigator.clipboard.writeText(customer.phone);
+    showToast("Phone number copied to clipboard.", "success");
   }
 
   // Collect Payment Handlers
@@ -358,50 +510,75 @@ export default function CustomerProfilePage({
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div>
+    <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-6">
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <Link
           href="/customers"
-          className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 transition-colors"
+          className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 transition-colors font-medium min-h-[44px] shrink-0"
         >
-          <ArrowLeft size={15} />
+          <ArrowLeft size={16} />
           Back to Customers
         </Link>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
           {derivedDebt > 0 && (
             <button
               onClick={() => openLumpSumModal(derivedDebt)}
-              className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-4 py-2 rounded-lg transition-colors font-bold shadow-xs cursor-pointer"
+              className="flex-1 sm:flex-none min-h-[44px] flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm px-4 py-2.5 rounded-xl transition-colors font-bold shadow-xs cursor-pointer"
             >
-              <Wallet size={14} />
+              <Wallet size={15} />
               Collect Customer Debt
             </button>
           )}
-          <button
-            onClick={openEditModal}
-            className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm px-3.5 py-2 rounded-lg transition-colors font-semibold cursor-pointer"
-          >
-            <Pencil size={14} />
-            Edit Profile
-          </button>
+
+          {customer.phone && (
+            <a
+              href={`tel:${customer.phone}`}
+              className="min-h-[44px] px-3.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs sm:text-sm font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              title="Call Customer"
+            >
+              <PhoneCall size={15} />
+              <span>Call</span>
+            </a>
+          )}
+
+          {customer.phone && (
+            <button
+              onClick={handleCopyPhone}
+              className="min-h-[44px] min-w-[44px] p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs sm:text-sm font-semibold rounded-xl flex items-center justify-center transition-colors cursor-pointer"
+              title="Copy Phone Number"
+            >
+              <Copy size={15} />
+            </button>
+          )}
+
           {customer.phone && (
             <button
               onClick={handleWhatsApp}
-              className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white text-sm px-4 py-2 rounded-lg transition-colors cursor-pointer font-semibold"
+              className="min-h-[44px] px-3.5 bg-green-500 hover:bg-green-600 text-white text-xs sm:text-sm font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              title="WhatsApp Customer"
             >
-              <MessageCircle size={14} />
-              WhatsApp
+              <MessageCircle size={15} />
+              <span>WhatsApp</span>
             </button>
           )}
+
+          <button
+            onClick={openEditModal}
+            className="min-h-[44px] px-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs sm:text-sm rounded-xl transition-colors font-semibold cursor-pointer flex items-center justify-center gap-1.5"
+            title="Edit Customer Profile"
+          >
+            <Pencil size={15} />
+            <span>Edit</span>
+          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="flex flex-col lg:grid lg:grid-cols-3 gap-6">
 
-        {/* ── Left column: Profile + Stats + Outstanding ───────────────── */}
-        <div className="space-y-4">
+        {/* ── Left Column: Profile Card & Sidebar (Desktop col-span-1) ───────────────── */}
+        <div className="space-y-4 lg:col-span-1 flex flex-col">
 
           {/* Profile card */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6">
@@ -411,7 +588,7 @@ export default function CustomerProfilePage({
               </div>
               <button
                 onClick={openEditModal}
-                className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg transition-colors font-semibold cursor-pointer inline-flex items-center gap-1"
+                className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 min-h-[36px] rounded-lg transition-colors font-semibold cursor-pointer inline-flex items-center gap-1"
               >
                 <Pencil size={12} />
                 Edit
@@ -421,9 +598,38 @@ export default function CustomerProfilePage({
             <h1 className="text-xl font-bold text-slate-800">{customer.name}</h1>
 
             {customer.phone && (
-              <div className="flex items-center gap-2 mt-2 text-slate-500 text-sm">
-                <Phone size={13} />
-                {customer.phone}
+              <div className="flex items-center justify-between gap-2 mt-3 p-2.5 bg-slate-50 border border-slate-100 rounded-xl">
+                <a
+                  href={`tel:${customer.phone}`}
+                  className="flex items-center gap-2 text-slate-700 hover:text-blue-600 text-sm font-mono font-medium truncate"
+                  title="Click to call"
+                >
+                  <Phone size={14} className="text-slate-400 shrink-0" />
+                  <span className="truncate">{customer.phone}</span>
+                </a>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={handleCopyPhone}
+                    className="min-w-[44px] min-h-[44px] p-2 flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                    title="Copy Phone Number"
+                  >
+                    <Copy size={15} />
+                  </button>
+                  <a
+                    href={`tel:${customer.phone}`}
+                    className="min-w-[44px] min-h-[44px] p-2 flex items-center justify-center text-blue-600 hover:bg-blue-100 bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                    title="Call"
+                  >
+                    <PhoneCall size={15} />
+                  </a>
+                  <button
+                    onClick={handleWhatsApp}
+                    className="min-w-[44px] min-h-[44px] px-2.5 flex items-center justify-center gap-1 text-xs bg-green-500 hover:bg-green-600 text-white rounded-lg font-semibold transition-colors cursor-pointer shadow-xs"
+                    title="WhatsApp"
+                  >
+                    <MessageCircle size={15} />
+                  </button>
+                </div>
               </div>
             )}
 
@@ -443,10 +649,10 @@ export default function CustomerProfilePage({
                 </div>
                 <button
                   onClick={() => openLumpSumModal(derivedDebt)}
-                  className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-2.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer shadow-xs"
+                  className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-2 min-h-[44px] rounded-xl font-bold transition-colors cursor-pointer shadow-xs"
                   title="Collect Customer Debt (FIFO Auto-Apply)"
                 >
-                  <Wallet size={12} />
+                  <Wallet size={14} />
                   Collect Debt
                 </button>
               </div>
@@ -476,10 +682,10 @@ export default function CustomerProfilePage({
                 {derivedDebt > 0 && (
                   <button
                     onClick={() => openApplyCreditModal(availableStoreCredit, derivedDebt)}
-                    className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-2.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer shadow-xs shrink-0"
+                    className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-2 min-h-[44px] rounded-xl font-bold transition-colors cursor-pointer shadow-xs shrink-0"
                     title="Apply Store Credit to offset open debt"
                   >
-                    <Coins size={12} />
+                    <Coins size={14} />
                     Apply to Debt
                   </button>
                 )}
@@ -487,175 +693,200 @@ export default function CustomerProfilePage({
             )}
           </div>
 
-          {/* Stats card */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4">
-            <h2 className="font-semibold text-slate-800 text-sm">Statistics</h2>
-
-            <StatRow
-              icon={<TrendingUp size={14} />}
-              iconBg="bg-blue-50 text-blue-600"
-              label="Total Spent"
-              value={`₹${customerTotalSpent.toLocaleString()}`}
-              valueClass="text-blue-700 font-bold"
-            />
-            <StatRow
-              icon={<ReceiptText size={14} />}
-              iconBg="bg-amber-50 text-amber-600"
-              label="Invoices"
-              value={String(invoices.length)}
-            />
-            <StatRow
-              icon={<Calendar size={14} />}
-              iconBg="bg-purple-50 text-purple-600"
-              label="Visits"
-              value={String(customer.visits)}
-            />
-            <StatRow
-              icon={<Calendar size={14} />}
-              iconBg="bg-slate-100 text-slate-600"
-              label="Last Visit"
-              value={customer.lastVisit || "—"}
-            />
-            <StatRow
-              icon={<ReceiptText size={14} />}
-              iconBg="bg-slate-100 text-slate-600"
-              label="Items Bought"
-              value={String(totalItems)}
-            />
-            {returnCount > 0 && (
-              <>
-                <div className="border-t border-slate-100 my-1" />
-                <StatRow
-                  icon={<RotateCcw size={14} />}
-                  iconBg="bg-orange-50 text-orange-500"
-                  label="Returns"
-                  value={`${returnCount} (${returnItemQty} items)`}
-                  valueClass="text-orange-600"
-                />
-                <StatRow
-                  icon={<RotateCcw size={14} />}
-                  iconBg="bg-orange-50 text-orange-500"
-                  label="Refunded"
-                  value={`₹${refundedTotal.toLocaleString()}`}
-                  valueClass="text-orange-600 font-bold"
-                />
-              </>
-            )}
-          </div>
-
-          {/* Activity Log */}
-          {customer.activities && customer.activities.length > 0 && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-3">
-              <h2 className="font-semibold text-slate-800 text-sm">Activity Log</h2>
-              <div className="space-y-3 relative before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-100">
-                {customer.activities.map((act) => (
-                  <div key={act.id} className="relative pl-6 text-xs font-medium">
-                    <span className={`absolute left-0.5 top-1.5 w-3 h-3 rounded-full border-2 border-white ${
-                      act.type === "Void" ? "bg-red-500" :
-                      act.type === "Repayment" ? "bg-green-500" :
-                      act.type === "Return" ? "bg-orange-400" :
-                      "bg-blue-500"
-                    }`} />
-                    <p className="font-bold text-slate-850">{act.description}</p>
-                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">{act.reference} · {new Date(act.date).toLocaleDateString("en-IN")}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Outstanding Invoices collect section */}
-          {outstandingInvoices.length > 0 && (
-            <div className="bg-white rounded-2xl border border-red-200 p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <AlertCircle size={14} className="text-red-500" />
-                <h2 className="font-semibold text-red-800 text-sm">
-                  Outstanding Invoices
-                </h2>
-                <span className="ml-auto text-[10px] bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-full font-bold">
-                  {outstandingInvoices.length}
-                </span>
-              </div>
-              <div className="space-y-2">
-                {outstandingInvoices.map((inv) => {
-                  const payments = getDebtPaymentsByInvoice(inv.id);
-                  const repaidTotal = payments.reduce((s, p) => s + p.amount, 0);
-                  return (
-                    <div
-                      key={inv.id}
-                      className="bg-red-50/50 border border-red-100 rounded-xl p-3"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-[10px] font-bold text-slate-700 font-mono truncate">
-                            {inv.invoiceNumber}
-                          </p>
-                          <p className="text-[10px] text-slate-400">{formatInvoiceDate(inv)}</p>
-                          <p className="text-xs font-bold text-red-600 mt-0.5">
-                            Due: ₹{getInvoiceOutstanding(inv).toLocaleString()}
-                          </p>
-                          {repaidTotal > 0 && (
-                            <p className="text-[10px] text-green-700 mt-0.5 flex items-center gap-1">
-                              <History size={9} />
-                              ₹{repaidTotal.toLocaleString()} repaid
+          {/* On mobile: Secondary sidebar blocks come after main tabs content */}
+          <div className="order-2 lg:order-1 space-y-4">
+            {/* Outstanding Invoices collect section */}
+            {outstandingInvoices.length > 0 && (
+              <div className="bg-white rounded-2xl border border-red-200 p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <AlertCircle size={15} className="text-red-500" />
+                  <h2 className="font-semibold text-red-800 text-sm">
+                    Outstanding Invoices
+                  </h2>
+                  <span className="ml-auto text-[10px] bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-full font-bold">
+                    {outstandingInvoices.length}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {outstandingInvoices.map((inv) => {
+                    const payments = getDebtPaymentsByInvoice(inv.id);
+                    const repaidTotal = payments.reduce((s, p) => s + p.amount, 0);
+                    return (
+                      <div
+                        key={inv.id}
+                        className="bg-red-50/50 border border-red-100 rounded-xl p-3"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-bold text-slate-800 font-mono truncate">
+                              {inv.invoiceNumber}
                             </p>
-                          )}
+                            <p className="text-[10px] text-slate-400">{formatInvoiceDate(inv)}</p>
+                            <p className="text-xs font-bold text-red-600 font-mono mt-0.5">
+                              Due: ₹{getInvoiceOutstanding(inv).toLocaleString()}
+                            </p>
+                            {repaidTotal > 0 && (
+                              <p className="text-[10px] text-green-700 font-mono mt-0.5 flex items-center gap-1">
+                                <History size={10} />
+                                ₹{repaidTotal.toLocaleString()} repaid
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex flex-col gap-1 items-end shrink-0">
+                            <button
+                              onClick={() => openCollect(inv)}
+                              className="shrink-0 bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-3 py-2 min-h-[38px] rounded-lg transition-colors cursor-pointer"
+                            >
+                              Collect
+                            </button>
+                            <Link
+                              href={`/invoices/${inv.id}`}
+                              className="text-[10px] text-amber-600 hover:underline font-medium"
+                            >
+                              View →
+                            </Link>
+                          </div>
                         </div>
-                        <button
-                          onClick={() => openCollect(inv)}
-                          className="shrink-0 bg-green-600 hover:bg-green-700 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
-                        >
-                          Collect
-                        </button>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Quick action */}
-          <Link
-            href="/billing"
-            className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-700 text-white py-3 rounded-xl text-sm font-medium transition-colors"
-          >
-            <ReceiptText size={14} />
-            New Invoice for {customer.name.split(" ")[0]}
-          </Link>
+            {/* Stats card */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4">
+              <h2 className="font-semibold text-slate-800 text-sm">Statistics</h2>
+
+              <StatRow
+                icon={<TrendingUp size={14} />}
+                iconBg="bg-blue-50 text-blue-600"
+                label="Total Spent"
+                value={`₹${customerTotalSpent.toLocaleString()}`}
+                valueClass="text-blue-700 font-bold font-mono"
+              />
+              <StatRow
+                icon={<ReceiptText size={14} />}
+                iconBg="bg-amber-50 text-amber-600"
+                label="Invoices"
+                value={String(invoices.length)}
+              />
+              <StatRow
+                icon={<Calendar size={14} />}
+                iconBg="bg-purple-50 text-purple-600"
+                label="Visits"
+                value={String(customer.visits)}
+              />
+              <StatRow
+                icon={<Calendar size={14} />}
+                iconBg="bg-slate-100 text-slate-600"
+                label="Last Visit"
+                value={customer.lastVisit || "—"}
+              />
+              <StatRow
+                icon={<ReceiptText size={14} />}
+                iconBg="bg-slate-100 text-slate-600"
+                label="Items Bought"
+                value={String(totalItems)}
+              />
+              {returnCount > 0 && (
+                <>
+                  <div className="border-t border-slate-100 my-1" />
+                  <StatRow
+                    icon={<RotateCcw size={14} />}
+                    iconBg="bg-orange-50 text-orange-500"
+                    label="Returns"
+                    value={`${returnCount} (${returnItemQty} items)`}
+                    valueClass="text-orange-600"
+                  />
+                  <StatRow
+                    icon={<RotateCcw size={14} />}
+                    iconBg="bg-orange-50 text-orange-500"
+                    label="Refunded"
+                    value={`₹${refundedTotal.toLocaleString()}`}
+                    valueClass="text-orange-600 font-bold font-mono"
+                  />
+                </>
+              )}
+            </div>
+
+            {/* Activity Log */}
+            {customer.activities && customer.activities.length > 0 && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-3">
+                <h2 className="font-semibold text-slate-800 text-sm">Activity Log</h2>
+                <div className="space-y-3 relative before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-100">
+                  {customer.activities.map((act) => (
+                    <div key={act.id} className="relative pl-6 text-xs font-medium">
+                      <span className={`absolute left-0.5 top-1.5 w-3 h-3 rounded-full border-2 border-white ${
+                        act.type === "Void" ? "bg-red-500" :
+                        act.type === "Repayment" ? "bg-green-500" :
+                        act.type === "Return" ? "bg-orange-400" :
+                        "bg-blue-500"
+                      }`} />
+                      <p className="font-bold text-slate-850">{act.description}</p>
+                      <p className="text-[10px] text-slate-400 font-mono mt-0.5">{act.reference} · {new Date(act.date).toLocaleDateString("en-IN")}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Quick action */}
+            <Link
+              href="/billing"
+              className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-700 text-white min-h-[44px] py-3 rounded-xl text-sm font-medium transition-colors"
+            >
+              <ReceiptText size={15} />
+              New Invoice for {customer.name.split(" ")[0]}
+            </Link>
+          </div>
         </div>
 
-        {/* ── Right column: Invoices & Customer Credit Ledger ───────────────── */}
-        <div className="lg:col-span-2 space-y-4">
+        {/* ── Right column: Invoices & Customer Credit Ledger (Mobile order-1, Desktop col-span-2) ───────────────── */}
+        <div className="lg:col-span-2 space-y-4 order-1 lg:order-2">
           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
             {/* Header Tabs */}
             <div className="flex border-b border-slate-200 bg-slate-50/50">
               <button
                 type="button"
                 onClick={() => setActiveRightTab("invoices")}
-                className={`flex-1 py-3.5 px-4 text-center font-bold text-sm border-b-2 transition-all cursor-pointer ${
+                className={`flex-1 py-3.5 px-3 text-center font-bold text-xs sm:text-sm border-b-2 transition-all cursor-pointer ${
                   activeRightTab === "invoices"
                     ? "border-navy-950 text-navy-950 bg-white"
                     : "border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
                 }`}
               >
-                <span className="flex items-center justify-center gap-2">
-                  <FileText size={16} />
-                  Invoice History ({invoices.length})
+                <span className="flex items-center justify-center gap-1.5">
+                  <FileText size={15} />
+                  Invoices ({invoices.length})
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveRightTab("ledger")}
+                className={`flex-1 py-3.5 px-3 text-center font-bold text-xs sm:text-sm border-b-2 transition-all cursor-pointer ${
+                  activeRightTab === "ledger"
+                    ? "border-amber-600 text-amber-950 bg-white"
+                    : "border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
+                }`}
+              >
+                <span className="flex items-center justify-center gap-1.5">
+                  <History size={15} className="text-amber-600" />
+                  Chronological Ledger ({chronologicalLedger.length})
                 </span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveRightTab("credit")}
-                className={`flex-1 py-3.5 px-4 text-center font-bold text-sm border-b-2 transition-all cursor-pointer ${
+                className={`flex-1 py-3.5 px-3 text-center font-bold text-xs sm:text-sm border-b-2 transition-all cursor-pointer ${
                   activeRightTab === "credit"
                     ? "border-emerald-600 text-emerald-950 bg-white"
                     : "border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
                 }`}
               >
-                <span className="flex items-center justify-center gap-2">
-                  <Wallet size={16} className="text-emerald-600" />
-                  Customer Credit Ledger ({creditTransactions.length})
+                <span className="flex items-center justify-center gap-1.5">
+                  <Wallet size={15} className="text-emerald-600" />
+                  Credit Ledger ({creditTransactions.length})
                 </span>
               </button>
             </div>
@@ -800,22 +1031,112 @@ export default function CustomerProfilePage({
               )
             )}
 
-            {/* TAB 2: Customer Credit Ledger */}
-            {activeRightTab === "credit" && (
-              creditTransactions.length === 0 ? (
+            {/* TAB 2: Chronological Customer Ledger Timeline (Phase 2.8C) */}
+            {activeRightTab === "ledger" && (
+              chronologicalLedger.length === 0 ? (
                 <div className="p-12 flex flex-col items-center text-center gap-3">
-                  <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center">
-                    <Wallet size={24} className="text-emerald-500" />
+                  <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center">
+                    <History size={24} className="text-amber-600" />
                   </div>
                   <div>
-                    <p className="text-sm font-semibold text-slate-700">No Store Credit Transactions</p>
+                    <p className="text-sm font-semibold text-slate-700">No Ledger History</p>
                     <p className="text-xs text-slate-400 mt-0.5 max-w-sm">
-                      Store Credit is generated when a customer completes a Sales Return with &ldquo;Adjustment&rdquo; refund method on a fully-paid invoice, or when excess return value remains.
+                      This customer has no invoices, debt payments, sales returns, or credit activity yet.
                     </p>
                   </div>
                 </div>
               ) : (
                 <div className="divide-y divide-slate-100">
+                  {chronologicalLedger.map((ev) => (
+                    <div key={ev.id} className="p-4 hover:bg-slate-50 transition-colors">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1 flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-xs text-slate-800 font-mono">{ev.title}</span>
+                            <span className={`text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full ${ev.badgeColor}`}>
+                              {ev.badge}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 font-medium">{ev.details}</p>
+                          <p className="text-[10px] text-slate-400 font-mono">
+                            {new Date(ev.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                          </p>
+                        </div>
+
+                        <div className="text-right shrink-0 font-mono space-y-0.5">
+                          {ev.amount != null && (
+                            <p className="text-xs font-bold text-slate-800">
+                              ₹{ev.amount.toLocaleString()}
+                            </p>
+                          )}
+                          {ev.debtDelta !== undefined && ev.debtDelta !== 0 && (
+                            <p className={`text-[11px] font-extrabold ${ev.debtDelta > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+                              {ev.debtDelta > 0 ? `+₹${ev.debtDelta.toLocaleString()} Debt` : `-₹${Math.abs(ev.debtDelta).toLocaleString()} Debt`}
+                            </p>
+                          )}
+                          {ev.creditDelta !== undefined && ev.creditDelta !== 0 && (
+                            <p className={`text-[11px] font-extrabold ${ev.creditDelta > 0 ? "text-purple-700" : "text-blue-700"}`}>
+                              {ev.creditDelta > 0 ? `+₹${ev.creditDelta.toLocaleString()} Credit` : `-₹${Math.abs(ev.creditDelta).toLocaleString()} Credit`}
+                            </p>
+                          )}
+                          {ev.paymentObj && (
+                            <div className="mt-1.5 flex items-center justify-end gap-1 font-sans print:hidden">
+                              <button
+                                onClick={() => setPrintReceiptPayment(ev.paymentObj)}
+                                className="p-2 min-w-[44px] min-h-[44px] text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition cursor-pointer flex items-center justify-center"
+                                title="Print Payment Receipt"
+                              >
+                                <Printer size={16} />
+                              </button>
+                              <button
+                                onClick={() => handleShareReceiptWhatsApp(ev.paymentObj)}
+                                className="p-2 min-w-[44px] min-h-[44px] text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition cursor-pointer flex items-center justify-center"
+                                title="Share WhatsApp Receipt"
+                              >
+                                <MessageCircle size={16} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+
+            {/* TAB 3: Customer Credit Ledger & Store Credit Breakdown (Phase 2.8C) */}
+            {activeRightTab === "credit" && (
+              <>
+                <div className="p-4 bg-purple-50/70 border-b border-purple-100 grid grid-cols-3 gap-3 text-center">
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Total Issued</span>
+                    <span className="text-xs sm:text-sm font-extrabold text-purple-700 font-mono">₹{totalCreditIssued.toLocaleString()}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Total Used</span>
+                    <span className="text-xs sm:text-sm font-extrabold text-blue-700 font-mono">₹{totalCreditUsed.toLocaleString()}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Available Balance</span>
+                    <span className="text-xs sm:text-sm font-extrabold text-emerald-700 font-mono">₹{availableStoreCredit.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                {creditTransactions.length === 0 ? (
+                  <div className="p-12 flex flex-col items-center text-center gap-3">
+                    <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center">
+                      <Wallet size={24} className="text-emerald-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-slate-700">No Store Credit Transactions</p>
+                      <p className="text-xs text-slate-400 mt-0.5 max-w-sm">
+                        Store Credit is generated when a customer completes a Sales Return with &ldquo;Adjustment&rdquo; refund method on a fully-paid invoice, or when excess return value remains.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100">
                   {creditTransactions.map((tx) => {
                     const isIssue = tx.type === "Issue";
                     const isRedeem = tx.type === "Redeem";
@@ -899,8 +1220,9 @@ export default function CustomerProfilePage({
                     );
                   })}
                 </div>
-              )
-            )}
+              )}
+            </>
+          )}
           </div>
         </div>
       </div>
@@ -908,7 +1230,7 @@ export default function CustomerProfilePage({
       {/* ── Collect Payment Modal ─────────────────────────────────────────── */}
       {collectInvoice && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-5 border-b border-slate-200">
               <div>
                 <h2 className="font-bold text-slate-800">Collect Payment</h2>
@@ -1049,7 +1371,7 @@ export default function CustomerProfilePage({
       {/* ── Edit Customer Modal ──────────────────────────────────────────────── */}
       {showEditModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-slate-50/50">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center text-white">
@@ -1142,7 +1464,7 @@ export default function CustomerProfilePage({
 
         return (
           <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
               <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-slate-50/50">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white">
@@ -1322,7 +1644,7 @@ export default function CustomerProfilePage({
       {/* ── Apply Store Credit Modal ───────────────────────────────────────── */}
       {showApplyCreditModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-200">
             <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-emerald-50/60">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700">
@@ -1421,6 +1743,49 @@ export default function CustomerProfilePage({
                 <Coins size={14} />
                 Apply Credit
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Print Receipt Modal */}
+      {printReceiptPayment && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in print:p-0 print:bg-white print:static print:z-auto">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh] print:shadow-none print:border-none print:max-w-full print:max-h-none print:rounded-none">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 print:hidden">
+              <div className="flex items-center gap-2">
+                <Printer size={18} className="text-slate-700" />
+                <h3 className="font-extrabold text-slate-800 text-sm">
+                  Payment Receipt — {printReceiptPayment.receiptNumber || "Legacy"}
+                </h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => window.print()}
+                  className="bg-navy-950 hover:bg-navy-900 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  <Printer size={13} />
+                  Print
+                </button>
+                <button
+                  onClick={() => setPrintReceiptPayment(null)}
+                  className="text-slate-400 hover:text-slate-700 cursor-pointer p-1"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+            <div className="p-4 sm:p-6 bg-slate-100/70 overflow-y-auto max-h-[75vh]">
+              {(() => {
+                const targetInv = state.invoices.find((i) => i.id === printReceiptPayment.invoiceId);
+                if (!targetInv) return <p className="text-slate-500 text-xs">Invoice not found.</p>;
+                return (
+                  <PrintableReceipt
+                    payment={printReceiptPayment}
+                    invoice={targetInv}
+                  />
+                );
+              })()}
             </div>
           </div>
         </div>

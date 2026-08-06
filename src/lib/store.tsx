@@ -118,6 +118,7 @@ const INITIAL_STATE: AppState = {
   purchaseOrderCounter: 0,
   salesReturns: [],
   salesReturnCounter: 0,
+  paymentReceiptCounter: 0,
   customerCreditTransactions: [],
 };
 
@@ -670,8 +671,35 @@ function calcInvoiceDue(invoice: Invoice, payments: DebtPayment[], salesReturns:
   return Math.max(0, roundMoney(invoice.dueAmount));
 }
 
-/** Calculate payment status given remaining due and total */
-function calcPaymentStatus(due: number, total: number): PaymentStatus {
+/** Calculate payment status given remaining due, total, invoice object, and sales returns */
+export function calcPaymentStatus(
+  due: number,
+  total: number,
+  invoice?: { id?: string; voided?: boolean; items?: { quantity: number; returnedQuantity?: number }[] },
+  salesReturns?: SalesReturn[]
+): PaymentStatus {
+  if (invoice?.voided) return "Voided";
+
+  if (invoice?.items && invoice.items.length > 0) {
+    const totalQty = invoice.items.reduce((s, i) => s + i.quantity, 0);
+    const returnedQty = invoice.items.reduce((s, i) => s + (i.returnedQuantity || 0), 0);
+
+    if (returnedQty > 0) {
+      if (returnedQty >= totalQty) {
+        const invId = invoice.id;
+        const activeReturns = (salesReturns || []).filter(
+          (r) => r.invoiceId === invId && r.status !== "Cancelled"
+        );
+        const hasCashRefund = activeReturns.some(
+          (r) => (r.cashRefunded ?? 0) > 0 || r.refundMethod === "Cash" || r.refundMethod === "UPI" || r.refundMethod === "Bank"
+        );
+        return hasCashRefund ? "Refunded" : "Fully Returned";
+      } else {
+        return "Partially Returned";
+      }
+    }
+  }
+
   if (due <= 0) return "Paid";
   if (due < total) return "Partial";
   return "Debt";
@@ -1312,8 +1340,28 @@ export function reducer(state: AppState, action: Action): AppState {
     case "RECORD_DEBT_PAYMENT": {
       const payment = action.payment;
 
+      let nextCounter = state.paymentReceiptCounter || 0;
+      let receiptNumber = payment.receiptNumber;
+
+      if (!receiptNumber) {
+        const maxSeq = (state.debtPayments || []).reduce((max, p) => {
+          if (p.receiptNumber && p.receiptNumber.startsWith("PAY-")) {
+            const num = parseInt(p.receiptNumber.replace("PAY-", ""), 10);
+            if (!isNaN(num) && num > max) return num;
+          }
+          return max;
+        }, 0);
+        nextCounter = Math.max(nextCounter, maxSeq) + 1;
+        receiptNumber = `PAY-${String(nextCounter).padStart(6, "0")}`;
+      }
+
+      const paymentWithReceipt: DebtPayment = {
+        ...payment,
+        receiptNumber,
+      };
+
       // Add to ledger
-      const newPayments = [...(state.debtPayments ?? []), payment];
+      const newPayments = [...(state.debtPayments ?? []), paymentWithReceipt];
 
       // Update the target invoice
       const newInvoices = state.invoices.map((inv) => {
@@ -1376,6 +1424,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         debtPayments: newPayments,
+        paymentReceiptCounter: nextCounter,
         invoices: newInvoices,
         customers: newCustomers,
         financeTransactions: debtFinanceTxs,
@@ -1403,6 +1452,16 @@ export function reducer(state: AppState, action: Action): AppState {
       const invoiceUpdates: Record<string, { newAmountPaid: number; newDueAmount: number; newStatus: PaymentStatus }> = {};
       const newFinanceTxs = [...(state.financeTransactions || [])];
 
+      let currentReceiptCounter = state.paymentReceiptCounter || 0;
+      const maxSeq = (state.debtPayments || []).reduce((max, p) => {
+        if (p.receiptNumber && p.receiptNumber.startsWith("PAY-")) {
+          const num = parseInt(p.receiptNumber.replace("PAY-", ""), 10);
+          if (!isNaN(num) && num > max) return num;
+        }
+        return max;
+      }, 0);
+      currentReceiptCounter = Math.max(currentReceiptCounter, maxSeq);
+
       for (const inv of customerInvoices) {
         if (remaining <= 0) break;
 
@@ -1413,8 +1472,12 @@ export function reducer(state: AppState, action: Action): AppState {
         const alloc = Math.min(remaining, effectiveDue);
         if (alloc <= 0) continue;
 
+        currentReceiptCounter += 1;
+        const receiptNumber = `PAY-${String(currentReceiptCounter).padStart(6, "0")}`;
+
         const newPayment: DebtPayment = {
           id: `dp-${crypto.randomUUID()}`,
+          receiptNumber,
           customerId,
           invoiceId: inv.id,
           amount: alloc,
@@ -1496,6 +1559,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         invoices: updatedInvoices,
         debtPayments: [...(state.debtPayments || []), ...createdPayments],
+        paymentReceiptCounter: currentReceiptCounter,
         customers: updatedCustomers,
         financeTransactions: newFinanceTxs,
       };
@@ -1535,6 +1599,16 @@ export function reducer(state: AppState, action: Action): AppState {
       const createdPayments: DebtPayment[] = [];
       const invoiceUpdates: Record<string, { newAmountPaid: number; newDueAmount: number; newStatus: PaymentStatus }> = {};
 
+      let currentReceiptCounter = state.paymentReceiptCounter || 0;
+      const maxSeq = (state.debtPayments || []).reduce((max, p) => {
+        if (p.receiptNumber && p.receiptNumber.startsWith("PAY-")) {
+          const num = parseInt(p.receiptNumber.replace("PAY-", ""), 10);
+          if (!isNaN(num) && num > max) return num;
+        }
+        return max;
+      }, 0);
+      currentReceiptCounter = Math.max(currentReceiptCounter, maxSeq);
+
       for (const inv of customerInvoices) {
         if (remainingToApply <= 0) break;
         const effectiveDue = Math.max(0, roundMoney(inv.dueAmount));
@@ -1543,8 +1617,12 @@ export function reducer(state: AppState, action: Action): AppState {
         const alloc = Math.min(remainingToApply, effectiveDue);
         if (alloc <= 0) continue;
 
+        currentReceiptCounter += 1;
+        const receiptNumber = `PAY-${String(currentReceiptCounter).padStart(6, "0")}`;
+
         const newPayment: DebtPayment = {
           id: `dp-${crypto.randomUUID()}`,
+          receiptNumber,
           customerId,
           invoiceId: inv.id,
           amount: alloc,
@@ -1626,6 +1704,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         debtPayments: newDebtPayments,
+        paymentReceiptCounter: currentReceiptCounter,
         invoices: newInvoices,
         customers: newCustomers,
         customerCreditTransactions: newCustomerCreditTxs,
@@ -1740,6 +1819,15 @@ export function reducer(state: AppState, action: Action): AppState {
       const invoice = state.invoices.find((i) => i.id === invoiceId);
       if (!invoice || invoice.voided) return state; // Stock restore safety & already voided guard
 
+      // VOID PROTECTION (Phase 2.8C): Block voiding if invoice has active (non-cancelled) sales returns
+      const activeSalesReturns = (state.salesReturns || []).filter(
+        (r) => r.invoiceId === invoiceId && r.status !== "Cancelled"
+      );
+      if (activeSalesReturns.length > 0) {
+        console.warn(`[AutoVault Guard] Aborted VOID_INVOICE dispatch for ${invoice.invoiceNumber}. Invoice has ${activeSalesReturns.length} active sales return(s). Cancel all sales returns before voiding.`);
+        return state;
+      }
+
       const voidedAt = new Date().toISOString();
 
       // 1. Mark invoice as voided
@@ -1830,9 +1918,39 @@ export function reducer(state: AppState, action: Action): AppState {
         };
       });
 
-      // 5. Append reversing finance transaction (only for amount actually paid)
+      // 5. Append reversing finance transactions for linked income entries
       const newFinanceTransactions = [...(state.financeTransactions || [])];
-      if (invoice.amountPaid > 0) {
+      
+      const linkedDebtPaymentIds = new Set((state.debtPayments || []).filter((dp) => dp.invoiceId === invoice.id).map((dp) => dp.id));
+      const existingReversals = new Set(newFinanceTransactions.map((ft) => ft.reversalOf).filter(Boolean));
+
+      const originalIncomeTxs = newFinanceTransactions.filter((ft) => {
+        if (ft.type !== "Income") return false;
+        if (existingReversals.has(ft.id)) return false;
+        const isInvoiceSale = ft.referenceId === invoice.id;
+        const isDebtPayment = linkedDebtPaymentIds.has(ft.referenceId);
+        return isInvoiceSale || isDebtPayment;
+      });
+
+      if (originalIncomeTxs.length > 0) {
+        originalIncomeTxs.forEach((origTx) => {
+          const category: FinanceCategory = origTx.category === "Customer Payment" ? "Payment Void" : "Invoice Void";
+          newFinanceTransactions.push({
+            id: `ft-${crypto.randomUUID()}`,
+            accountId: origTx.accountId || methodToAccountId(origTx.method),
+            type: "Expense" as const,
+            category,
+            referenceId: origTx.referenceId,
+            reversalOf: origTx.id,
+            customerId: origTx.customerId || (invoice.customerId ?? undefined),
+            amount: origTx.amount,
+            date: voidedAt,
+            method: origTx.method,
+            notes: `Reversal of ${origTx.category} (${invoice.invoiceNumber})`,
+          });
+        });
+      } else if (invoice.amountPaid > 0) {
+        // Fallback for legacy invoices without pre-indexed finance entries
         newFinanceTransactions.push({
           id: `ft-${crypto.randomUUID()}`,
           accountId: methodToAccountId(invoice.paymentMethod),
@@ -1843,7 +1961,7 @@ export function reducer(state: AppState, action: Action): AppState {
           amount: invoice.amountPaid,
           date: voidedAt,
           method: invoice.paymentMethod,
-          notes: "Invoice Voided",
+          notes: `Invoice Voided (${invoice.invoiceNumber})`,
         });
       }
 
@@ -1976,6 +2094,7 @@ export function reducer(state: AppState, action: Action): AppState {
         purchaseOrderCounter: action.state.purchaseOrderCounter ?? 0,
         salesReturns: action.state.salesReturns ?? [],
         salesReturnCounter: action.state.salesReturnCounter ?? 0,
+        paymentReceiptCounter: action.state.paymentReceiptCounter ?? 0,
         customerCreditTransactions,
       };
     }
@@ -2691,14 +2810,53 @@ export function reducer(state: AppState, action: Action): AppState {
         return state;
       }
 
-      let debtAdjusted = 0;
+      // Canonical Refund Policy (Phase 2.8A):
+      // PRIOR_CASH_REFUNDED = sum of cashRefunded on all active (non-cancelled) sales returns for this invoice
+      const priorCashRefunded = (state.salesReturns || [])
+        .filter((r) => r.invoiceId === salesReturn.invoiceId && r.status !== "Cancelled")
+        .reduce((sum, r) => sum + (r.cashRefunded ?? 0), 0);
+
+      // PAID_AVAILABLE = invoice.amountPaid - PRIOR_CASH_REFUNDED (clamped to >= 0)
+      const paidAvailable = Math.max(0, roundMoney(targetInvoice.amountPaid - priorCashRefunded));
+      const DUE = roundMoney(targetInvoice.dueAmount);
+      const RV = roundMoney(salesReturn.totalRefund);
+
+      let cashRefunded = 0;
+      let debtCancelled = 0;
       let creditCreated = 0;
+      let debtAdjusted = 0;
       let newCustomerCreditTxs = [...(state.customerCreditTransactions || [])];
 
       if (salesReturn.refundMethod === "Adjustment") {
-        const currentDue = targetInvoice.dueAmount;
-        debtAdjusted = Math.min(currentDue, salesReturn.totalRefund);
-        creditCreated = roundMoney(salesReturn.totalRefund - debtAdjusted);
+        cashRefunded = 0;
+        debtCancelled = Math.min(DUE, RV);
+        creditCreated = roundMoney(Math.max(0, RV - debtCancelled));
+        debtAdjusted = debtCancelled;
+
+        if (creditCreated > 0 && salesReturn.customerId) {
+          const issueTx: CustomerCreditTransaction = {
+            id: generateUniqueId("cct"),
+            customerId: salesReturn.customerId,
+            type: "Issue",
+            amount: creditCreated,
+            date: now,
+            salesReturnId: salesReturn.id,
+            notes: `Store Credit generated from Sales Return ${salesReturn.returnNumber}`,
+            createdBy: (salesReturn.createdBy as "Owner" | "Staff") || "Owner",
+          };
+          newCustomerCreditTxs.push(issueTx);
+        }
+      } else if (salesReturn.refundMethod === "Exchange") {
+        cashRefunded = 0;
+        debtCancelled = 0;
+        debtAdjusted = 0;
+      } else {
+        // Cash, UPI, Bank: Cash Refund = min(RV, paidAvailable)
+        cashRefunded = Math.min(RV, paidAvailable);
+        const remainingReturn = roundMoney(RV - cashRefunded);
+        debtCancelled = Math.min(DUE, remainingReturn);
+        creditCreated = roundMoney(Math.max(0, remainingReturn - debtCancelled));
+        debtAdjusted = debtCancelled;
 
         if (creditCreated > 0 && salesReturn.customerId) {
           const issueTx: CustomerCreditTransaction = {
@@ -2717,6 +2875,8 @@ export function reducer(state: AppState, action: Action): AppState {
 
       const returnRecordToSave: SalesReturn = {
         ...salesReturn,
+        cashRefunded,
+        debtCancelled,
         debtAdjusted,
         creditCreated,
       };
@@ -2725,8 +2885,6 @@ export function reducer(state: AppState, action: Action): AppState {
       const newSalesReturns = [...(state.salesReturns || []), returnRecordToSave];
 
       // 2. Update returnedQuantity cache and dueAmount on invoice
-      // BUG-07 Fix: Only Store Credit / Debt Offset ("Adjustment") returns reduce invoice dueAmount.
-      // Cash / Bank / UPI refunds leave invoice dueAmount and customer debt unchanged.
       const newInvoices = state.invoices.map((inv) => {
         if (inv.id !== salesReturn.invoiceId) return inv;
         const newItems = inv.items.map((item) => {
@@ -2738,18 +2896,16 @@ export function reducer(state: AppState, action: Action): AppState {
           };
         });
 
-        if (salesReturn.refundMethod === "Adjustment") {
-          const newDueAmount = Math.max(0, roundMoney(inv.dueAmount - debtAdjusted));
-          const newPaymentStatus = calcPaymentStatus(newDueAmount, inv.total);
-          return {
-            ...inv,
-            items: newItems,
-            dueAmount: newDueAmount,
-            paymentStatus: newPaymentStatus,
-          };
-        }
+        const newDueAmount = Math.max(0, roundMoney(inv.dueAmount - debtCancelled));
+        const tempInv = { ...inv, items: newItems, dueAmount: newDueAmount };
+        const newPaymentStatus = calcPaymentStatus(newDueAmount, inv.total, tempInv, newSalesReturns);
 
-        return { ...inv, items: newItems };
+        return {
+          ...inv,
+          items: newItems,
+          dueAmount: newDueAmount,
+          paymentStatus: newPaymentStatus,
+        };
       });
 
       // 3. Restore stock for returned items and deduct stock for replacement items (if Exchange)
@@ -2796,12 +2952,11 @@ export function reducer(state: AppState, action: Action): AppState {
         });
       }
 
-      // 5. Append Finance transaction — only for actual money movement
+      // 5. Append Finance transaction — ONLY for actual money movement
       const newFinanceTxs = [...(state.financeTransactions || [])];
       if (salesReturn.refundMethod === "Exchange") {
         const diff = salesReturn.exchangeDifference ?? 0;
         if (diff > 0) {
-          // Customer paid additional amount for higher-value replacement
           const method: PaymentMethod =
             salesReturn.differencePaymentMethod && salesReturn.differencePaymentMethod !== "Adjustment"
               ? (salesReturn.differencePaymentMethod as PaymentMethod)
@@ -2815,12 +2970,11 @@ export function reducer(state: AppState, action: Action): AppState {
             accountId,
             date: now,
             method,
-            referenceId: salesReturn.returnNumber,
+            referenceId: targetInvoice.id,
             customerId: salesReturn.customerId || undefined,
-            notes: `Exchange difference received — ${salesReturn.returnNumber}`,
+            notes: `Exchange difference received — ${salesReturn.returnNumber} (${targetInvoice.invoiceNumber})`,
           });
         } else if (diff < 0 && (salesReturn.differencePaymentMethod as string) !== "Adjustment") {
-          // Store refunded difference for lower-value replacement
           const refundAmt = Math.abs(diff);
           const method: PaymentMethod =
             salesReturn.differencePaymentMethod && (salesReturn.differencePaymentMethod as string) !== "Adjustment"
@@ -2835,12 +2989,12 @@ export function reducer(state: AppState, action: Action): AppState {
             accountId,
             date: now,
             method,
-            referenceId: salesReturn.returnNumber,
+            referenceId: targetInvoice.id,
             customerId: salesReturn.customerId || undefined,
-            notes: `Exchange difference refunded — ${salesReturn.returnNumber}`,
+            notes: `Exchange difference refunded — ${salesReturn.returnNumber} (${targetInvoice.invoiceNumber})`,
           });
         }
-      } else if (salesReturn.refundMethod !== "Adjustment" && salesReturn.totalRefund > 0) {
+      } else if (salesReturn.refundMethod !== "Adjustment" && cashRefunded > 0) {
         const accountId = refundMethodToAccountId(salesReturn.refundMethod);
         const financeMethod: PaymentMethod =
           salesReturn.refundMethod === "Bank"
@@ -2850,17 +3004,17 @@ export function reducer(state: AppState, action: Action): AppState {
           id: generateUniqueId("ft"),
           type: "Expense" as const,
           category: "Sales Return" as const,
-          amount: salesReturn.totalRefund,
+          amount: cashRefunded,
           accountId,
           date: now,
           method: financeMethod,
-          referenceId: salesReturn.returnNumber,
+          referenceId: targetInvoice.id,
           customerId: salesReturn.customerId || undefined,
-          notes: `Refund — ${salesReturn.returnNumber} (${salesReturn.refundMethod})`,
+          notes: `Refund — ${salesReturn.returnNumber} (${targetInvoice.invoiceNumber})`,
         });
       }
 
-      // 6. Append customer activity (only for named customers, not walk-ins)
+      // 6. Append customer activity
       const origInvoice = state.invoices.find((i) => i.id === salesReturn.invoiceId);
       const newCustomers = state.customers.map((c) => {
         if (!salesReturn.customerId || c.id !== salesReturn.customerId) return c;
@@ -2873,12 +3027,15 @@ export function reducer(state: AppState, action: Action): AppState {
 
         let returnDesc = `Sales Return: ${itemsStr}`;
         if (salesReturn.refundMethod === "Adjustment") {
-          returnDesc += ` — Debt Adjusted: ₹${debtAdjusted.toLocaleString()}`;
+          returnDesc += ` — Debt Cancelled: ₹${debtCancelled.toLocaleString()}`;
           if (creditCreated > 0) {
             returnDesc += `, Store Credit Issued: ₹${creditCreated.toLocaleString()}`;
           }
         } else {
-          returnDesc += ` — Refund ₹${salesReturn.totalRefund.toLocaleString()} (${salesReturn.refundMethod})`;
+          returnDesc += ` — Cash Refund: ₹${cashRefunded.toLocaleString()}`;
+          if (debtCancelled > 0) {
+            returnDesc += `, Debt Cancelled: ₹${debtCancelled.toLocaleString()}`;
+          }
         }
 
         return {
@@ -2932,14 +3089,15 @@ export function reducer(state: AppState, action: Action): AppState {
         });
       }
 
-      // 1. Mark return as Cancelled (append-only, never delete)
+      // 1. Mark return as Cancelled (append-only)
       const newSalesReturns = (state.salesReturns || []).map((r) =>
         r.id !== returnId
           ? r
           : { ...r, status: "Cancelled" as const, cancellationReason: reason, cancelledBy: voidedBy, cancelledAt }
       );
 
-      // 2. Reverse returnedQuantity cache on invoice items and restore dueAmount if Adjustment
+      // 2. Reverse returnedQuantity cache on invoice items and restore dueAmount
+      const debtToRestore = target.debtCancelled ?? target.debtAdjusted ?? 0;
       const newInvoices = state.invoices.map((inv) => {
         if (inv.id !== target.invoiceId) return inv;
         const newItems = inv.items.map((item) => {
@@ -2951,20 +3109,17 @@ export function reducer(state: AppState, action: Action): AppState {
           };
         });
 
-        if (target.refundMethod === "Adjustment") {
-          const debtRestored = target.debtAdjusted ?? target.totalRefund;
-          const maxDue = Math.max(0, inv.total - inv.amountPaid);
-          const newDueAmount = Math.min(maxDue, roundMoney(inv.dueAmount + debtRestored));
-          const newPaymentStatus = calcPaymentStatus(newDueAmount, inv.total);
-          return {
-            ...inv,
-            items: newItems,
-            dueAmount: newDueAmount,
-            paymentStatus: newPaymentStatus,
-          };
-        }
+        const maxDue = Math.max(0, inv.total - inv.amountPaid);
+        const newDueAmount = Math.min(maxDue, roundMoney(inv.dueAmount + debtToRestore));
+        const tempInv = { ...inv, items: newItems, dueAmount: newDueAmount };
+        const newPaymentStatus = calcPaymentStatus(newDueAmount, inv.total, tempInv, newSalesReturns);
 
-        return { ...inv, items: newItems };
+        return {
+          ...inv,
+          items: newItems,
+          dueAmount: newDueAmount,
+          paymentStatus: newPaymentStatus,
+        };
       });
 
       // 3. Reverse stock (re-sell returned items and restore replacement items if Exchange)
@@ -2997,65 +3152,11 @@ export function reducer(state: AppState, action: Action): AppState {
           reference: target.returnNumber,
         });
       });
-      if (target.refundMethod === "Exchange" && target.exchangeItems) {
-        target.exchangeItems.forEach((exItem) => {
-          newStockMovements.push({
-            id: generateUniqueId("sm"),
-            productId: exItem.productId,
-            type: "Sales Return" as const,
-            delta: exItem.quantity,
-            date: cancelledAt,
-            desc: `Exchange Replacement Cancelled — ${target.returnNumber}`,
-            reference: target.returnNumber,
-          });
-        });
-      }
 
-      // 5. Append reversing Finance transaction
+      // 5. Append reversing Finance transaction if cash refund was issued
+      const cashRefundToReverse = target.cashRefunded ?? 0;
       const newFinanceTxs = [...(state.financeTransactions || [])];
-      if (target.refundMethod === "Exchange") {
-        const diff = target.exchangeDifference ?? 0;
-        if (diff > 0) {
-          // Reversing original Income -> Expense
-          const method: PaymentMethod =
-            target.differencePaymentMethod && target.differencePaymentMethod !== "Adjustment"
-              ? (target.differencePaymentMethod as PaymentMethod)
-              : "Cash";
-          const accountId = methodToAccountId(method);
-          newFinanceTxs.push({
-            id: generateUniqueId("ft"),
-            type: "Expense" as const,
-            category: "Sales Return" as const,
-            amount: diff,
-            accountId,
-            date: cancelledAt,
-            method,
-            referenceId: target.returnNumber,
-            customerId: target.customerId || undefined,
-            notes: `Exchange Cancelled (difference reversed) — ${target.returnNumber}`,
-          });
-        } else if (diff < 0 && (target.differencePaymentMethod as string) !== "Adjustment") {
-          // Reversing original Expense -> Income
-          const refundAmt = Math.abs(diff);
-          const method: PaymentMethod =
-            target.differencePaymentMethod && (target.differencePaymentMethod as string) !== "Adjustment"
-              ? (target.differencePaymentMethod as PaymentMethod)
-              : "Cash";
-          const accountId = methodToAccountId(method);
-          newFinanceTxs.push({
-            id: generateUniqueId("ft"),
-            type: "Income" as const,
-            category: "Sales Return" as const,
-            amount: refundAmt,
-            accountId,
-            date: cancelledAt,
-            method,
-            referenceId: target.returnNumber,
-            customerId: target.customerId || undefined,
-            notes: `Exchange Cancelled (difference reversed) — ${target.returnNumber}`,
-          });
-        }
-      } else if (target.refundMethod !== "Adjustment" && target.totalRefund > 0) {
+      if (target.refundMethod !== "Adjustment" && target.refundMethod !== "Exchange" && cashRefundToReverse > 0) {
         const accountId = refundMethodToAccountId(target.refundMethod);
         const financeMethod: PaymentMethod =
           target.refundMethod === "Bank"
@@ -3065,24 +3166,29 @@ export function reducer(state: AppState, action: Action): AppState {
           id: generateUniqueId("ft"),
           type: "Income" as const,
           category: "Sales Return" as const,
-          amount: target.totalRefund,
+          amount: cashRefundToReverse,
           accountId,
           date: cancelledAt,
           method: financeMethod,
-          referenceId: target.returnNumber,
+          referenceId: target.invoiceId,
           customerId: target.customerId || undefined,
           notes: `Sales Return Cancelled — ${target.returnNumber} (${reason})`,
         });
       }
 
-      // 6. Append customer activity (only for named customers, not walk-ins)
+      // 6. Append customer activity and update customer debt & store credit (only for named customers, not walk-ins)
       const origInvoice = state.invoices.find((i) => i.id === target.invoiceId);
       const newCustomers = state.customers.map((c) => {
         if (!target.customerId || c.id !== target.customerId) return c;
         const itemsStr = target.items.map((it) => `${it.productName} ×${it.quantity}`).join(", ");
         const updatedStoreCredit = getCustomerCreditBalance(newCustomerCreditTxs, c.id);
+        const customerInvoices = newInvoices.filter(
+          (inv) => inv.customerId === c.id && !inv.voided
+        );
+        const updatedDebt = customerInvoices.reduce((s, inv) => s + Math.max(0, roundMoney(inv.dueAmount)), 0);
         return {
           ...c,
+          debt: roundMoney(updatedDebt),
           storeCredit: updatedStoreCredit,
           activities: [
             ...(c.activities || []),
@@ -3772,6 +3878,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         purchaseOrderCounter: state.purchaseOrderCounter ?? 0,
         holdBills: state.holdBills ?? [],
         holdBillsCounter: state.holdBillsCounter ?? 0,
+        paymentReceiptCounter: state.paymentReceiptCounter ?? 0,
         settings,
         __v: STORE_VERSION,
       };

@@ -439,6 +439,7 @@ export default function SettingsPage() {
           purchaseOrderCounter: typeof parsed.purchaseOrderCounter === "number" ? parsed.purchaseOrderCounter : (Array.isArray(parsed.purchaseOrders) ? parsed.purchaseOrders.length : 0),
           holdBills: Array.isArray(parsed.holdBills) ? parsed.holdBills : [],
           holdBillsCounter: typeof parsed.holdBillsCounter === "number" ? parsed.holdBillsCounter : (Array.isArray(parsed.holdBills) ? parsed.holdBills.length : 0),
+          paymentReceiptCounter: typeof parsed.paymentReceiptCounter === "number" ? parsed.paymentReceiptCounter : 0,
         };
 
         const settingsPayload: Record<string, unknown> | undefined =

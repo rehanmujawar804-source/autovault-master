@@ -569,7 +569,13 @@ export default function BillingPage() {
 
     setIsSubmitting(true);
 
-    const invId = `inv-${crypto.randomUUID()}`;
+    const generateUUID = () => {
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+      }
+      return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    };
+    const invId = `inv-${generateUUID()}`;
     const invoice: Invoice = {
       id: invId,
       invoiceNumber: getNextInvoiceNumber(),

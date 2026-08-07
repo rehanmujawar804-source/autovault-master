@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useEffect, useState } from "react";
+import { useMemo, useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toLocalDateStr, todayLocalStr } from "@/lib/dateUtils";
@@ -10,406 +10,647 @@ import StatCard from "@/components/StatCard";
 import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import {
+  DollarSign,
   TrendingUp,
-  Wallet,
-  AlertCircle,
-  Package,
-  ReceiptText,
-  Users,
-  ShoppingCart,
-  ArrowRight,
-  Printer,
-  Calendar,
-  ChevronDown,
-  Coins,
-  Smartphone,
   CreditCard,
-  CheckCircle,
-  X,
-  FileSpreadsheet,
+  AlertTriangle,
+  Users,
+  Package,
+  ShieldCheck,
   Activity,
+  Info,
+  X,
+  Printer,
+  ArrowUpRight,
+  ArrowDownRight,
+  Percent,
+  Zap,
+  Building2,
+  Eye
 } from "lucide-react";
+import {
+  calculateStockRunoutPredictions,
+  analyzeRevenueTrends,
+  analyzeProfitTrends,
+  getCategoryAndSalesTimingInsights,
+  calculateBusinessHealthScore,
+  generateRecommendedActions,
+  calculatePeriodComparison,
+  calculateProductVelocityInsights,
+  calculateCustomerInsightsExtended,
+  calculateSupplierInsightsExtended,
+  calculateCashFlowBreakdown,
+  calculateSalesReturnsDetailed,
+  generateExplainableSmartInsights,
+  calculateFinancialWaterfall,
+  StockRunoutPrediction,
+  OwnerRecommendedAction,
+  ExplainableInsight
+} from "@/lib/biAnalytics";
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ANALYTICS / BUSINESS INTELLIGENCE PAGE
+// EXPLAINABILITY DICTIONARY FOR KPI POPUPS
 // ─────────────────────────────────────────────────────────────────────────────
+interface KPIExplanation {
+  title: string;
+  formula: string;
+  sources: string[];
+  meaning: string;
+  updateFrequency: string;
+}
 
-type TimeRange = "Today" | "Week" | "Month" | "Quarter" | "Year" | "All" | "Custom";
-
-/** Extended point type for Quarter/Year grouping modes */
-type TrendPoint = {
-  label: string;
-  dateStr: string;
-  sales: number;
-  profit: number;
-  _startTime?: number;
-  _endTime?: number;
-  _year?: number;
-  _month?: number;
+const KPI_EXPLANATIONS: Record<string, KPIExplanation> = {
+  billedTotal: {
+    title: "Billed Total (Gross Invoice Sum)",
+    formula: "SUM(Invoice.total) for all non-voided invoices in selected period",
+    sources: ["invoices (non-voided)"],
+    meaning: "Total gross dollar amount billed on customer invoices prior to sales returns or refunds.",
+    updateFrequency: "Real-time on invoice creation"
+  },
+  collectedRevenue: {
+    title: "Collected Revenue (Net Sales)",
+    formula: "calculateRevenue(Invoices, SalesReturns) = SUM(Invoice.total) - SUM(SalesReturn.totalRefund)",
+    sources: ["invoices", "salesReturns (active)"],
+    meaning: "Actual net revenue generated after deducting customer refunds for returned products.",
+    updateFrequency: "Real-time on payment/return"
+  },
+  netProfit: {
+    title: "Net Business Profit (Gross Margin)",
+    formula: "calculateProfit() = Net Revenue - Cost of Goods Sold (COGS)",
+    sources: ["invoices", "salesReturns", "products.currentCost"],
+    meaning: "Gross trading profit earned after deducting FIFO unit buy costs from net sales revenue.",
+    updateFrequency: "Real-time on billing"
+  },
+  pendingDebt: {
+    title: "Pending Customer Dues (Receivables)",
+    formula: "SUM(Invoice.total - Invoice.amountPaid) for invoices with unpaid balance",
+    sources: ["invoices", "customers.debt"],
+    meaning: "Total uncollected credit extended to customers. Represents money owed to the business.",
+    updateFrequency: "Real-time on credit sale / payment"
+  },
+  avgOrderValue: {
+    title: "Average Order Value (AOV)",
+    formula: "Gross Billed Total ÷ Total Invoice Count in period",
+    sources: ["invoices"],
+    meaning: "Average bill amount per customer checkout transaction.",
+    updateFrequency: "Calculated per filter range"
+  },
+  warehouseValue: {
+    title: "Warehouse Inventory Valuation",
+    formula: "SUM(Product.stock × Product.currentCost) for all active stock",
+    sources: ["products"],
+    meaning: "Total wholesale working capital tied up in physical inventory at cost price.",
+    updateFrequency: "Real-time on purchase / sale"
+  },
+  lowStockItems: {
+    title: "Low Stock & Out of Stock Items",
+    formula: "COUNT(Product) WHERE stock <= lowStockThreshold OR stock == 0",
+    sources: ["products"],
+    meaning: "Number of catalog items requiring immediate reorder to prevent stockouts.",
+    updateFrequency: "Real-time on inventory change"
+  },
+  liquidCash: {
+    title: "Total Liquid Cash Available",
+    formula: "Cash in Till + Bank Account Balance + Digital UPI Balance",
+    sources: ["financeAccounts (acc-cash, acc-bank, acc-upi)"],
+    meaning: "Immediately spendable liquid cash reserves available across cash drawer and bank accounts.",
+    updateFrequency: "Real-time on finance transactions"
+  },
+  businessHealth: {
+    title: "Business Health Score (0–100)",
+    formula: "Deterministic composite (Cash: 20pt, Debt: 20pt, Payables: 15pt, Stock: 15pt, Profit: 15pt, Rev: 15pt)",
+    sources: ["biAnalytics.calculateBusinessHealthScore()"],
+    meaning: "Objective store health index evaluating liquidity, credit risk, stock efficiency, and growth trajectory.",
+    updateFrequency: "Calculated dynamically"
+  }
 };
 
 export default function AnalyticsPage() {
   const router = useRouter();
-  const { isOwner, loading, requireOwner } = useRole();
-  const { state, getInventoryValue, getInvoiceOutstanding } = useStore();
+  const { isOwner, role } = useRole();
+  const {
+    state,
+    getCashBalance,
+    getBankBalance,
+    getUPIBalance,
+    getTotalCashAvailable,
+    getInventoryValue,
+    getTotalOutstandingDebt,
+    getTotalSupplierOutstanding
+  } = useStore();
 
-  // ── States ────────────────────────────────────────────────────────────────
-  const [timeRange, setTimeRange] = useState<TimeRange>("All");
-  const [startDate, setStartDate] = useState<string>(() => {
-    const now = new Date();
-    const thirtyAgo = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000);
-    return toLocalDateStr(thirtyAgo);
-  });
-  const [endDate, setEndDate] = useState<string>(() => {
-    return toLocalDateStr(new Date());
-  });
-  const [showCustomDates, setShowCustomDates] = useState(false);
-  const [showReport, setShowReport] = useState(false);
-  const [inventoryAlertTab, setInventoryAlertTab] = useState<"out" | "low">("out");
-
-  // SVG Area Chart Hover Index State
-  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
-
-  // ── Owner-only guard ──────────────────────────────────────────────────────
+  // Access Control Guard
   useEffect(() => {
-    if (!loading) requireOwner();
-  }, [loading, requireOwner]);
+    if (!isOwner) {
+      router.replace("/");
+    }
+  }, [isOwner, router]);
 
+  // ── Date Range Filters State ─────────────────────────────────────────────
+  const [timeRange, setTimeRange] = useState<string>("Month");
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
 
-  // ── Date Filtering Helper ─────────────────────────────────────────────────
+  // ── UI View Controls ─────────────────────────────────────────────────────
+  const [trendView, setTrendView] = useState<"chart" | "waterfall">("chart");
+  const [productRankingTab, setProductRankingTab] = useState<"revenue" | "profit" | "velocity" | "deadStock" | "neverSold">("revenue");
+
+  // ── Modal State ──────────────────────────────────────────────────────────
+  const [activeExplainKey, setActiveExplainKey] = useState<string | null>(null);
+  const [activeDrillModal, setActiveDrillModal] = useState<"moneyVault" | "lowStock" | "debtors" | "deadStock" | null>(null);
+
+  // Hover state and container ref for Area Chart
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const chartContainerRef = useRef<HTMLDivElement | null>(null);
+  const touchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleChartPointerMove = (e: React.PointerEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
+    if (!chartContainerRef.current || !chartData.points || chartData.points.length === 0) return;
+    const rect = chartContainerRef.current.getBoundingClientRect();
+    let clientX = 0;
+    let clientY = 0;
+    if ("touches" in e && e.touches.length > 0) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else if ("clientX" in e) {
+      clientX = (e as React.PointerEvent<HTMLDivElement>).clientX;
+      clientY = (e as React.PointerEvent<HTMLDivElement>).clientY;
+    } else {
+      return;
+    }
+
+    const posX = clientX - rect.left;
+    const posY = clientY - rect.top;
+    const W = rect.width;
+    const H = rect.height;
+    if (W <= 0 || H <= 0) return;
+
+    // Hit-testing against rendered 2D (x, y) coordinates of every plotted point
+    let closestIndex = -1;
+    let minDistance = Infinity;
+
+    chartData.points.forEach((pt, idx) => {
+      const px = (pt.x / 800) * W;
+      const pySales = (pt.ySales / 200) * H;
+      const pyProfit = (pt.yProfit / 200) * H;
+
+      const dSales = Math.hypot(posX - px, posY - pySales);
+      const dProfit = Math.hypot(posX - px, posY - pyProfit);
+      const dMin = Math.min(dSales, dProfit);
+
+      if (dMin < minDistance) {
+        minDistance = dMin;
+        closestIndex = idx;
+      }
+    });
+
+    // Proximity threshold check: snap ONLY when pointer is within reasonable radius
+    if (closestIndex >= 0 && chartData.points[closestIndex]) {
+      const closestPt = chartData.points[closestIndex];
+      const closestPx = (closestPt.x / 800) * W;
+      const dxClosest = Math.abs(posX - closestPx);
+      if (minDistance <= 50 || dxClosest <= 35) {
+        if (touchTimeoutRef.current) clearTimeout(touchTimeoutRef.current);
+        setHoverIndex(closestIndex);
+        return;
+      }
+    }
+
+    setHoverIndex(null);
+  };
+
+  const handleChartPointerLeave = () => {
+    if (touchTimeoutRef.current) clearTimeout(touchTimeoutRef.current);
+    setHoverIndex(null);
+  };
+
+  const handleChartTouchEnd = () => {
+    if (touchTimeoutRef.current) clearTimeout(touchTimeoutRef.current);
+    touchTimeoutRef.current = setTimeout(() => {
+      setHoverIndex(null);
+    }, 1500);
+  };
+
+  // Set default custom date bounds
+  useEffect(() => {
+    if (timeRange === "Custom" && (!startDate || !endDate)) {
+      const today = todayLocalStr();
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+      setStartDate(thirtyDaysAgo);
+      setEndDate(today);
+    }
+  }, [timeRange, startDate, endDate]);
+
+  // ── 1. Memoized Filtered Invoices, Returns & Purchases ────────────────────
   const filteredInvoices = useMemo(() => {
     const invoices = state.invoices.filter((inv) => !inv.voided);
+    if (timeRange === "All") return invoices;
+
+    const now = new Date();
     const todayStr = todayLocalStr();
-    const [tYear, tMonth, tDay] = todayStr.split("-").map(Number);
-    const todayTime = Date.UTC(tYear, tMonth - 1, tDay);
-    const oneDay = 24 * 60 * 60 * 1000;
 
-    return invoices.filter((inv) => {
-      const [year, month, day] = inv.date.split("-").map(Number);
-      const invTime = Date.UTC(year, month - 1, day);
+    if (timeRange === "Today") {
+      return invoices.filter((inv) => inv.date === todayStr);
+    }
 
-      if (timeRange === "Today") {
-        return inv.date === todayStr;
-      }
-      if (timeRange === "Week") {
-        return invTime >= todayTime - 6 * oneDay && invTime <= todayTime;
-      }
-      if (timeRange === "Month") {
-        return invTime >= todayTime - 29 * oneDay && invTime <= todayTime;
-      }
-      if (timeRange === "Quarter") {
-        return invTime >= todayTime - 89 * oneDay && invTime <= todayTime;
-      }
-      if (timeRange === "Year") {
-        return invTime >= todayTime - 364 * oneDay && invTime <= todayTime;
-      }
-      if (timeRange === "Custom") {
-        const start = startDate ? (() => {
-          const [sY, sM, sD] = startDate.split("-").map(Number);
-          return Date.UTC(sY, sM - 1, sD);
-        })() : 0;
-        const end = endDate ? (() => {
-          const [eY, eM, eD] = endDate.split("-").map(Number);
-          return Date.UTC(eY, eM - 1, eD);
-        })() : Infinity;
-        return invTime >= start && invTime <= end;
-      }
-      return true; // All Time
-    });
+    let cutoffDate = new Date();
+    if (timeRange === "Week") {
+      cutoffDate.setDate(now.getDate() - 7);
+    } else if (timeRange === "Month") {
+      cutoffDate.setDate(now.getDate() - 30);
+    } else if (timeRange === "Quarter") {
+      cutoffDate.setDate(now.getDate() - 90);
+    } else if (timeRange === "Year") {
+      cutoffDate.setFullYear(now.getFullYear() - 1);
+    } else if (timeRange === "Custom" && startDate && endDate) {
+      return invoices.filter((inv) => inv.date >= startDate && inv.date <= endDate);
+    }
+
+    const cutoffStr = toLocalDateStr(cutoffDate);
+    return invoices.filter((inv) => inv.date >= cutoffStr);
   }, [state.invoices, timeRange, startDate, endDate]);
 
   const filteredSalesReturns = useMemo(() => {
     const returns = (state.salesReturns || []).filter((r) => r.status !== "Cancelled");
+    if (timeRange === "All") return returns;
+
+    const now = new Date();
     const todayStr = todayLocalStr();
-    const [tYear, tMonth, tDay] = todayStr.split("-").map(Number);
-    const todayTime = Date.UTC(tYear, tMonth - 1, tDay);
-    const oneDay = 24 * 60 * 60 * 1000;
 
-    return returns.filter((r) => {
-      const rLocalDateStr = toLocalDateStr(r.createdAt);
-      if (!rLocalDateStr) return false;
-      const [year, month, day] = rLocalDateStr.split("-").map(Number);
-      const rTime = Date.UTC(year, month - 1, day);
+    if (timeRange === "Today") {
+      return returns.filter((r) => (r.createdAt ? r.createdAt.split("T")[0] : "") === todayStr);
+    }
 
-      if (timeRange === "Today") {
-        return rLocalDateStr === todayStr;
-      }
-      if (timeRange === "Week") {
-        return rTime >= todayTime - 6 * oneDay && rTime <= todayTime;
-      }
-      if (timeRange === "Month") {
-        return rTime >= todayTime - 29 * oneDay && rTime <= todayTime;
-      }
-      if (timeRange === "Quarter") {
-        return rTime >= todayTime - 89 * oneDay && rTime <= todayTime;
-      }
-      if (timeRange === "Year") {
-        return rTime >= todayTime - 364 * oneDay && rTime <= todayTime;
-      }
-      if (timeRange === "Custom") {
-        const start = startDate ? (() => {
-          const [sY, sM, sD] = startDate.split("-").map(Number);
-          return Date.UTC(sY, sM - 1, sD);
-        })() : 0;
-        const end = endDate ? (() => {
-          const [eY, eM, eD] = endDate.split("-").map(Number);
-          return Date.UTC(eY, eM - 1, eD);
-        })() : Infinity;
-        return rTime >= start && rTime <= end;
-      }
-      return true; // All Time
-    });
+    let cutoffDate = new Date();
+    if (timeRange === "Week") {
+      cutoffDate.setDate(now.getDate() - 7);
+    } else if (timeRange === "Month") {
+      cutoffDate.setDate(now.getDate() - 30);
+    } else if (timeRange === "Quarter") {
+      cutoffDate.setDate(now.getDate() - 90);
+    } else if (timeRange === "Year") {
+      cutoffDate.setFullYear(now.getFullYear() - 1);
+    } else if (timeRange === "Custom" && startDate && endDate) {
+      return returns.filter((r) => {
+        const rDate = r.createdAt ? r.createdAt.split("T")[0] : "";
+        return rDate >= startDate && rDate <= endDate;
+      });
+    }
+
+    const cutoffStr = toLocalDateStr(cutoffDate);
+    return returns.filter((r) => (r.createdAt ? r.createdAt.split("T")[0] : "") >= cutoffStr);
   }, [state.salesReturns, timeRange, startDate, endDate]);
 
-  // ── Derived Metrics (dynamic based on timeRange) ─────────────────────────
-  const data = useMemo(() => {
-    const products = state.products;
-    const customers = state.customers;
+  const filteredPurchases = useMemo(() => {
+    const purchases = state.purchases || [];
+    if (timeRange === "All") return purchases;
 
-    // Financial KPIs
+    const now = new Date();
+    const todayStr = todayLocalStr();
+
+    if (timeRange === "Today") {
+      return purchases.filter((p) => (p.date ? p.date.split("T")[0] : p.createdAt ? p.createdAt.split("T")[0] : "") === todayStr);
+    }
+
+    let cutoffDate = new Date();
+    if (timeRange === "Week") {
+      cutoffDate.setDate(now.getDate() - 7);
+    } else if (timeRange === "Month") {
+      cutoffDate.setDate(now.getDate() - 30);
+    } else if (timeRange === "Quarter") {
+      cutoffDate.setDate(now.getDate() - 90);
+    } else if (timeRange === "Year") {
+      cutoffDate.setFullYear(now.getFullYear() - 1);
+    } else if (timeRange === "Custom" && startDate && endDate) {
+      return purchases.filter((p) => {
+        const pDate = p.date ? p.date.split("T")[0] : p.createdAt ? p.createdAt.split("T")[0] : "";
+        return pDate >= startDate && pDate <= endDate;
+      });
+    }
+
+    const cutoffStr = toLocalDateStr(cutoffDate);
+    return purchases.filter((p) => (p.date ? p.date.split("T")[0] : p.createdAt ? p.createdAt.split("T")[0] : "") >= cutoffStr);
+  }, [state.purchases, timeRange, startDate, endDate]);
+
+  const filteredSupplierPayments = useMemo(() => {
+    const payments = state.supplierPayments || [];
+    if (timeRange === "All") return payments;
+
+    const now = new Date();
+    const todayStr = todayLocalStr();
+
+    if (timeRange === "Today") {
+      return payments.filter((p) => (p.date ? p.date.split("T")[0] : p.createdAt ? p.createdAt.split("T")[0] : "") === todayStr);
+    }
+
+    let cutoffDate = new Date();
+    if (timeRange === "Week") {
+      cutoffDate.setDate(now.getDate() - 7);
+    } else if (timeRange === "Month") {
+      cutoffDate.setDate(now.getDate() - 30);
+    } else if (timeRange === "Quarter") {
+      cutoffDate.setDate(now.getDate() - 90);
+    } else if (timeRange === "Year") {
+      cutoffDate.setFullYear(now.getFullYear() - 1);
+    } else if (timeRange === "Custom" && startDate && endDate) {
+      return payments.filter((p) => {
+        const pDate = p.date ? p.date.split("T")[0] : p.createdAt ? p.createdAt.split("T")[0] : "";
+        return pDate >= startDate && pDate <= endDate;
+      });
+    }
+
+    const cutoffStr = toLocalDateStr(cutoffDate);
+    return payments.filter((p) => (p.date ? p.date.split("T")[0] : p.createdAt ? p.createdAt.split("T")[0] : "") >= cutoffStr);
+  }, [state.supplierPayments, timeRange, startDate, endDate]);
+
+  // Helper for invoice outstanding
+  const getInvoiceOutstanding = (inv: typeof state.invoices[0]) => {
+    if (inv.paymentStatus === "Paid") return 0;
+    const paid = inv.amountPaid !== undefined ? inv.amountPaid : (inv.paymentStatus === "Debt" ? 0 : inv.total);
+    return Math.max(0, inv.total - paid);
+  };
+
+  const allTimeDebtorsList = useMemo(() => {
+    return (state.customers || [])
+      .filter((c) => (c.debt || 0) > 0)
+      .sort((a, b) => (b.debt || 0) - (a.debt || 0));
+  }, [state.customers]);
+
+  // ── 2. Master Memoized BI Analytics Integrations ─────────────────────────
+  const biData = useMemo(() => {
+    const products = state.products || [];
+    const invoices = state.invoices || [];
+    const salesReturns = state.salesReturns || [];
+    const suppliers = state.suppliers || [];
+    const customers = state.customers || [];
+    const purchases = state.purchases || [];
+    const supplierPayments = state.supplierPayments || [];
+    const financeTransactions = state.financeTransactions || [];
+
+    // Period comparison
+    const periodComp = calculatePeriodComparison(timeRange, startDate, endDate, invoices, salesReturns, products);
+
+    // Stock runouts
+    const runoutPredictions = calculateStockRunoutPredictions(products, invoices, salesReturns);
+    const criticalStockCount = runoutPredictions.filter((p) => p.priority === "Critical" || p.priority === "High").length;
+
+    // Velocity & Ageing
+    const velocityInsights = calculateProductVelocityInsights(
+      products,
+      filteredInvoices,
+      invoices,
+      salesReturns,
+      periodComp,
+      periodComp.previousPeriodInvoices
+    );
+
+    // Customer & Supplier Intelligence
+    const customerExt = calculateCustomerInsightsExtended(customers, filteredInvoices, invoices);
+    const supplierExt = calculateSupplierInsightsExtended(suppliers, filteredPurchases, filteredSupplierPayments, filteredInvoices);
+
+    // Trends & Cash Flow
+    const revTrend = analyzeRevenueTrends(invoices, salesReturns);
+    const profTrend = analyzeProfitTrends(products, invoices, salesReturns);
+    const cashFlow = calculateCashFlowBreakdown(financeTransactions);
+    const timingInsights = getCategoryAndSalesTimingInsights(products, invoices, salesReturns);
+
+    // Health Score
+    const liquidCash = getTotalCashAvailable();
+    const custDebt = getTotalOutstandingDebt();
+    const supPayables = getTotalSupplierOutstanding();
+    const healthScore = calculateBusinessHealthScore(
+      liquidCash,
+      custDebt,
+      supPayables,
+      criticalStockCount,
+      velocityInsights.deadStockProducts.length,
+      profTrend.monthVsLastMonth,
+      revTrend.monthVsLastMonth
+    );
+
+    // Supplier payables map
+    const supPayablesMap: Record<string, number> = {};
+    purchases.forEach((p) => {
+      const due = p.dueAmount ?? Math.max(0, (p.totalAmount || 0) - (p.amountPaid || 0));
+      supPayablesMap[p.supplierId] = (supPayablesMap[p.supplierId] || 0) + due;
+    });
+
+    // Owner recommended actions
+    const recommendedActions = generateRecommendedActions(
+      runoutPredictions,
+      customers,
+      suppliers,
+      supPayablesMap,
+      velocityInsights.deadStockProducts.length
+    );
+
+    // Financial Waterfall
+    const waterfall = calculateFinancialWaterfall(filteredInvoices, filteredSalesReturns, products);
+
+    // Detailed Sales Returns
+    const returnsDetailed = calculateSalesReturnsDetailed(salesReturns, filteredInvoices, filteredSalesReturns, products);
+
+    // Explainable Smart Insights
+    const smartInsights = generateExplainableSmartInsights(
+      periodComp,
+      timingInsights.bestCategory,
+      cashFlow,
+      custDebt,
+      getInventoryValue(),
+      velocityInsights.deadStockValuation
+    );
+
+    return {
+      periodComp,
+      runoutPredictions,
+      velocityInsights,
+      customerExt,
+      supplierExt,
+      revTrend,
+      profTrend,
+      cashFlow,
+      timingInsights,
+      healthScore,
+      recommendedActions,
+      waterfall,
+      returnsDetailed,
+      smartInsights,
+      liquidCash,
+      custDebt,
+      supPayables
+    };
+  }, [
+    state.products,
+    state.invoices,
+    state.salesReturns,
+    state.suppliers,
+    state.customers,
+    state.purchases,
+    state.supplierPayments,
+    state.financeTransactions,
+    filteredInvoices,
+    filteredSalesReturns,
+    filteredPurchases,
+    filteredSupplierPayments,
+    timeRange,
+    startDate,
+    endDate,
+    getTotalCashAvailable,
+    getTotalOutstandingDebt,
+    getTotalSupplierOutstanding,
+    getInventoryValue
+  ]);
+
+  // ── 3. Base Financial Aggregations (Single-pass Optimized) ────────────────
+  const financialTotals = useMemo(() => {
     const totalBilled = filteredInvoices.reduce((s, i) => s + i.total, 0);
     const totalRevenue = calculateRevenue(filteredInvoices, filteredSalesReturns);
     const totalDebt = filteredInvoices.reduce((s, i) => s + getInvoiceOutstanding(i), 0);
-
-    const totalProfit = calculateProfit(filteredInvoices, filteredSalesReturns, products);
-
+    const totalProfit = calculateProfit(filteredInvoices, filteredSalesReturns, state.products);
     const avgOrderValue = filteredInvoices.length > 0 ? Math.round(totalBilled / filteredInvoices.length) : 0;
+    const warehouseValue = getInventoryValue();
+    const lowStockCount = state.products.filter((p) => p.stock > 0 && p.stock <= p.lowStockThreshold).length + state.products.filter((p) => p.stock === 0).length;
 
-    // Payment method shares
-    const paymentMethods = ["Cash", "UPI", "Card"] as const;
-    const methodData = paymentMethods.map((method) => {
-      const methodInvs = filteredInvoices.filter((i) => i.paymentMethod === method);
-      return {
-        method,
-        count: methodInvs.length,
-        total: methodInvs.reduce((s, i) => s + i.amountPaid, 0),
-      };
+    // Payment Methods
+    const methods = ["Cash", "Digital", "Bank Transfer", "Credit"] as const;
+    const methodMix = methods.map((m) => {
+      const invs = filteredInvoices.filter((i) => i.paymentMethod === m);
+      const amt = invs.reduce((s, i) => s + i.total, 0);
+      const pct = totalBilled > 0 ? Math.round((amt / totalBilled) * 100) : 0;
+      return { method: m, count: invs.length, amount: amt, percentage: pct };
     });
 
-    // Invoice Status segments
-    const statusData = [
+    // Payment Statuses
+    const statusMix = [
       {
-        label: "Paid",
+        status: "Paid",
+        label: "Paid In Full",
         count: filteredInvoices.filter((i) => i.paymentStatus === "Paid").length,
-        amount: filteredInvoices.filter((i) => i.paymentStatus === "Paid").reduce((s, i) => s + i.total, 0),
-        color: "bg-green-500",
-        textColor: "text-green-700",
-        bgColor: "bg-green-50",
-        border: "border-green-200",
+        amount: filteredInvoices.filter((i) => i.paymentStatus === "Paid").reduce((s, i) => s + i.total, 0)
       },
       {
-        label: "Partial",
+        status: "Partial",
+        label: "Partial Payments",
         count: filteredInvoices.filter((i) => i.paymentStatus === "Partial").length,
-        amount: filteredInvoices.filter((i) => i.paymentStatus === "Partial").reduce((s, i) => s + i.total, 0),
-        color: "bg-orange-500",
-        textColor: "text-orange-700",
-        bgColor: "bg-orange-50",
-        border: "border-orange-200",
+        amount: filteredInvoices.filter((i) => i.paymentStatus === "Partial").reduce((s, i) => s + i.total, 0)
       },
       {
-        label: "Debt",
+        status: "Debt",
+        label: "Unpaid Debt",
         count: filteredInvoices.filter((i) => i.paymentStatus === "Debt").length,
-        amount: filteredInvoices.filter((i) => i.paymentStatus === "Debt").reduce((s, i) => s + i.total, 0),
-        color: "bg-red-500",
-        textColor: "text-red-700",
-        bgColor: "bg-red-50",
-        border: "border-red-200",
-      },
+        amount: filteredInvoices.filter((i) => i.paymentStatus === "Debt").reduce((s, i) => s + i.total, 0)
+      }
     ];
 
-    // Top Products sold in range
-    const productSalesMap: Record<
-      string,
-      { name: string; brand: string; qty: number; revenue: number; profit: number }
-    > = {};
+    // Single-pass Product Metrics Accumulation
+    const productSalesMap: Record<string, { product: typeof state.products[0]; qty: number; revenue: number; profit: number }> = {};
+    state.products.forEach((p) => {
+      productSalesMap[p.id] = { product: p, qty: 0, revenue: 0, profit: 0 };
+    });
+
+    const productCostMap = new Map<string, number>();
+    state.products.forEach((p) => productCostMap.set(p.id, p.currentCost));
+
     filteredInvoices.forEach((inv) => {
       inv.items.forEach((item) => {
-        if (!productSalesMap[item.productId]) {
-          const p = products.find((pr) => pr.id === item.productId);
-          productSalesMap[item.productId] = {
-            name: item.name,
-            brand: p?.brand ?? "Unknown",
-            qty: 0,
-            revenue: 0,
-            profit: 0,
-          };
+        const entry = productSalesMap[item.productId];
+        if (entry) {
+          entry.qty += item.quantity;
+          const itemRev = item.quantity * item.price;
+          entry.revenue += itemRev;
+          const cost = item.costPrice ?? productCostMap.get(item.productId) ?? 0;
+          entry.profit += itemRev - item.quantity * cost;
         }
-        productSalesMap[item.productId].qty += item.quantity;
       });
     });
 
     filteredSalesReturns.forEach((r) => {
       r.items.forEach((ri) => {
-        if (productSalesMap[ri.productId]) {
-          productSalesMap[ri.productId].qty -= ri.quantity;
+        const entry = productSalesMap[ri.productId];
+        if (entry) {
+          entry.revenue -= ri.refundAmount;
+          const cost = productCostMap.get(ri.productId) ?? 0;
+          entry.profit -= ri.refundAmount - ri.quantity * cost;
         }
       });
-    });
-
-    Object.keys(productSalesMap).forEach((productId) => {
-      const pInvs = filteredInvoices.filter((inv) => inv.items.some((item) => item.productId === productId));
-      const pReturns = filteredSalesReturns.filter((r) => r.items.some((item) => item.productId === productId));
-      productSalesMap[productId].revenue = calculateRevenue(pInvs, pReturns, productId);
-      productSalesMap[productId].profit = calculateProfit(pInvs, pReturns, products, productId);
-    });
-
-    const topProducts = Object.entries(productSalesMap)
-      .map(([id, v]) => ({ id, ...v }))
-      .sort((a, b) => b.qty - a.qty)
-      .slice(0, 5);
-
-    // Categories performance in range
-    const categoryMap: Record<string, { revenue: number; qty: number }> = {};
-    filteredInvoices.forEach((inv) => {
-      inv.items.forEach((item) => {
-        const product = products.find((p) => p.id === item.productId);
-        const cat = product?.category ?? "Accessories";
-        if (!categoryMap[cat]) categoryMap[cat] = { revenue: 0, qty: 0 };
-        categoryMap[cat].qty += item.quantity;
-      });
-    });
-
-    filteredSalesReturns.forEach((r) => {
-      r.items.forEach((ri) => {
-        const product = products.find((p) => p.id === ri.productId);
-        const cat = product?.category ?? "Accessories";
-        if (categoryMap[cat]) {
-          categoryMap[cat].qty -= ri.quantity;
-        }
-      });
-    });
-
-    Object.keys(categoryMap).forEach((cat) => {
-      const catProducts = products.filter((p) => p.category === cat);
-      const catProductIds = new Set(catProducts.map((p) => p.id));
-
-      const catInvs = filteredInvoices.filter((inv) => inv.items.some((item) => catProductIds.has(item.productId)));
-      const catReturns = filteredSalesReturns.filter((r) => r.items.some((item) => catProductIds.has(item.productId)));
-
-      let catRevenue = 0;
-      catProducts.forEach((p) => {
-        catRevenue += calculateRevenue(
-          catInvs.filter((inv) => inv.items.some((item) => item.productId === p.id)),
-          catReturns.filter((r) => r.items.some((item) => item.productId === p.id)),
-          p.id
-        );
-      });
-      categoryMap[cat].revenue = catRevenue;
-    });
-
-    const categoryData = Object.entries(categoryMap)
-      .map(([cat, v]) => ({ cat, ...v }))
-      .sort((a, b) => b.revenue - a.revenue);
-
-    // Outstanding debt customers (filtered in range if invoice had due)
-    const debtInvs = filteredInvoices.filter((i) => getInvoiceOutstanding(i) > 0);
-    const debtorMap: Record<string, { name: string; phone: string; debt: number }> = {};
-    debtInvs.forEach((inv) => {
-      if (inv.customerId) {
-        if (!debtorMap[inv.customerId]) {
-          debtorMap[inv.customerId] = { name: inv.customer, phone: inv.customerPhone ?? "", debt: 0 };
-        }
-        debtorMap[inv.customerId].debt += getInvoiceOutstanding(inv);
+      if (r.refundMethod === "Exchange" && r.exchangeItems) {
+        r.exchangeItems.forEach((exItem) => {
+          const entry = productSalesMap[exItem.productId];
+          if (entry) {
+            const exRev = exItem.quantity * exItem.sellingPrice;
+            entry.revenue += exRev;
+            entry.profit += exRev - exItem.quantity * exItem.costPrice;
+          }
+        });
       }
     });
-    const debtCustomers = Object.entries(debtorMap).map(([id, v]) => ({ id, ...v })).sort((a, b) => b.debt - a.debt);
 
-    // Top Customers in range by totalSpent (billed)
-    const spenderMap: Record<string, { name: string; visits: number; spent: number }> = {};
+    const sortedProductsByRevenue = Object.values(productSalesMap).sort((a, b) => b.revenue - a.revenue);
+    const sortedProductsByProfit = Object.values(productSalesMap).sort((a, b) => b.profit - a.profit);
+    const sortedProductsByVelocity = Object.values(productSalesMap).sort((a, b) => b.qty - a.qty);
+
+    // Category Sales Map Single Pass
+    const catMap: Record<string, { category: string; revenue: number; pct: number }> = {};
+    const categories = Array.from(new Set(state.products.map((p) => p.category || "Accessories")));
+
+    categories.forEach((cat) => {
+      catMap[cat] = { category: cat, revenue: 0, pct: 0 };
+    });
+
+    const productCategoryMap = new Map<string, string>();
+    state.products.forEach((p) => productCategoryMap.set(p.id, p.category || "Accessories"));
+
+    Object.values(productSalesMap).forEach((pData) => {
+      const cat = productCategoryMap.get(pData.product.id) || "Accessories";
+      if (catMap[cat]) {
+        catMap[cat].revenue += pData.revenue;
+      }
+    });
+
+    Object.values(catMap).forEach((c) => {
+      c.pct = totalRevenue > 0 ? Math.round((c.revenue / totalRevenue) * 100) : 0;
+    });
+
+    const categoryList = Object.values(catMap).sort((a, b) => b.revenue - a.revenue);
+
+    // Customer Spenders Single Pass
+    const spenderMap: Record<string, { customerId: string; name: string; phone: string; spent: number; invoices: number }> = {};
     filteredInvoices.forEach((inv) => {
       const cId = inv.customerId || `walkin-${inv.customer}`;
       if (!spenderMap[cId]) {
-        spenderMap[cId] = { name: inv.customer, visits: 0, spent: 0 };
+        spenderMap[cId] = {
+          customerId: cId,
+          name: inv.customer || "Walk-in Customer",
+          phone: inv.customerPhone || "—",
+          spent: 0,
+          invoices: 0
+        };
       }
-      spenderMap[cId].visits += 1;
+      spenderMap[cId].invoices += 1;
+      spenderMap[cId].spent += inv.total;
     });
 
-    Object.keys(spenderMap).forEach((cId) => {
-      const customerInvs = filteredInvoices.filter((inv) => (inv.customerId || `walkin-${inv.customer}`) === cId);
-      const customerReturns = filteredSalesReturns.filter((r) => {
-        const rCustId = r.customerId || `walkin-${state.invoices.find((i) => i.id === r.invoiceId)?.customer}`;
-        return rCustId === cId;
-      });
-      spenderMap[cId].spent = calculateRevenue(customerInvs, customerReturns);
+    filteredSalesReturns.forEach((r) => {
+      const cId = r.customerId || (r.invoiceId ? filteredInvoices.find((i) => i.id === r.invoiceId)?.customerId : null);
+      if (cId && spenderMap[cId]) {
+        spenderMap[cId].spent -= r.totalRefund;
+      }
     });
 
-    const topCustomers = Object.entries(spenderMap)
-      .map(([id, v]) => ({ id, ...v }))
-      .sort((a, b) => b.spent - a.spent)
-      .slice(0, 5);
+    const topSpenders = Object.values(spenderMap).sort((a, b) => b.spent - a.spent).slice(0, 5);
 
-    // Low stock / out of stock
-    const lowStock = products.filter((p) => p.stock > 0 && p.stock <= p.lowStockThreshold);
-    const outOfStock = products.filter((p) => p.stock === 0);
-
-    // Product margins (static ranking)
-    const productMargins = products
-      .map((p) => ({
-        ...p,
-        margin: p.sellPrice > 0 ? Math.round(((p.sellPrice - p.currentCost) / p.sellPrice) * 100) : 0,
-      }))
-      .sort((a, b) => b.margin - a.margin)
-      .slice(0, 5);
-
-    // Returns Analysis
-    const activeReturns = (state.salesReturns || []).filter((r) => r.status !== "Cancelled");
-    const totalItemsSold = filteredInvoices.reduce((sum, inv) => {
-      return sum + inv.items.reduce((s, it) => s + it.quantity, 0);
-    }, 0);
-    const totalItemsReturned = activeReturns.reduce((sum, r) => {
-      return sum + r.items.reduce((s, it) => s + it.quantity, 0);
-    }, 0);
-    const totalRefundAmount = activeReturns.reduce((sum, r) => sum + r.totalRefund, 0);
-    const overallReturnRate = totalItemsSold > 0 ? Math.round((totalItemsReturned / totalItemsSold) * 1000) / 10 : 0;
-
-    const productReturnRates = products
-      .map((p) => {
-        const soldQty = filteredInvoices.reduce((sum, inv) => {
-          const item = inv.items.find((it) => it.productId === p.id);
-          return sum + (item?.quantity ?? 0);
-        }, 0);
-        const returnedQty = activeReturns.reduce((sum, r) => {
-          const item = r.items.find((ri) => ri.productId === p.id);
-          return sum + (item?.quantity ?? 0);
-        }, 0);
-        const rate = soldQty > 0 ? Math.round((returnedQty / soldQty) * 1000) / 10 : 0;
-        return {
-          id: p.id,
-          name: p.name,
-          sku: p.sku,
-          soldQty,
-          returnedQty,
-          rate,
-        };
-      })
-      .filter((p) => p.returnedQty > 0)
-      .sort((a, b) => b.rate - a.rate || b.returnedQty - a.returnedQty)
-      .slice(0, 5);
-
-    const customerReturnRates = customers
-      .map((c) => {
-        const customerInvoices = filteredInvoices.filter((inv) => inv.customerId === c.id);
-        const soldQty = customerInvoices.reduce((sum, inv) => {
-          return sum + inv.items.reduce((s, it) => s + it.quantity, 0);
-        }, 0);
-        const returnedQty = activeReturns
-          .filter((r) => r.customerId === c.id)
-          .reduce((sum, r) => {
-            return sum + r.items.reduce((s, it) => s + it.quantity, 0);
-          }, 0);
-        const rate = soldQty > 0 ? Math.round((returnedQty / soldQty) * 1000) / 10 : 0;
-        return {
-          id: c.id,
-          name: c.name,
-          phone: c.phone,
-          soldQty,
-          returnedQty,
-          rate,
-        };
-      })
-      .filter((c) => c.returnedQty > 0)
-      .sort((a, b) => b.rate - a.rate || b.returnedQty - a.returnedQty)
-      .slice(0, 5);
+    // Debtors List
+    const debtInvoices = filteredInvoices.filter((i) => getInvoiceOutstanding(i) > 0);
+    const debtorMap: Record<string, { name: string; phone: string; totalDebt: number; invCount: number }> = {};
+    debtInvoices.forEach((i) => {
+      const cId = i.customerId || i.customer || "Unknown";
+      if (!debtorMap[cId]) {
+        debtorMap[cId] = { name: i.customer, phone: i.customerPhone || "—", totalDebt: 0, invCount: 0 };
+      }
+      debtorMap[cId].totalDebt += getInvoiceOutstanding(i);
+      debtorMap[cId].invCount += 1;
+    });
+    const debtorList = Object.values(debtorMap).sort((a, b) => b.totalDebt - a.totalDebt);
 
     return {
       totalBilled,
@@ -417,1292 +658,1966 @@ export default function AnalyticsPage() {
       totalDebt,
       totalProfit,
       avgOrderValue,
-      methodData,
-      statusData,
-      topProducts,
-      categoryData,
-      topCustomers,
-      debtCustomers,
-      lowStock,
-      outOfStock,
-      productMargins,
-      totalItemsSold,
-      totalItemsReturned,
-      totalRefundAmount,
-      overallReturnRate,
-      productReturnRates,
-      customerReturnRates,
+      warehouseValue,
+      lowStockCount,
+      methodMix,
+      statusMix,
+      sortedProductsByRevenue,
+      sortedProductsByProfit,
+      sortedProductsByVelocity,
+      categoryList,
+      topSpenders,
+      debtorList
     };
-  }, [filteredInvoices, filteredSalesReturns, state]);
+  }, [filteredInvoices, filteredSalesReturns, state.products, getInventoryValue]);
 
-  // ── Sales Trend Calculations ─────────────────────────────────────────────
-  const { salesLinePath, salesAreaPath, profitLinePath, profitAreaPath, trendPoints, maxChartVal } = useMemo(() => {
-    const todayStr = todayLocalStr();
-    const [tYear, tMonth, tDay] = todayStr.split("-").map(Number);
-    const todayUTC = new Date(Date.UTC(tYear, tMonth - 1, tDay));
-    const oneDay = 24 * 60 * 60 * 1000;
+  // ── 4. Chart Data Generation (Continuous Timeline & Auto-aggregation) ──────
+  const chartData = useMemo(() => {
+    let dateBuckets: { label: string; startDateStr: string; endDateStr: string; hour?: number }[] = [];
 
-    const points: TrendPoint[] = [];
+    const now = new Date();
+    const oneDayMs = 24 * 60 * 60 * 1000;
 
-    if (timeRange === "Week") {
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date(todayUTC.getTime() - i * oneDay);
-        const dateStr = d.toISOString().split("T")[0];
-        const label = new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", day: "numeric", month: "short" }).format(d);
-        points.push({ label, dateStr, sales: 0, profit: 0 });
-      }
-    } else if (timeRange === "Month") {
-      for (let i = 29; i >= 0; i--) {
-        const d = new Date(todayUTC.getTime() - i * oneDay);
-        const dateStr = d.toISOString().split("T")[0];
-        const label = new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", day: "numeric", month: "short" }).format(d);
-        points.push({ label, dateStr, sales: 0, profit: 0 });
-      }
-    } else if (timeRange === "Quarter") {
-      for (let i = 11; i >= 0; i--) {
-        const startOfWeek = new Date(todayUTC.getTime() - (i * 7 + 6) * oneDay);
-        const endOfWeek = new Date(todayUTC.getTime() - i * 7 * oneDay);
-        const label = `${new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", day: "numeric" }).format(startOfWeek)} - ${new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", day: "numeric", month: "short" }).format(endOfWeek)}`;
-        points.push({
-          label,
-          dateStr: `W-${i}`,
-          sales: 0,
-          profit: 0,
-          _startTime: startOfWeek.getTime(),
-          _endTime: endOfWeek.getTime() + oneDay,
-        } as TrendPoint);
-      }
-    } else if (timeRange === "Year") {
-      for (let i = 11; i >= 0; i--) {
-        const d = new Date(Date.UTC(todayUTC.getUTCFullYear(), todayUTC.getUTCMonth() - i, 1));
-        const label = new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", month: "short", year: "2-digit" }).format(d);
-        points.push({
-          label,
-          dateStr: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`,
-          sales: 0,
-          profit: 0,
-          _year: d.getUTCFullYear(),
-          _month: d.getUTCMonth(),
-        } as TrendPoint);
-      }
-    } else if (timeRange === "Custom" && startDate && endDate) {
-      const [sY, sM, sD] = startDate.split("-").map(Number);
-      const start = new Date(Date.UTC(sY, sM - 1, sD));
-      const [eY, eM, eD] = endDate.split("-").map(Number);
-      const end = new Date(Date.UTC(eY, eM - 1, eD));
-      const diffDays = Math.ceil((end.getTime() - start.getTime()) / oneDay);
-      const step = Math.max(1, Math.ceil(diffDays / 20));
+    const daysCount = timeRange === "Custom" && startDate && endDate
+      ? Math.max(1, Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / oneDayMs) + 1)
+      : timeRange === "Week" ? 7 : timeRange === "Month" ? 30 : timeRange === "Quarter" ? 90 : timeRange === "Year" ? 365 : 7;
 
-      for (let i = 0; i <= diffDays; i += step) {
-        const d = new Date(start.getTime() + i * oneDay);
-        const dateStr = d.toISOString().split("T")[0];
-        const label = new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", day: "numeric", month: "short" }).format(d);
-        points.push({ label, dateStr, sales: 0, profit: 0 });
+    if (timeRange === "Today" || (timeRange === "Custom" && daysCount <= 1)) {
+      // 24 Hourly Buckets for Today (00:00 to 23:00)
+      const targetDateStr = timeRange === "Today" ? todayLocalStr() : (startDate || todayLocalStr());
+      for (let h = 0; h < 24; h++) {
+        const ampm = h >= 12 ? "PM" : "AM";
+        const formattedHour = h % 12 === 0 ? 12 : h % 12;
+        dateBuckets.push({
+          label: `${formattedHour}${ampm}`,
+          startDateStr: targetDateStr,
+          endDateStr: targetDateStr,
+          hour: h
+        });
+      }
+    } else if (timeRange === "Week" || (timeRange === "Custom" && daysCount <= 7)) {
+      // Daily 7 Points
+      let startD = new Date(now.getTime() - 6 * oneDayMs);
+      if (timeRange === "Custom" && startDate) {
+        startD = new Date(startDate);
+      }
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(startD.getTime() + i * oneDayMs);
+        const dStr = toLocalDateStr(d);
+        dateBuckets.push({
+          label: d.toLocaleDateString("en-IN", { month: "short", day: "numeric" }),
+          startDateStr: dStr,
+          endDateStr: dStr
+        });
+      }
+    } else if (timeRange === "Month" || (timeRange === "Custom" && daysCount <= 31)) {
+      // Daily 30 Points
+      let count = 30;
+      let startD = new Date(now.getTime() - 29 * oneDayMs);
+      if (timeRange === "Custom" && startDate && endDate) {
+        startD = new Date(startDate);
+        count = daysCount;
+      }
+      for (let i = 0; i < count; i++) {
+        const d = new Date(startD.getTime() + i * oneDayMs);
+        const dStr = toLocalDateStr(d);
+        dateBuckets.push({
+          label: d.toLocaleDateString("en-IN", { month: "short", day: "numeric" }),
+          startDateStr: dStr,
+          endDateStr: dStr
+        });
+      }
+    } else if (timeRange === "Quarter" || (timeRange === "Custom" && daysCount <= 180)) {
+      // 12 Weekly Buckets
+      let startD = new Date(now.getTime() - 90 * oneDayMs);
+      if (timeRange === "Custom" && startDate) startD = new Date(startDate);
+      for (let i = 0; i < 12; i++) {
+        const bStart = new Date(startD.getTime() + i * 7 * oneDayMs);
+        const bEnd = new Date(bStart.getTime() + 6 * oneDayMs);
+        dateBuckets.push({
+          label: `${bStart.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`,
+          startDateStr: toLocalDateStr(bStart),
+          endDateStr: toLocalDateStr(bEnd)
+        });
       }
     } else {
-      // Today or All Time default: group by invoice dates
-      const dates = Array.from(new Set(filteredInvoices.map((inv) => inv.date))).sort();
-      if (dates.length <= 1) {
-        const [bY, bM, bD] = (dates[0] || todayStr).split("-").map(Number);
-        const baseDate = new Date(Date.UTC(bY, bM - 1, bD));
-        for (let i = 4; i >= 0; i--) {
-          const d = new Date(baseDate.getTime() - i * oneDay);
-          const dateStr = d.toISOString().split("T")[0];
-          const label = new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", day: "numeric", month: "short" }).format(d);
-          points.push({ label, dateStr, sales: 0, profit: 0 });
-        }
-      } else {
-        dates.forEach((dStr) => {
-          const [dY, dM, dD] = dStr.split("-").map(Number);
-          const d = new Date(Date.UTC(dY, dM - 1, dD));
-          const label = new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", day: "numeric", month: "short" }).format(d);
-          points.push({ label, dateStr: dStr, sales: 0, profit: 0 });
+      // 12 Monthly Buckets (Year / All / Long Custom)
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const lastDay = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
+        dateBuckets.push({
+          label: d.toLocaleDateString("en-IN", { month: "short" }),
+          startDateStr: toLocalDateStr(d),
+          endDateStr: toLocalDateStr(lastDay)
         });
       }
     }
 
-    // Populate trend values — revenue via canonical calculateRevenue() per bucket
-    // filteredInvoices already excludes voided; filteredSalesReturns already excludes cancelled.
-    // We slice each collection to the bucket's date window, then delegate to calculateRevenue().
-    points.forEach((p) => {
-      // ── Slice invoices for this bucket ──────────────────────────────────────
-      let bucketInvoices = filteredInvoices.filter((inv) => {
-        const [invY, invM, invD] = inv.date.split("-").map(Number);
-        const invTime = Date.UTC(invY, invM - 1, invD);
-        if (timeRange === "Quarter" && p._startTime !== undefined) {
-          return invTime >= p._startTime && invTime < (p._endTime ?? 0);
-        } else if (timeRange === "Year" && p._year !== undefined) {
-          return invY === p._year && (invM - 1) === p._month;
-        } else {
-          return inv.date === p.dateStr;
-        }
-      });
+    const displayPoints = dateBuckets.map((bucket) => {
+      let bInvs: typeof filteredInvoices = [];
+      let bRets: typeof filteredSalesReturns = [];
 
-      // ── Slice returns for this bucket ────────────────────────────────────────
-      let bucketReturns = filteredSalesReturns.filter((r) => {
-        const [rY, rM, rD] = toLocalDateStr(r.createdAt).split("-").map(Number);
-        const rTime = Date.UTC(rY, rM - 1, rD);
-        const rLocalDateStr = toLocalDateStr(r.createdAt);
-        if (timeRange === "Quarter" && p._startTime !== undefined) {
-          return rTime >= p._startTime && rTime < (p._endTime ?? 0);
-        } else if (timeRange === "Year" && p._year !== undefined) {
-          return rY === p._year && (rM - 1) === p._month;
-        } else {
-          return rLocalDateStr === p.dateStr;
-        }
-      });
+      if (bucket.hour !== undefined) {
+        bInvs = filteredInvoices.filter((inv) => {
+          const invDateStr = inv.date ? inv.date.split("T")[0] : "";
+          if (invDateStr !== bucket.startDateStr) return false;
+          const timePart = inv.createdAt && inv.createdAt.includes("T")
+            ? inv.createdAt.split("T")[1]
+            : (inv.date.includes("T") ? inv.date.split("T")[1] : "");
+          if (!timePart) return true;
+          const invHour = parseInt(timePart.split(":")[0], 10);
+          return invHour === bucket.hour;
+        });
+        bRets = filteredSalesReturns.filter((r) => {
+          const rDateStr = r.createdAt ? r.createdAt.split("T")[0] : "";
+          if (rDateStr !== bucket.startDateStr) return false;
+          const timePart = r.createdAt && r.createdAt.includes("T") ? r.createdAt.split("T")[1] : "";
+          if (!timePart) return true;
+          const rHour = parseInt(timePart.split(":")[0], 10);
+          return rHour === bucket.hour;
+        });
+      } else {
+        bInvs = filteredInvoices.filter((inv) => {
+          const d = inv.date ? inv.date.split("T")[0] : "";
+          return d >= bucket.startDateStr && d <= bucket.endDateStr;
+        });
+        bRets = filteredSalesReturns.filter((r) => {
+          const d = r.createdAt ? r.createdAt.split("T")[0] : "";
+          return d >= bucket.startDateStr && d <= bucket.endDateStr;
+        });
+      }
 
-      // ── Canonical revenue: Σ(inv.total) − Σ(active r.totalRefund) ───────────
-      p.sales = calculateRevenue(bucketInvoices, bucketReturns);
-
-      // ── Canonical profit: calculateProfit(bucketInvoices, bucketReturns, products) ─────
-      p.profit = calculateProfit(bucketInvoices, bucketReturns, state.products);
-    });
-
-    const maxSales = Math.max(...points.map((p) => p.sales), 1000);
-    const maxProfit = Math.max(...points.map((p) => p.profit), 500);
-    const maxChartVal = Math.max(maxSales, maxProfit) * 1.15;
-
-    let sLine = "";
-    let sArea = "";
-    let pLine = "";
-    let pArea = "";
-
-    if (points.length > 0) {
-      points.forEach((p, idx) => {
-        const x = 40 + (idx / (points.length - 1 || 1)) * 545;
-        const ySales = 190 - (p.sales / maxChartVal) * 170;
-        const yProfit = 190 - (p.profit / maxChartVal) * 170;
-
-        if (idx === 0) {
-          sLine = `M ${x} ${ySales}`;
-          sArea = `M ${x} 190 L ${x} ${ySales}`;
-          pLine = `M ${x} ${yProfit}`;
-          pArea = `M ${x} 190 L ${x} ${yProfit}`;
-        } else {
-          sLine += ` L ${x} ${ySales}`;
-          sArea += ` L ${x} ${ySales}`;
-          pLine += ` L ${x} ${yProfit}`;
-          pArea += ` L ${x} ${yProfit}`;
-        }
-      });
-
-      const lastX = 40 + 545;
-      sArea += ` L ${lastX} 190 Z`;
-      pArea += ` L ${lastX} 190 Z`;
-    }
-
-    return {
-      salesLinePath: sLine,
-      salesAreaPath: sArea,
-      profitLinePath: pLine,
-      profitAreaPath: pArea,
-      trendPoints: points,
-      maxChartVal,
-    };
-  }, [filteredInvoices, filteredSalesReturns, timeRange, startDate, endDate, state.products]);
-
-  // ── Donut Chart Data Calculations ─────────────────────────────────────────
-  const { donutSlices, totalMethodAmount } = useMemo(() => {
-    const total = data.methodData.reduce((s, m) => s + m.total, 0);
-    let cumulative = 0;
-    const colors: Record<string, string> = {
-      Cash: "#10b981",
-      UPI: "#3b82f6",
-      Card: "#a855f7",
-      Credit: "#ef4444",
-    };
-
-    const slices = data.methodData.map((m) => {
-      const pct = total > 0 ? m.total / total : 0;
-      const strokeLength = pct * 314.16;
-      const strokeOffset = -cumulative * 314.16;
-      cumulative += pct;
+      const sales = calculateRevenue(bInvs, bRets);
+      const profit = calculateProfit(bInvs, bRets, state.products);
       return {
-        ...m,
-        pct,
-        strokeLength,
-        strokeOffset,
-        color: colors[m.method] || "#94a3b8",
+        dateLabel: bucket.label,
+        startDateStr: bucket.startDateStr,
+        endDateStr: bucket.endDateStr,
+        sales,
+        profit,
+        invoiceCount: bInvs.length
       };
     });
 
-    return { donutSlices: slices, totalMethodAmount: total };
-  }, [data.methodData]);
+    const maxSales = Math.max(...displayPoints.map((p) => p.sales), 100);
+    const maxProfit = Math.max(...displayPoints.map((p) => p.profit), 10);
+    const minProfit = Math.min(...displayPoints.map((p) => p.profit), 0);
 
-  // Handle access guard redirect loading
-  if (loading || !isOwner) return null;
+    const maxChartVal = Math.max(maxSales, maxProfit) * 1.15;
+    const minChartVal = Math.min(0, minProfit);
+    const chartRange = (maxChartVal - minChartVal) || 1;
 
-  const inventoryValue = getInventoryValue();
-  const maxCatRevenue = Math.max(...data.categoryData.map((c) => c.revenue), 1);
+    const width = 800;
+    const height = 200;
+    const step = displayPoints.length > 1 ? width / (displayPoints.length - 1) : width;
 
-  // ─────────────────────────────────────────────────────────────────────────
-  //  RENDER FUNCTION
-  // ─────────────────────────────────────────────────────────────────────────
+    const yZero = Math.round(height - ((0 - minChartVal) / chartRange) * (height - 30));
+
+    const points = displayPoints.map((p, idx) => {
+      const x = Math.round(idx * step);
+      const ySales = Math.round(height - ((p.sales - minChartVal) / chartRange) * (height - 30));
+      const yProfit = Math.round(height - ((p.profit - minChartVal) / chartRange) * (height - 30));
+      return { x, ySales, yProfit, ...p };
+    });
+
+    const salesPath = points.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.ySales}`).join(" ");
+    const salesArea = `${salesPath} L ${width} ${yZero} L 0 ${yZero} Z`;
+
+    const profitPath = points.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.yProfit}`).join(" ");
+    const profitArea = `${profitPath} L ${width} ${yZero} L 0 ${yZero} Z`;
+
+    return {
+      points,
+      salesPath,
+      salesArea,
+      profitPath,
+      profitArea,
+      maxChartVal,
+      minChartVal,
+      yZero
+    };
+  }, [filteredInvoices, filteredSalesReturns, state.products, timeRange, startDate, endDate]);
+
+  // ── 5. Sales Heatmap Data Generation (Day of Week x Hourly Windows) ────────
+  const heatmapData = useMemo(() => {
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const slots = [
+      { label: "12 AM–4 AM", start: 0, end: 4 },
+      { label: "4 AM–8 AM", start: 4, end: 8 },
+      { label: "8 AM–12 PM", start: 8, end: 12 },
+      { label: "12 PM–4 PM", start: 12, end: 16 },
+      { label: "4 PM–8 PM", start: 16, end: 20 },
+      { label: "8 PM–12 AM", start: 20, end: 24 }
+    ];
+
+    const grid = days.map((d, dIdx) =>
+      slots.map((s, sIdx) => ({
+        day: d,
+        dayIdx: dIdx,
+        slot: s.label,
+        slotIdx: sIdx,
+        sales: 0,
+        count: 0
+      }))
+    );
+
+    filteredInvoices.forEach((inv) => {
+      const dateObj = new Date(inv.createdAt || inv.date);
+      const dayIdx = dateObj.getDay();
+      const hour = dateObj.getHours();
+
+      if (!isNaN(dayIdx) && !isNaN(hour)) {
+        const slotIdx = Math.min(5, Math.floor(hour / 4));
+        if (grid[dayIdx] && grid[dayIdx][slotIdx]) {
+          grid[dayIdx][slotIdx].sales += inv.total;
+          grid[dayIdx][slotIdx].count += 1;
+        }
+      }
+    });
+
+    let maxCellSales = 0;
+    grid.forEach((row) => {
+      row.forEach((cell) => {
+        if (cell.sales > maxCellSales) maxCellSales = cell.sales;
+      });
+    });
+
+    return { days, slots, grid, maxCellSales };
+  }, [filteredInvoices]);
+
+  // Helper for explainability modal trigger
+  const openExplainModal = (key: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setActiveExplainKey(key);
+  };
+
   return (
-    <div className="space-y-6 pb-12 print-hidden">
+    <div className="min-h-screen bg-slate-50/50 pb-20 print:bg-white print:pb-0">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 space-y-8">
 
-      {/* Dynamic Styling block to format printable container on trigger */}
-      {showReport && (
-        <style dangerouslySetInnerHTML={{
-          __html: `
-          @media print {
-            aside, .print-hidden, header, nav, button, .aside-class {
-              display: none !important;
-            }
-            main, .main-content-class {
-              padding: 0 !important;
-              margin: 0 !important;
-              max-width: 100% !important;
-            }
-            body {
-              background: white !important;
-              color: black !important;
-            }
-            .report-print-container {
-              position: static !important;
-              background: white !important;
-              padding: 0 !important;
-              margin: 0 !important;
-              overflow: visible !important;
-              z-index: auto !important;
-            }
-          }
-        `}} />
-      )}
+        {/* ── SECTION 1: HEADER & PERIOD FILTER CONTROLS ───────────────────── */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs print:hidden">
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl sm:text-2xl font-black text-navy-950 tracking-tight">Analytics & Business Intelligence</h1>
+              <span className="bg-emerald-50 text-emerald-700 text-[10px] font-extrabold px-2 py-0.5 rounded-md border border-emerald-200">
+                LIVE ERP
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1 font-medium">
+              Deterministic real-time financial command center • {filteredInvoices.length} invoices in range
+            </p>
+          </div>
 
-      {/* ── Dashboard Top Bar & Filters ────────────────────────────────────── */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-        <div>
-          <h1 className="text-2xl font-black text-navy-950 leading-tight">Analytics & Business Intelligence</h1>
-          <p className="text-xs text-slate-500 mt-1">Real-time performance audit, profit metrics, and inventory health tracking</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Preset range selectors */}
-          <div className="flex bg-slate-100 p-1 rounded-xl text-xs font-bold border border-slate-200">
-            {([
-              { id: "Today", label: "Today" },
-              { id: "Week", label: "7D" },
-              { id: "Month", label: "30D" },
-              { id: "Quarter", label: "90D" },
-              { id: "Year", label: "1Y" },
-              { id: "All", label: "All-Time" },
-            ] as const).map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => {
-                  setTimeRange(r.id);
-                  setShowCustomDates(false);
-                }}
-                className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${timeRange === r.id && !showCustomDates
-                    ? "bg-white text-navy-950 shadow-sm"
-                    : "text-slate-500 hover:text-slate-800"
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Range Selector Pills */}
+            <div className="bg-slate-100 p-1 rounded-xl flex items-center gap-1 border border-slate-200/60 overflow-x-auto max-w-full">
+              {["Today", "Week", "Month", "Quarter", "Year", "All", "Custom"].map((range) => (
+                <button
+                  key={range}
+                  onClick={() => setTimeRange(range)}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                    timeRange === range
+                      ? "bg-white text-navy-900 shadow-xs font-black"
+                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/50"
                   }`}
+                >
+                  {range === "Week" ? "7 Days" : range === "Month" ? "30 Days" : range === "All" ? "All Time" : range}
+                </button>
+              ))}
+            </div>
+
+            {/* Custom Date Inputs */}
+            {timeRange === "Custom" && (
+              <div className="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="text-xs font-mono font-bold text-slate-700 bg-white border border-slate-200 rounded-lg px-2 py-1 focus:outline-none"
+                />
+                <span className="text-xs text-slate-400 font-bold">to</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="text-xs font-mono font-bold text-slate-700 bg-white border border-slate-200 rounded-lg px-2 py-1 focus:outline-none"
+                />
+              </div>
+            )}
+
+            {/* Print Trigger Button */}
+            <button
+              onClick={() => window.print()}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-navy-900 hover:bg-navy-950 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer shrink-0 ml-auto md:ml-0 min-h-[44px]"
+            >
+              <Printer size={15} />
+              <span>Print Report</span>
+            </button>
+          </div>
+        </div>
+
+        {/* ── SECTION 2: EXECUTIVE SNAPSHOT HERO CARDS ─────────────────────── */}
+        <div className="space-y-3 print:hidden">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-extrabold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
+              <Activity size={14} className="text-accent-500" />
+              Executive Financial Snapshot
+            </h2>
+            <span className="text-[11px] font-bold text-slate-400">
+              Comparing {biData.periodComp.comparisonLabel}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Card 1: Billed Total */}
+            <div className="relative group">
+              <StatCard
+                title="Billed Total"
+                value={`₹${financialTotals.totalBilled.toLocaleString()}`}
+                subtitle={`${filteredInvoices.length} invoices generated`}
+                icon={DollarSign}
+                accent="blue"
+              />
+              <button
+                onClick={(e) => openExplainModal("billedTotal", e)}
+                className="absolute top-3 right-3 p-1.5 text-slate-400 hover:text-navy-900 hover:bg-slate-100 rounded-full transition-all cursor-pointer"
+                title="Explain Billed Total Calculation"
               >
-                {r.label}
+                <Info size={14} />
               </button>
-            ))}
+              <div className="px-5 pb-3 -mt-2 flex items-center justify-between text-xs border-t border-slate-100/80 pt-2">
+                <span className={`font-bold flex items-center gap-0.5 ${biData.periodComp.billedGrowthPct >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                  {biData.periodComp.billedGrowthPct >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+                  {biData.periodComp.billedGrowthPct >= 0 ? "+" : ""}{biData.periodComp.billedGrowthPct}% billed
+                </span>
+                <span className="text-[11px] text-slate-400 font-medium">Prev: ₹{biData.periodComp.previousBilledTotal.toLocaleString()}</span>
+              </div>
+            </div>
+
+            {/* Card 2: Collected Revenue */}
+            <div className="relative group">
+              <StatCard
+                title="Revenue (Collected)"
+                value={`₹${financialTotals.totalRevenue.toLocaleString()}`}
+                subtitle="Cash received after returns"
+                icon={TrendingUp}
+                accent="green"
+              />
+              <button
+                onClick={(e) => openExplainModal("collectedRevenue", e)}
+                className="absolute top-3 right-3 p-1.5 text-slate-400 hover:text-emerald-800 hover:bg-emerald-50 rounded-full transition-all cursor-pointer"
+                title="Explain Revenue Calculation"
+              >
+                <Info size={14} />
+              </button>
+              <div className="px-5 pb-3 -mt-2 flex items-center justify-between text-xs border-t border-slate-100/80 pt-2">
+                <span className={`font-bold flex items-center gap-0.5 ${biData.periodComp.revenueGrowthPct >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                  {biData.periodComp.revenueGrowthPct >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+                  {biData.periodComp.revenueGrowthPct >= 0 ? "+" : ""}{biData.periodComp.revenueGrowthPct}% rev
+                </span>
+                <span className="text-[11px] text-slate-400 font-medium">Prev: ₹{biData.periodComp.previousRevenue.toLocaleString()}</span>
+              </div>
+            </div>
+
+            {/* Card 3: Net Business Profit */}
+            <div className="relative group">
+              <StatCard
+                title="Net Trading Profit"
+                value={`₹${financialTotals.totalProfit.toLocaleString()}`}
+                subtitle={`COGS: ₹${biData.waterfall.cogs.toLocaleString()}`}
+                icon={Percent}
+                accent="navy"
+              />
+              <button
+                onClick={(e) => openExplainModal("netProfit", e)}
+                className="absolute top-3 right-3 p-1.5 text-slate-400 hover:text-navy-900 hover:bg-slate-100 rounded-full transition-all cursor-pointer"
+                title="Explain Profit Calculation"
+              >
+                <Info size={14} />
+              </button>
+              <div className="px-5 pb-3 -mt-2 flex items-center justify-between text-xs border-t border-slate-100/80 pt-2">
+                <span className={`font-bold flex items-center gap-0.5 ${biData.periodComp.profitGrowthPct >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                  {biData.periodComp.profitGrowthPct >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+                  {biData.periodComp.profitGrowthPct >= 0 ? "+" : ""}{biData.periodComp.profitGrowthPct}% profit
+                </span>
+                <span className="text-[11px] text-slate-400 font-medium">Margin: {biData.waterfall.marginPct}%</span>
+              </div>
+            </div>
+
+            {/* Card 4: Customer Debt */}
+            <div
+              onClick={() => setActiveDrillModal("debtors")}
+              className="relative group cursor-pointer transition-all hover:scale-[1.01]"
+            >
+              <StatCard
+                title="Pending Dues (Debt)"
+                value={`₹${biData.custDebt.toLocaleString()}`}
+                subtitle={`Across ${allTimeDebtorsList.length} outstanding accounts`}
+                icon={CreditCard}
+                accent="amber"
+              />
+              <button
+                onClick={(e) => openExplainModal("pendingDebt", e)}
+                className="absolute top-3 right-3 p-1.5 text-slate-400 hover:text-amber-800 hover:bg-amber-50 rounded-full transition-all cursor-pointer"
+                title="Explain Debt Calculation"
+              >
+                <Info size={14} />
+              </button>
+              <div className="px-5 pb-3 -mt-2 flex items-center justify-between text-xs border-t border-slate-100/80 pt-2">
+                <span className="text-amber-700 font-bold flex items-center gap-1">
+                  <Eye size={12} /> Click for Debtors List
+                </span>
+                <span className="text-[11px] text-slate-400 font-medium">Click to view</span>
+              </div>
+            </div>
           </div>
-
-          {/* Custom Date Range Toggle */}
-          <button
-            type="button"
-            onClick={() => {
-              setTimeRange("Custom");
-              setShowCustomDates(!showCustomDates);
-            }}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition cursor-pointer shadow-sm ${timeRange === "Custom"
-                ? "bg-navy-950 text-white border-navy-950"
-                : "bg-white hover:bg-slate-50 border-slate-200 text-slate-600"
-              }`}
-          >
-            <Calendar size={13} />
-            Custom
-          </button>
-
-          {/* Integrated Business Summary Report generator */}
-          <button
-            type="button"
-            onClick={() => setShowReport(true)}
-            className="flex items-center gap-1.5 px-4.5 py-2 rounded-xl text-xs font-black text-white bg-green-600 hover:bg-green-700 active:bg-green-800 transition shadow cursor-pointer"
-          >
-            <Printer size={13} />
-            Generate Report
-          </button>
         </div>
-      </div>
 
-      {/* ── Custom Range Input Panel ────────────────────────────────────────── */}
-      {timeRange === "Custom" && showCustomDates && (
-        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-wrap items-center gap-4 animate-in slide-in-from-top-2 duration-200">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Start Date:</span>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="border border-slate-200 rounded-xl px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-yellow-400 font-medium"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">End Date:</span>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="border border-slate-200 rounded-xl px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-yellow-400 font-medium"
-            />
-          </div>
-          <p className="text-[10px] text-slate-400 font-semibold font-mono">
-            Auditing invoices from {startDate || "earliest"} to {endDate || "latest"}
-          </p>
-        </div>
-      )}
+        {/* ── SECTION 3: MONEY VAULT & BUSINESS HEALTH ROW ─────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 print:hidden">
 
-      {/* ── KPI Grid Row ────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title="Billed Total"
-          value={`₹${data.totalBilled.toLocaleString()}`}
-          icon={ReceiptText}
-          accent="navy"
-          subtitle={`${filteredInvoices.length} invoices generated`}
-        />
-        <StatCard
-          title="Revenue (Collected)"
-          value={`₹${data.totalRevenue.toLocaleString()}`}
-          icon={TrendingUp}
-          accent="green"
-          valueClassName="text-green-600"
-          subtitle="Cash received in bank/till"
-        />
-        <StatCard
-          title="Net Business Profit"
-          value={`₹${data.totalProfit.toLocaleString()}`}
-          icon={Wallet}
-          accent="green"
-          valueClassName="text-emerald-600"
-          subtitle={
-            data.totalBilled > 0
-              ? `${Math.round((data.totalProfit / data.totalBilled) * 100)}% profit margin`
-              : "0% average margin"
-          }
-        />
-        <StatCard
-          title="Pending Dues (Debt)"
-          value={`₹${data.totalDebt.toLocaleString()}`}
-          icon={AlertCircle}
-          accent="red"
-          valueClassName="text-red-600"
-          subtitle={`${data.debtCustomers.length} debtor profiles`}
-        />
-        <StatCard
-          title="Avg Order Value"
-          value={`₹${data.avgOrderValue.toLocaleString()}`}
-          icon={ShoppingCart}
-          accent="amber"
-          subtitle="Revenue per billing order"
-        />
-        <StatCard
-          title="Warehouse Value"
-          value={`₹${inventoryValue.toLocaleString()}`}
-          icon={Package}
-          accent="navy"
-          subtitle="Inventory value at buy cost"
-        />
-        <StatCard
-          title="Low Stock Items"
-          value={String(data.lowStock.length)}
-          icon={AlertCircle}
-          accent="red"
-          valueClassName={data.lowStock.length > 0 ? "text-orange-500 font-extrabold animate-pulse" : ""}
-          subtitle="Products requiring order"
-        />
-        <StatCard
-          title="Total Customers"
-          value={String(state.customers.length)}
-          icon={Users}
-          accent="blue"
-          subtitle="Registered customer profiles"
-        />
-      </div>
+          {/* Money Available Right Now Panel (7 cols) */}
+          <div
+            onClick={() => setActiveDrillModal("moneyVault")}
+            className="lg:col-span-7 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all cursor-pointer flex flex-col justify-between"
+          >
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
+                    ₹
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-extrabold text-navy-900">Money Available Right Now</h3>
+                    <p className="text-[11px] text-slate-400 font-medium">Real-time liquid cash drawers & accounts</p>
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => openExplainModal("liquidCash", e)}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-full"
+                >
+                  <Info size={14} />
+                </button>
+              </div>
 
-      {/* ── Section: Trend Analysis & Categories ────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+              {/* Big Liquid Cash Hero */}
+              <div className="bg-slate-900 text-white p-4 rounded-xl flex items-center justify-between mb-5">
+                <div>
+                  <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">Total Liquid Cash</span>
+                  <div className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-emerald-400 mt-0.5">
+                    ₹{biData.liquidCash.toLocaleString()}
+                  </div>
+                </div>
+                <span className="bg-emerald-500/20 text-emerald-300 text-xs font-bold px-3 py-1 rounded-lg border border-emerald-500/30">
+                  Ready Cash
+                </span>
+              </div>
 
-        {/* Sales & Profit Area Chart Container */}
-        <SectionCard
-          title="Sales & Profit Trend"
-          subtitle="Daily sales performance compared with absolute profit margins"
-          className="lg:col-span-8 flex flex-col justify-between"
-        >
-          <div className="relative w-full h-[220px] select-none mt-2">
-            {filteredInvoices.length > 0 ? (
-              <>
-                <svg viewBox="0 0 600 220" width="100%" height="100%" className="overflow-visible">
-                  <defs>
-                    <linearGradient id="salesGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#f5c518" stopOpacity="0.25" />
-                      <stop offset="100%" stopColor="#f5c518" stopOpacity="0.0" />
-                    </linearGradient>
-                    <linearGradient id="profitGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#10b981" stopOpacity="0.2" />
-                      <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
-                    </linearGradient>
-                  </defs>
-
-                  {/* Grid Lines */}
-                  {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
-                    const yVal = 20 + ratio * 170;
-                    return (
-                      <line
-                        key={i}
-                        x1="40"
-                        y1={yVal}
-                        x2="585"
-                        y2={yVal}
-                        stroke="#f1f5f9"
-                        strokeWidth="1.5"
-                        strokeDasharray="4 4"
-                      />
-                    );
-                  })}
-
-                  {/* Base line */}
-                  <line x1="40" y1="190" x2="585" y2="190" stroke="#cbd5e1" strokeWidth="1" />
-                  <line x1="40" y1="20" x2="40" y2="190" stroke="#cbd5e1" strokeWidth="0.5" />
-
-                  {/* Paths */}
-                  {salesAreaPath && <path d={salesAreaPath} fill="url(#salesGrad)" />}
-                  {profitAreaPath && <path d={profitAreaPath} fill="url(#profitGrad)" />}
-                  {salesLinePath && (
-                    <path
-                      d={salesLinePath}
-                      fill="none"
-                      stroke="#f5c518"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+              {/* Progress Bars for Cash / Bank / UPI */}
+              <div className="space-y-3">
+                {/* Cash Drawer */}
+                <div>
+                  <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
+                    <span>Cash Till (Drawer)</span>
+                    <span className="font-mono">₹{getCashBalance().toLocaleString()}</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                      style={{ width: `${biData.liquidCash > 0 ? Math.min(100, (getCashBalance() / biData.liquidCash) * 100) : 0}%` }}
                     />
-                  )}
-                  {profitLinePath && (
-                    <path
-                      d={profitLinePath}
-                      fill="none"
-                      stroke="#10b981"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+                  </div>
+                </div>
+
+                {/* Bank Account */}
+                <div>
+                  <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
+                    <span>Bank Account</span>
+                    <span className="font-mono">₹{getBankBalance().toLocaleString()}</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                      style={{ width: `${biData.liquidCash > 0 ? Math.min(100, (getBankBalance() / biData.liquidCash) * 100) : 0}%` }}
                     />
-                  )}
+                  </div>
+                </div>
 
-                  {/* Markers */}
-                  {trendPoints.map((p, idx) => {
-                    const isHovered = hoveredIdx === idx;
-                    const x = 40 + (idx / (trendPoints.length - 1 || 1)) * 545;
-                    const ySales = 190 - (p.sales / maxChartVal) * 170;
-                    const yProfit = 190 - (p.profit / maxChartVal) * 170;
+                {/* UPI Digital */}
+                <div>
+                  <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
+                    <span>Digital UPI Account</span>
+                    <span className="font-mono">₹{getUPIBalance().toLocaleString()}</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-indigo-500 rounded-full transition-all duration-500"
+                      style={{ width: `${biData.liquidCash > 0 ? Math.min(100, (getUPIBalance() / biData.liquidCash) * 100) : 0}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
 
-                    return (
-                      <g key={idx}>
-                        {isHovered && (
-                          <line
-                            x1={x}
-                            y1="20"
-                            x2={x}
-                            y2="190"
-                            stroke="#64748b"
-                            strokeWidth="1.2"
-                            strokeDasharray="3 3"
-                          />
-                        )}
-                        {p.sales > 0 && (
-                          <circle
-                            cx={x}
-                            cy={ySales}
-                            r={isHovered ? 6 : 4}
-                            fill="#f5c518"
-                            stroke="#0a121f"
-                            strokeWidth="2"
-                            className="transition-all duration-150"
-                          />
-                        )}
-                        {p.profit > 0 && (
-                          <circle
-                            cx={x}
-                            cy={yProfit}
-                            r={isHovered ? 6 : 4}
-                            fill="#10b981"
-                            stroke="#0a121f"
-                            strokeWidth="2"
-                            className="transition-all duration-150"
-                          />
-                        )}
-                      </g>
-                    );
-                  })}
+            {/* Sub-bar: Customer Dues vs Supplier Payables */}
+            <div className="mt-5 pt-4 border-t border-slate-100 grid grid-cols-2 gap-4 text-xs">
+              <div className="bg-amber-50/60 p-2.5 rounded-xl border border-amber-200/60">
+                <span className="text-[11px] font-bold text-amber-800 block">Customer Receivables</span>
+                <span className="text-sm font-extrabold font-mono text-amber-900 mt-0.5 block">₹{biData.custDebt.toLocaleString()}</span>
+              </div>
+              <div className="bg-rose-50/60 p-2.5 rounded-xl border border-rose-200/60">
+                <span className="text-[11px] font-bold text-rose-800 block">Supplier Credit Payables</span>
+                <span className="text-sm font-extrabold font-mono text-rose-900 mt-0.5 block">₹{biData.supPayables.toLocaleString()}</span>
+              </div>
+            </div>
+          </div>
 
-                  {/* Hover Rect Overlay */}
-                  {trendPoints.map((p, idx) => {
-                    const x = 40 + (idx / (trendPoints.length - 1 || 1)) * 545;
-                    const width = 545 / (trendPoints.length || 1);
-                    return (
-                      <rect
-                        key={idx}
-                        x={x - width / 2}
-                        y="20"
-                        width={width}
-                        height="170"
-                        fill="transparent"
-                        className="cursor-crosshair"
-                        onMouseEnter={() => setHoveredIdx(idx)}
-                        onMouseLeave={() => setHoveredIdx(null)}
-                      />
-                    );
-                  })}
+          {/* Business Health Score Widget (5 cols) */}
+          <div className="lg:col-span-5 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={18} className="text-navy-900" />
+                  <h3 className="text-sm font-extrabold text-navy-900">Business Health Ring</h3>
+                </div>
+                <button
+                  onClick={(e) => openExplainModal("businessHealth", e)}
+                  className="p-1 text-slate-400 hover:text-slate-600 rounded-full"
+                >
+                  <Info size={14} />
+                </button>
+              </div>
 
-                  {/* Y Axis Labels */}
-                  {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
-                    const val = Math.round(maxChartVal * (1 - ratio));
-                    const yVal = 20 + ratio * 170;
-                    return (
-                      <text
-                        key={i}
-                        x="32"
-                        y={yVal + 3}
-                        textAnchor="end"
-                        className="text-[9px] font-bold text-slate-400 font-mono"
-                      >
-                        ₹{val >= 1000 ? `${(val / 1000).toFixed(0)}k` : val}
-                      </text>
-                    );
-                  })}
+              {/* Circular SVG Gauge & Score */}
+              <div className="flex items-center gap-5 my-2">
+                <div className="relative w-24 h-24 shrink-0 flex items-center justify-center">
+                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                    <path
+                      className="text-slate-100"
+                      strokeWidth="3.5"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                    <path
+                      className={
+                        biData.healthScore.status === "Healthy"
+                          ? "text-emerald-500"
+                          : biData.healthScore.status === "Moderate"
+                          ? "text-amber-500"
+                          : "text-rose-500"
+                      }
+                      strokeDasharray={`${biData.healthScore.score}, 100`}
+                      strokeWidth="3.5"
+                      strokeLinecap="round"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                  </svg>
+                  <div className="absolute flex flex-col items-center justify-center text-center">
+                    <span className="text-xl font-black font-mono text-navy-950 leading-none">{biData.healthScore.score}</span>
+                    <span className="text-[9px] font-bold text-slate-400 mt-0.5">OUT OF 100</span>
+                  </div>
+                </div>
 
-                  {/* X Axis Labels */}
-                  {trendPoints.map((p, idx) => {
-                    const showLabel =
-                      trendPoints.length <= 10 ||
-                      idx === 0 ||
-                      idx === trendPoints.length - 1 ||
-                      idx % Math.ceil(trendPoints.length / 6) === 0;
-
-                    if (!showLabel) return null;
-                    const x = 40 + (idx / (trendPoints.length - 1 || 1)) * 545;
-                    return (
-                      <text
-                        key={idx}
-                        x={x}
-                        y="205"
-                        textAnchor="middle"
-                        className="text-[9px] font-bold text-slate-400"
-                      >
-                        {p.label}
-                      </text>
-                    );
-                  })}
-                </svg>
-
-                {/* Float Tooltip */}
-                {hoveredIdx !== null && trendPoints[hoveredIdx] && (
-                  <div
-                    className="absolute z-20 bg-slate-900 border border-slate-700 text-white rounded-xl p-3 shadow-xl text-xs w-44 pointer-events-none"
-                    style={{
-                      left: `${Math.min(Math.max(10, (hoveredIdx / (trendPoints.length - 1 || 1)) * 100 - 20), 72)}%`,
-                      top: "10px",
-                    }}
+                <div className="space-y-1.5">
+                  <span
+                    className={`inline-block text-xs font-black px-2.5 py-1 rounded-lg border ${
+                      biData.healthScore.status === "Healthy"
+                        ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                        : biData.healthScore.status === "Moderate"
+                        ? "bg-amber-50 text-amber-800 border-amber-200"
+                        : "bg-rose-50 text-rose-800 border-rose-200"
+                    }`}
                   >
-                    <p className="font-bold text-slate-350 border-b border-slate-750 pb-1 mb-1.5">
-                      {trendPoints[hoveredIdx].label}
-                    </p>
-                    <div className="space-y-1 font-mono">
-                      <div className="flex justify-between gap-1">
-                        <span className="text-slate-400 font-sans">Billed:</span>
-                        <span className="font-bold text-blue-400">₹{trendPoints[hoveredIdx].sales.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between gap-1">
-                        <span className="text-slate-400 font-sans">Profit:</span>
-                        <span className="font-bold text-green-400">₹{trendPoints[hoveredIdx].profit.toLocaleString()}</span>
+                    STATUS: {biData.healthScore.status.toUpperCase()}
+                  </span>
+                  <p className="text-xs text-slate-500 font-medium line-clamp-2">
+                    {biData.healthScore.positiveDrivers[0] || "Store operations running standard"}
+                  </p>
+                </div>
+              </div>
+
+              {/* 6 Category Score Breakdown */}
+              <div className="space-y-2 mt-4 pt-3 border-t border-slate-100 text-[11px]">
+                {Object.entries(biData.healthScore.breakdown).map(([key, item]) => (
+                  <div key={key} className="flex items-center justify-between">
+                    <span className="text-slate-500 font-semibold capitalize">{key.replace(/([A-Z])/g, " $1")}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-700">{item.score}/{item.max}</span>
+                      <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-navy-900 rounded-full"
+                          style={{ width: `${(item.score / item.max) * 100}%` }}
+                        />
                       </div>
                     </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── SECTION 4: OWNER ACTION CENTER PRIORITY INBOX ───────────────── */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs print:hidden space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                <Zap size={16} />
+              </div>
+              <div>
+                <h3 className="text-sm font-extrabold text-navy-900">Owner Action Center</h3>
+                <p className="text-[11px] text-slate-400 font-medium">Deterministic priority inbox for instant business decisions</p>
+              </div>
+            </div>
+            <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">
+              {biData.recommendedActions.length} Actions Required
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {biData.recommendedActions.length > 0 ? (
+              biData.recommendedActions.map((action) => (
+                <div
+                  key={action.id}
+                  className={`p-4 rounded-xl border flex flex-col justify-between space-y-3 transition-all ${
+                    action.type === "Critical"
+                      ? "bg-rose-50/40 border-rose-200/80 hover:border-rose-300"
+                      : action.type === "Warning"
+                      ? "bg-amber-50/40 border-amber-200/80 hover:border-amber-300"
+                      : action.type === "Opportunity"
+                      ? "bg-emerald-50/40 border-emerald-200/80 hover:border-emerald-300"
+                      : "bg-slate-50 border-slate-200"
+                  }`}
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span
+                        className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
+                          action.type === "Critical"
+                            ? "bg-rose-600 text-white"
+                            : action.type === "Warning"
+                            ? "bg-amber-600 text-white"
+                            : "bg-emerald-600 text-white"
+                        }`}
+                      >
+                        {action.type.toUpperCase()}
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{action.category}</span>
+                    </div>
+                    <h4 className="text-xs font-extrabold text-navy-950 leading-tight">{action.title}</h4>
+                    <p className="text-[11px] text-slate-600 font-medium leading-relaxed">{action.action}</p>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-200/60 text-[10px] text-slate-500 font-medium">
+                    <span className="font-bold text-slate-700">Reason:</span> {action.reason}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="col-span-full p-4 bg-emerald-50 text-emerald-800 rounded-xl text-xs font-bold text-center">
+                ✓ All store metrics are healthy. No critical action required right now.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── SECTION 5: SALES & PROFIT TREND CHART & WATERFALL TOGGLE ────── */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5 print:hidden">
+          {/* Header & Chips */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-extrabold text-navy-900">Sales & Financial Performance</h3>
+              <p className="text-[11px] text-slate-400 font-medium">Daily revenue and gross trading profit trajectories</p>
+            </div>
+
+            {/* View Toggle */}
+            <div className="bg-slate-100 p-1 rounded-xl flex items-center gap-1 border border-slate-200/60 self-start md:self-auto">
+              <button
+                onClick={() => setTrendView("chart")}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  trendView === "chart" ? "bg-white text-navy-900 shadow-xs" : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                Area Chart
+              </button>
+              <button
+                onClick={() => setTrendView("waterfall")}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  trendView === "waterfall" ? "bg-white text-navy-900 shadow-xs" : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                Financial Waterfall
+              </button>
+            </div>
+          </div>
+
+          {/* Period Summary Chips */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60 text-xs">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Revenue Trajectory</span>
+              <span className="font-extrabold text-slate-800 text-sm mt-0.5 block">{biData.revTrend.todayVsYesterday.displayMessage}</span>
+            </div>
+            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60 text-xs">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Profit Trajectory</span>
+              <span className="font-extrabold text-slate-800 text-sm mt-0.5 block">{biData.profTrend.todayVsYesterday.displayMessage}</span>
+            </div>
+            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60 text-xs">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Average Order Value</span>
+              <span className="font-extrabold text-slate-800 text-sm mt-0.5 block">₹{biData.periodComp.currentAOV.toLocaleString()}</span>
+            </div>
+            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60 text-xs">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Trading Margin</span>
+              <span className="font-extrabold text-emerald-700 text-sm mt-0.5 block">{biData.waterfall.marginPct}% Margin</span>
+            </div>
+          </div>
+
+          {/* Conditioned View: Area Chart vs Financial Waterfall */}
+          {trendView === "chart" ? (
+            <div className="space-y-3 pt-2">
+              {/* Responsive Legend */}
+              <div className="flex items-center justify-center gap-6 text-xs font-bold text-slate-600 pb-1">
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-sky-500 inline-block shadow-xs" />
+                  <span>Revenue (Net)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-emerald-500 inline-block shadow-xs" />
+                  <span>Gross Trading Profit</span>
+                </div>
+              </div>
+
+              {/* Chart Canvas & Interaction Container */}
+              <div
+                ref={chartContainerRef}
+                onPointerMove={handleChartPointerMove}
+                onPointerLeave={handleChartPointerLeave}
+                onTouchStart={handleChartPointerMove}
+                onTouchMove={handleChartPointerMove}
+                onTouchEnd={handleChartTouchEnd}
+                className="relative w-full select-none cursor-crosshair touch-none"
+              >
+                {chartData.points && chartData.points.length > 0 && !chartData.points.every((p) => p.sales === 0 && p.profit === 0) ? (
+                  <>
+                    <svg className="w-full h-52 sm:h-60 overflow-visible" viewBox="0 0 800 200" preserveAspectRatio="none">
+                      <defs>
+                        <linearGradient id="salesGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#0284c7" stopOpacity="0.3" />
+                          <stop offset="100%" stopColor="#0284c7" stopOpacity="0.0" />
+                        </linearGradient>
+                        <linearGradient id="profitGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
+                          <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+                        </linearGradient>
+                      </defs>
+
+                      {/* Grid Lines */}
+                      {[0, 50, 100, 150, 200].map((y) => (
+                        <line key={y} x1="0" y1={y} x2="800" y2={y} stroke="#f1f5f9" strokeWidth="1" />
+                      ))}
+
+                      {/* Zero Baseline Line */}
+                      <line x1="0" y1={chartData.yZero} x2="800" y2={chartData.yZero} stroke="#cbd5e1" strokeWidth="1.5" strokeDasharray="3 3" />
+
+                      {/* Area & Line Paths */}
+                      <path d={chartData.salesArea} fill="url(#salesGrad)" />
+                      <path d={chartData.salesPath} fill="none" stroke="#0284c7" strokeWidth="2.5" />
+
+                      <path d={chartData.profitArea} fill="url(#profitGrad)" />
+                      <path d={chartData.profitPath} fill="none" stroke="#10b981" strokeWidth="2.5" strokeDasharray="4 2" />
+
+                      {/* Active Vertical Guide Line */}
+                      {hoverIndex !== null && chartData.points[hoverIndex] && (
+                        <line
+                          x1={chartData.points[hoverIndex].x}
+                          y1="0"
+                          x2={chartData.points[hoverIndex].x}
+                          y2="200"
+                          stroke="#94a3b8"
+                          strokeWidth="1.5"
+                          strokeDasharray="4 3"
+                        />
+                      )}
+
+                      {/* Data Points */}
+                      {chartData.points.map((pt, idx) => {
+                        const isActive = hoverIndex === idx;
+                        return (
+                          <g key={idx}>
+                            <circle
+                              cx={pt.x}
+                              cy={pt.ySales}
+                              r={isActive ? 7 : 3.5}
+                              fill="#0284c7"
+                              stroke={isActive ? "#ffffff" : "none"}
+                              strokeWidth={isActive ? 2.5 : 0}
+                              className="transition-all duration-75"
+                            />
+                            <circle
+                              cx={pt.x}
+                              cy={pt.yProfit}
+                              r={isActive ? 7 : 3.5}
+                              fill="#10b981"
+                              stroke={isActive ? "#ffffff" : "none"}
+                              strokeWidth={isActive ? 2.5 : 0}
+                              className="transition-all duration-75"
+                            />
+                          </g>
+                        );
+                      })}
+                    </svg>
+
+                    {/* Responsive X-Axis Labels */}
+                    <div className="flex justify-between text-[10px] font-bold text-slate-400 mt-2 px-1">
+                      {(() => {
+                        const totalPts = chartData.points.length;
+                        const labelStep = totalPts > 24 ? 4 : totalPts > 12 ? 2 : 1;
+                        return chartData.points.map((pt, idx) => {
+                          const showLabel = idx % labelStep === 0 || idx === totalPts - 1;
+                          return (
+                            <span
+                              key={idx}
+                              className={`truncate text-center transition-all ${
+                                showLabel ? "opacity-100" : "opacity-0 sm:opacity-100"
+                              } ${hoverIndex === idx ? "text-navy-950 font-black scale-110" : ""}`}
+                              style={{ width: `${100 / totalPts}%` }}
+                            >
+                              {showLabel ? pt.dateLabel : ""}
+                            </span>
+                          );
+                        });
+                      })()}
+                    </div>
+
+                    {/* Smart Positioning Floating Tooltip Card */}
+                    {hoverIndex !== null && chartData.points[hoverIndex] && (() => {
+                      const activePt = chartData.points[hoverIndex];
+                      const rawPct = (activePt.x / 800) * 100;
+                      let positionClass = "-translate-x-1/2 left-1/2";
+                      let styleLeft = `${Math.min(84, Math.max(16, rawPct))}%`;
+
+                      if (rawPct > 70) {
+                        positionClass = "-translate-x-full";
+                        styleLeft = `${Math.min(95, rawPct)}%`;
+                      } else if (rawPct < 30) {
+                        positionClass = "translate-x-0";
+                        styleLeft = `${Math.max(5, rawPct)}%`;
+                      }
+
+                      const marginPct = activePt.sales > 0 ? Math.round((activePt.profit / activePt.sales) * 100) : 0;
+                      return (
+                        <div
+                          className={`absolute top-2 z-20 bg-navy-950 text-white p-3.5 rounded-xl shadow-2xl text-xs space-y-2 border border-slate-700/80 pointer-events-none transition-all duration-75 w-52 ${positionClass}`}
+                          style={{ left: styleLeft }}
+                        >
+                          <div className="flex items-center justify-between border-b border-slate-800 pb-1.5 font-bold text-slate-300">
+                            <span>{activePt.dateLabel}</span>
+                            <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded-md text-slate-400 font-mono">
+                              {activePt.invoiceCount} {activePt.invoiceCount === 1 ? "Invoice" : "Invoices"}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px] font-mono">
+                            <div>
+                              <span className="text-[10px] text-slate-400 font-sans block uppercase">Revenue</span>
+                              <span className="font-extrabold text-sky-400 text-xs">₹{activePt.sales.toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-slate-400 font-sans block uppercase">Profit</span>
+                              <span className="font-extrabold text-emerald-400 text-xs">₹{activePt.profit.toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-slate-400 font-sans block uppercase">Margin</span>
+                              <span className="font-bold text-slate-200">{marginPct}%</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-slate-400 font-sans block uppercase">Invoices</span>
+                              <span className="font-bold text-slate-200">{activePt.invoiceCount}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </>
+                ) : (
+                  /* Empty State fallback when no sales exist */
+                  <div className="py-12 flex flex-col items-center justify-center text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                    <p className="text-xs font-bold text-slate-500">No sales recorded during this period.</p>
+                    <p className="text-[11px] text-slate-400 mt-1">Billed revenue and profit curves will populate dynamically as checkout invoices are generated.</p>
                   </div>
                 )}
-              </>
-            ) : (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-center bg-slate-50/50 rounded-2xl border border-dashed border-slate-200 p-4">
-                <Activity className="text-slate-355 w-8 h-8 mb-1.5 animate-pulse" />
-                <p className="font-bold text-slate-500 text-xs">No Billing Records Found</p>
-                <p className="text-[10px] text-slate-400 mt-0.5 max-w-xs mx-auto">There are no invoices within the selected date boundaries to visualize sales trends.</p>
               </div>
-            )}
-          </div>
-        </SectionCard>
-
-        {/* Category Contribution Progress Bars */}
-        <SectionCard
-          title="Revenue by Category"
-          subtitle="Category sales share in selected period"
-          className="lg:col-span-4 flex flex-col justify-between"
-        >
-          {data.categoryData.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center py-10 bg-slate-50/50 rounded-2xl border border-dashed border-slate-250/60 m-2">
-              <Package size={24} className="text-slate-350 mb-2" />
-              <p className="text-xs font-bold text-slate-500">No Category Data</p>
-              <p className="text-[10px] text-slate-400 mt-0.5">Billing logs will map category shares here.</p>
             </div>
           ) : (
-            <div className="space-y-4 my-auto">
-              {data.categoryData.slice(0, 5).map((c) => {
-                const styles: Record<string, string> = {
-                  lights: "bg-amber-500",
-                  audio: "bg-blue-500",
-                  electronics: "bg-purple-500",
-                  accessories: "bg-emerald-500",
-                  wipers: "bg-sky-500",
-                  tools: "bg-rose-500",
-                  care: "bg-teal-500",
-                };
-                const color = styles[c.cat.toLowerCase()] || "bg-slate-500";
-                return (
-                  <div key={c.cat} className="space-y-1.5">
-                    <div className="flex justify-between text-xs font-semibold">
-                      <span className="text-slate-700">{c.cat}</span>
-                      <span className="text-slate-900">
-                        ₹{c.revenue.toLocaleString()}{" "}
-                        <span className="text-slate-400 font-normal ml-1">· {c.qty} units</span>
-                      </span>
-                    </div>
-                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-300 ${color}`}
-                        style={{ width: `${(c.revenue / maxCatRevenue) * 100}%` }}
-                      />
-                    </div>
+            /* Financial Waterfall Chart */
+            <div className="space-y-4 py-4">
+              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Financial Waterfall Flow</h4>
+              <div className="space-y-3">
+                {/* 1. Gross Billed */}
+                <div>
+                  <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
+                    <span>1. Gross Billed Revenue</span>
+                    <span className="font-mono">₹{biData.waterfall.grossBilled.toLocaleString()}</span>
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </SectionCard>
-      </div>
-
-      {/* ── Section: Cash flow, payment mix & statuses ──────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-
-        {/* Payment mix donut chart + status segments */}
-        <SectionCard
-          title="Payment Channels & Statuses"
-          subtitle="Till cash distribution and invoice payment methods breakdown"
-          className="lg:col-span-8"
-        >
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
-            {/* Left Circular Donut */}
-            <div className="md:col-span-6 flex items-center justify-center">
-              {totalMethodAmount === 0 ? (
-                <div className="text-center py-6 text-xs text-slate-400">No payment data in this period.</div>
-              ) : (
-                <div className="relative flex items-center gap-4">
-                  <svg viewBox="0 0 160 160" className="w-36 h-36">
-                    {donutSlices.map((slice) => {
-                      if (slice.pct === 0) return null;
-                      return (
-                        <circle
-                          key={slice.method}
-                          cx="80"
-                          cy="80"
-                          r="50"
-                          fill="transparent"
-                          stroke={slice.color}
-                          strokeWidth="13"
-                          strokeDasharray={`${slice.strokeLength} 314.16`}
-                          strokeDashoffset={slice.strokeOffset}
-                          transform="rotate(-90 80 80)"
-                          className="transition-all duration-200 hover:stroke-[15] cursor-pointer"
-                        />
-                      );
-                    })}
-                    <circle cx="80" cy="80" r="41.5" fill="white" />
-                    <text x="80" y="76" textAnchor="middle" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      Collected
-                    </text>
-                    <text x="80" y="93" textAnchor="middle" className="text-sm font-black text-slate-800">
-                      ₹{totalMethodAmount.toLocaleString()}
-                    </text>
-                  </svg>
-
-                  {/* Circular legends */}
-                  <div className="space-y-1 text-xs">
-                    {donutSlices.map((slice) => (
-                      <div key={slice.method} className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: slice.color }} />
-                        <span className="font-semibold text-slate-700 w-12">{slice.method}</span>
-                        <span className="text-slate-400 font-medium">({Math.round(slice.pct * 100)}%)</span>
-                      </div>
-                    ))}
+                  <div className="w-full h-4 bg-slate-100 rounded-lg overflow-hidden">
+                    <div className="h-full bg-blue-600 rounded-lg" style={{ width: "100%" }} />
                   </div>
                 </div>
-              )}
+
+                {/* 2. Customer Returns */}
+                <div>
+                  <div className="flex justify-between text-xs font-bold text-rose-700 mb-1">
+                    <span>2. Less: Sales Returns & Refunds</span>
+                    <span className="font-mono">-₹{biData.waterfall.returnsRefund.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full h-4 bg-slate-100 rounded-lg overflow-hidden">
+                    <div
+                      className="h-full bg-rose-500 rounded-lg"
+                      style={{ width: `${biData.waterfall.grossBilled > 0 ? (biData.waterfall.returnsRefund / biData.waterfall.grossBilled) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* 3. Net Revenue */}
+                <div>
+                  <div className="flex justify-between text-xs font-bold text-emerald-800 mb-1">
+                    <span>3. Net Collected Revenue</span>
+                    <span className="font-mono font-black">₹{biData.waterfall.netRevenue.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full h-4 bg-slate-100 rounded-lg overflow-hidden">
+                    <div
+                      className="h-full bg-emerald-600 rounded-lg"
+                      style={{ width: `${biData.waterfall.grossBilled > 0 ? (biData.waterfall.netRevenue / biData.waterfall.grossBilled) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* 4. COGS */}
+                <div>
+                  <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
+                    <span>4. Less: Cost of Goods Sold (COGS)</span>
+                    <span className="font-mono">-₹{biData.waterfall.cogs.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full h-4 bg-slate-100 rounded-lg overflow-hidden">
+                    <div
+                      className="h-full bg-slate-500 rounded-lg"
+                      style={{ width: `${biData.waterfall.grossBilled > 0 ? (biData.waterfall.cogs / biData.waterfall.grossBilled) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* 5. Gross Profit */}
+                <div>
+                  <div className="flex justify-between text-xs font-black text-navy-950 mb-1">
+                    <span>5. Net Gross Trading Profit ({biData.waterfall.marginPct}% Margin)</span>
+                    <span className="font-mono text-emerald-600 text-sm">₹{biData.waterfall.grossProfit.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full h-4 bg-slate-100 rounded-lg overflow-hidden">
+                    <div
+                      className="h-full bg-indigo-600 rounded-lg"
+                      style={{ width: `${biData.waterfall.grossBilled > 0 ? (biData.waterfall.grossProfit / biData.waterfall.grossBilled) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── SECTION 6: INVENTORY INTELLIGENCE (VELOCITY & AGEING) ───────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 print:hidden">
+
+          {/* Runout Predictions & Low Stock Alerts (7 cols) */}
+          <div className="lg:col-span-7 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Package size={18} className="text-navy-900" />
+                <div>
+                  <h3 className="text-sm font-extrabold text-navy-900">Inventory Velocity & Runouts</h3>
+                  <p className="text-[11px] text-slate-400 font-medium">Predictive stock depletion based on daily sales velocity</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveDrillModal("lowStock")}
+                className="text-xs font-bold text-navy-900 hover:text-navy-950 hover:underline cursor-pointer"
+              >
+                View All ({biData.runoutPredictions.length})
+              </button>
             </div>
 
-            {/* Right Invoice Statuses split bar */}
-            <div className="md:col-span-6 space-y-4 border-l border-slate-100 pl-6">
-              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Invoice Segment Map</h4>
-              <div className="h-5.5 bg-slate-100 rounded-full overflow-hidden flex shadow-inner">
-                {data.statusData.map((s) => {
-                  const pct = filteredInvoices.length > 0 ? (s.count / filteredInvoices.length) * 100 : 0;
-                  if (pct === 0) return null;
-                  return (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px]">
+                    <th className="py-2.5 px-2">Product</th>
+                    <th className="py-2.5 px-2 text-right">Stock</th>
+                    <th className="py-2.5 px-2 text-right">Daily Velocity</th>
+                    <th className="py-2.5 px-2 text-center">Runout Risk</th>
+                    <th className="py-2.5 px-2 text-center">Confidence</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                  {biData.runoutPredictions.slice(0, 5).map((pred) => (
+                    <tr key={pred.productId} className="hover:bg-slate-50">
+                      <td className="py-2.5 px-2 font-bold text-navy-950 truncate max-w-[150px]" title={pred.productName}>
+                        {pred.productName}
+                      </td>
+                      <td className="py-2.5 px-2 text-right font-mono font-bold">{pred.stock}</td>
+                      <td className="py-2.5 px-2 text-right font-mono">{pred.avgDailySales}/day</td>
+                      <td className="py-2.5 px-2 text-center">
+                        <span
+                          className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
+                            pred.priority === "Critical"
+                              ? "bg-rose-100 text-rose-800"
+                              : pred.priority === "High"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-emerald-100 text-emerald-800"
+                          }`}
+                        >
+                          {pred.displayMessage}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-2 text-center text-[10px] font-bold text-slate-400">{pred.confidence}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Inventory Ageing Buckets (5 cols) */}
+          <div className="lg:col-span-5 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-extrabold text-navy-900">Inventory Ageing Buckets</h3>
+                <span className="text-xs font-bold text-slate-400 font-mono">Total: ₹{biData.velocityInsights.inventoryAgeing.totalValuation.toLocaleString()}</span>
+              </div>
+              <p className="text-[11px] text-slate-400 font-medium mb-4">Stock valuation categorized by shelf age</p>
+
+              <div className="space-y-3">
+                {/* 0-30 Days */}
+                <div>
+                  <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
+                    <span>0–30 Days (Fresh Stock)</span>
+                    <span className="font-mono">₹{biData.velocityInsights.inventoryAgeing.bucket0to30.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                     <div
-                      key={s.label}
-                      className={`${s.color} h-full transition-all duration-250 relative group cursor-help`}
-                      style={{ width: `${pct}%` }}
-                      title={`${s.label}: ${s.count} orders (${Math.round(pct)}%)`}
+                      className="h-full bg-emerald-500 rounded-full"
+                      style={{
+                        width: `${
+                          biData.velocityInsights.inventoryAgeing.totalValuation > 0
+                            ? (biData.velocityInsights.inventoryAgeing.bucket0to30 / biData.velocityInsights.inventoryAgeing.totalValuation) * 100
+                            : 0
+                        }%`
+                      }}
                     />
+                  </div>
+                </div>
+
+                {/* 31-60 Days */}
+                <div>
+                  <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
+                    <span>31–60 Days (Moderate Age)</span>
+                    <span className="font-mono">₹{biData.velocityInsights.inventoryAgeing.bucket31to60.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-blue-500 rounded-full"
+                      style={{
+                        width: `${
+                          biData.velocityInsights.inventoryAgeing.totalValuation > 0
+                            ? (biData.velocityInsights.inventoryAgeing.bucket31to60 / biData.velocityInsights.inventoryAgeing.totalValuation) * 100
+                            : 0
+                        }%`
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* 61-90 Days */}
+                <div>
+                  <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
+                    <span>61–90 Days (Slow Moving)</span>
+                    <span className="font-mono">₹{biData.velocityInsights.inventoryAgeing.bucket61to90.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-amber-500 rounded-full"
+                      style={{
+                        width: `${
+                          biData.velocityInsights.inventoryAgeing.totalValuation > 0
+                            ? (biData.velocityInsights.inventoryAgeing.bucket61to90 / biData.velocityInsights.inventoryAgeing.totalValuation) * 100
+                            : 0
+                        }%`
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* 90+ Days */}
+                <div>
+                  <div className="flex justify-between text-xs font-bold text-rose-700 mb-1">
+                    <span>90+ Days (Stagnant / Dead Stock)</span>
+                    <span className="font-mono font-bold">₹{biData.velocityInsights.inventoryAgeing.bucket90Plus.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-rose-500 rounded-full"
+                      style={{
+                        width: `${
+                          biData.velocityInsights.inventoryAgeing.totalValuation > 0
+                            ? (biData.velocityInsights.inventoryAgeing.bucket90Plus / biData.velocityInsights.inventoryAgeing.totalValuation) * 100
+                            : 0
+                        }%`
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div
+              onClick={() => setActiveDrillModal("deadStock")}
+              className="p-3 bg-rose-50/60 rounded-xl border border-rose-200/60 flex items-center justify-between cursor-pointer hover:bg-rose-50"
+            >
+              <div>
+                <span className="text-[11px] font-bold text-rose-800 block">Dead Stock Locked Capital</span>
+                <span className="text-xs font-extrabold font-mono text-rose-950 mt-0.5 block">
+                  ₹{biData.velocityInsights.deadStockValuation.toLocaleString()}
+                </span>
+              </div>
+              <span className="text-[10px] font-extrabold bg-rose-600 text-white px-2 py-1 rounded-md">View Stagnant</span>
+            </div>
+          </div>
+        </div>
+
+        {/* ── SECTION 7: PRODUCT RANKING LEDGER WITH INTERACTIVE TABS ──────── */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4 print:hidden">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-extrabold text-navy-900">Product Performance Ledger</h3>
+              <p className="text-[11px] text-slate-400 font-medium">Classified ranking of products by revenue, profit, velocity, and stagnant stock</p>
+            </div>
+
+            {/* Ranking Tabs */}
+            <div className="bg-slate-100 p-1 rounded-xl flex items-center gap-1 border border-slate-200/60 overflow-x-auto">
+              {[
+                { id: "revenue", label: "Top Revenue" },
+                { id: "profit", label: "Top Profit" },
+                { id: "velocity", label: "Velocity" },
+                { id: "deadStock", label: "Dead Stock" },
+                { id: "neverSold", label: "Never Sold" }
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setProductRankingTab(tab.id as any)}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                    productRankingTab === tab.id ? "bg-white text-navy-900 shadow-xs font-black" : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px]">
+                  <th className="py-2.5 px-3">Product Name</th>
+                  <th className="py-2.5 px-3">SKU</th>
+                  <th className="py-2.5 px-3 text-right">Units Sold</th>
+                  <th className="py-2.5 px-3 text-right">Net Revenue</th>
+                  <th className="py-2.5 px-3 text-right">Gross Profit</th>
+                  <th className="py-2.5 px-3 text-right">Margin %</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                {(productRankingTab === "revenue"
+                  ? financialTotals.sortedProductsByRevenue
+                  : productRankingTab === "profit"
+                  ? financialTotals.sortedProductsByProfit
+                  : productRankingTab === "velocity"
+                  ? financialTotals.sortedProductsByVelocity
+                  : productRankingTab === "deadStock"
+                  ? biData.velocityInsights.deadStockProducts.map((p) => ({
+                      product: p,
+                      qty: 0,
+                      revenue: 0,
+                      profit: 0
+                    }))
+                  : biData.velocityInsights.neverSoldProducts.map((p) => ({
+                      product: p,
+                      qty: 0,
+                      revenue: 0,
+                      profit: 0
+                    }))
+                ).slice(0, 8).map((item) => {
+                  const marginPct = item.revenue > 0 ? Math.round((item.profit / item.revenue) * 100) : 0;
+                  return (
+                    <tr key={item.product.id} className="hover:bg-slate-50">
+                      <td className="py-2.5 px-3 font-bold text-navy-950">{item.product.name}</td>
+                      <td className="py-2.5 px-3 font-mono text-slate-400">{item.product.sku}</td>
+                      <td className="py-2.5 px-3 text-right font-mono">{item.qty}</td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold">₹{item.revenue.toLocaleString()}</td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-600">₹{item.profit.toLocaleString()}</td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold">{marginPct}%</td>
+                    </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* ── SECTION 8: CUSTOMER & SUPPLIER INTELLIGENCE PANELS ───────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 print:hidden">
+
+          {/* Customer Intelligence Panel (6 cols) */}
+          <div className="lg:col-span-6 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex items-center gap-2">
+              <Users size={18} className="text-navy-900" />
+              <div>
+                <h3 className="text-sm font-extrabold text-navy-900">Customer Intelligence</h3>
+                <p className="text-[11px] text-slate-400 font-medium">Loyalty metrics, debtors, and purchase behavior</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Highest LTV Customer</span>
+                <span className="font-extrabold text-navy-950 text-xs mt-1 block truncate">
+                  {biData.customerExt.highestLtvCustomer ? biData.customerExt.highestLtvCustomer.customer.name : "—"}
+                </span>
+                <span className="text-[10px] text-emerald-600 font-mono font-bold">
+                  ₹{biData.customerExt.highestLtvCustomer?.revenue.toLocaleString() || 0} spent
+                </span>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
-                {data.statusData.map((s) => (
-                  <div key={s.label} className={`border border-slate-100 rounded-xl p-2.5 text-center ${s.bgColor}`}>
-                    <span className={`text-[10px] font-bold uppercase tracking-wider block ${s.textColor}`}>{s.label}</span>
-                    <span className="text-sm font-extrabold text-slate-850 block mt-0.5">{s.count}</span>
-                    <span className="text-[10px] text-slate-400 block font-mono">₹{s.amount.toLocaleString()}</span>
-                  </div>
-                ))}
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Largest Debtor</span>
+                <span className="font-extrabold text-rose-950 text-xs mt-1 block truncate">
+                  {biData.customerExt.highestDebtCustomer ? biData.customerExt.highestDebtCustomer.customer.name : "—"}
+                </span>
+                <span className="text-[10px] text-rose-600 font-mono font-bold">
+                  ₹{biData.customerExt.highestDebtCustomer?.debt.toLocaleString() || 0} due
+                </span>
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Repeat Purchase Rate</span>
+                <span className="font-extrabold text-navy-950 text-sm mt-0.5 block">{biData.customerExt.repeatPurchasePct}%</span>
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Avg Spend / Customer</span>
+                <span className="font-extrabold text-navy-950 text-sm mt-0.5 block font-mono">₹{biData.customerExt.avgSpendPerCustomer.toLocaleString()}</span>
               </div>
             </div>
           </div>
-        </SectionCard>
 
-        {/* Top customers list */}
-        <SectionCard
-          title="Top Customers by Spend"
-          subtitle="Top customer profiles ranked by spend in range"
-          action={{ label: "View all", href: "/customers" }}
-          className="lg:col-span-4"
-        >
-          {data.topCustomers.length === 0 ? (
-            <p className="text-xs text-slate-400 py-6 text-center">No customer spend records in this range.</p>
-          ) : (
-            <div className="divide-y divide-slate-100 -mx-5 -my-2.5">
-              {data.topCustomers.map((c, i) => (
-                <Link
-                  key={c.id}
-                  href={`/customers/${c.id.startsWith("walkin") ? "" : c.id}`}
-                  className="flex items-center justify-between px-5 py-3 hover:bg-slate-50 transition-colors"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="text-xs font-bold text-slate-300 w-4">{i + 1}</span>
-                    <div className="w-7 h-7 rounded-full bg-navy-50 text-navy-800 text-xs font-bold flex items-center justify-center shrink-0">
-                      {c.name.charAt(0)}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-slate-800 truncate">{c.name}</p>
-                      <p className="text-[10px] text-slate-400 font-medium">{c.visits} visit{c.visits !== 1 ? "s" : ""}</p>
-                    </div>
-                  </div>
-                  <span className="text-xs font-black text-slate-800">₹{c.spent.toLocaleString()}</span>
-                </Link>
-              ))}
-            </div>
-          )}
-        </SectionCard>
-      </div>
-
-      {/* ── Section: Outstanding Debts & Stock Health ────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-        {/* Outstanding Receivables */}
-        <SectionCard
-          title="Outstanding Receivables"
-          subtitle="Due balances matching invoices generated in period"
-          action={{ label: "Filter debtors", href: "/customers?filter=debt" }}
-        >
-          {data.debtCustomers.length === 0 ? (
-            <div className="text-center py-6 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
-              <span className="text-green-600 font-bold text-xs block">✓ Clear Ledger Balance</span>
-              <p className="text-[10px] text-slate-400 mt-0.5">All customer accounts are settled in this timeframe.</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="bg-red-50 border border-red-150 rounded-xl px-4 py-2.5 flex justify-between items-center text-xs">
-                <span className="text-red-700 font-bold">Uncollected Balance:</span>
-                <span className="font-black text-red-700">₹{data.totalDebt.toLocaleString()}</span>
-              </div>
-              <div className="divide-y divide-slate-100 -mx-5">
-                {data.debtCustomers.slice(0, 4).map((c) => (
-                  <Link
-                    key={c.id}
-                    href={`/customers/${c.id}`}
-                    className="flex items-center justify-between px-5 py-2.5 hover:bg-slate-50 transition-colors"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-6.5 h-6.5 rounded-full bg-red-100 text-red-600 text-xs font-bold flex items-center justify-center shrink-0">
-                        {c.name.charAt(0)}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold text-slate-800 truncate">{c.name}</p>
-                        <p className="text-[10px] text-slate-400">{c.phone}</p>
-                      </div>
-                    </div>
-                    <span className="font-extrabold text-xs text-red-600">₹{c.debt.toLocaleString()}</span>
-                  </Link>
-                ))}
+          {/* Supplier Intelligence Panel (6 cols) */}
+          <div className="lg:col-span-6 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex items-center gap-2">
+              <Building2 size={18} className="text-navy-900" />
+              <div>
+                <h3 className="text-sm font-extrabold text-navy-900">Supplier Intelligence</h3>
+                <p className="text-[11px] text-slate-400 font-medium">Vendor volumes, payables, and purchase frequency</p>
               </div>
             </div>
-          )}
-        </SectionCard>
 
-        {/* Warehouse Health & Stock Alerts */}
-        <SectionCard
-          title="Warehouse Health alerts"
-          subtitle="Out-of-stock items and low-stock threshold warnings"
-        >
-          <div className="flex p-1 bg-slate-100 rounded-xl text-xs font-bold mb-4">
-            <button
-              type="button"
-              onClick={() => setInventoryAlertTab("out")}
-              className={`flex-1 py-1.5 text-center rounded-lg transition-all cursor-pointer ${inventoryAlertTab === "out" ? "bg-white text-red-600 shadow-sm" : "text-slate-500"
-                }`}
-            >
-              Out of Stock ({data.outOfStock.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setInventoryAlertTab("low")}
-              className={`flex-1 py-1.5 text-center rounded-lg transition-all cursor-pointer ${inventoryAlertTab === "low" ? "bg-white text-orange-600 shadow-sm" : "text-slate-500"
-                }`}
-            >
-              Low Stock ({data.lowStock.length})
-            </button>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Top Supplier by Spend</span>
+                <span className="font-extrabold text-navy-950 text-xs mt-1 block truncate">
+                  {biData.supplierExt.topSupplierBySpend ? biData.supplierExt.topSupplierBySpend.supplier.name : "—"}
+                </span>
+                <span className="text-[10px] text-emerald-600 font-mono font-bold">
+                  ₹{biData.supplierExt.topSupplierBySpend?.totalSpend.toLocaleString() || 0} bought
+                </span>
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Largest Supplier Due</span>
+                <span className="font-extrabold text-rose-950 text-xs mt-1 block truncate">
+                  {biData.supplierExt.mostOutstandingSupplier ? biData.supplierExt.mostOutstandingSupplier.supplier.name : "—"}
+                </span>
+                <span className="text-[10px] text-rose-600 font-mono font-bold">
+                  ₹{biData.supplierExt.mostOutstandingSupplier?.due.toLocaleString() || 0} payable
+                </span>
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Avg Purchase Ticket</span>
+                <span className="font-extrabold text-navy-950 text-sm mt-0.5 block font-mono">₹{biData.supplierExt.avgPurchaseValue.toLocaleString()}</span>
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Purchases</span>
+                <span className="font-extrabold text-navy-950 text-sm mt-0.5 block font-mono">₹{biData.supplierExt.totalPurchasesInPeriod.toLocaleString()}</span>
+              </div>
+            </div>
           </div>
+        </div>
 
-          <div className="max-h-48 overflow-y-auto pr-1 scrollbar-thin">
-            {inventoryAlertTab === "out" ? (
-              data.outOfStock.length === 0 ? (
-                <p className="text-xs text-green-600 font-bold text-center py-6">✓ All items in stock.</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {data.outOfStock.map((p) => (
-                    <div key={p.id} className="flex justify-between items-center bg-red-50/50 border border-red-100 rounded-xl px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold text-slate-800 truncate">{p.name}</p>
-                        <p className="text-[9px] font-mono text-slate-400 mt-0.5">SKU: {p.sku}</p>
-                      </div>
-                      <span className="text-[10px] font-extrabold bg-red-100 text-red-700 px-2 py-0.5 rounded-full">OUT</span>
-                    </div>
-                  ))}
-                </div>
-              )
-            ) : data.lowStock.length === 0 ? (
-              <p className="text-xs text-green-600 font-bold text-center py-6">✓ No low stock warnings.</p>
-            ) : (
-              <div className="space-y-1.5">
-                {data.lowStock.map((p) => (
-                  <div key={p.id} className="flex justify-between items-center bg-orange-50/50 border border-orange-100 rounded-xl px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-slate-800 truncate">{p.name}</p>
-                      <p className="text-[9px] font-mono text-slate-400 mt-0.5">SKU: {p.sku} · Threshold: {p.lowStockThreshold}</p>
-                    </div>
-                    <span className="text-[10px] font-extrabold bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">{p.stock} left</span>
-                  </div>
-                ))}
+        {/* ── SECTION 8.5: DAY OF WEEK X HOURLY SALES HEATMAP ────────────── */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4 print:hidden">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <Activity size={18} className="text-navy-900" />
+              <div>
+                <h3 className="text-sm font-extrabold text-navy-900">Sales Heatmap (Day of Week × Time Window)</h3>
+                <p className="text-[11px] text-slate-400 font-medium">Billed revenue density across days of the week and peak operating hours</p>
               </div>
+            </div>
+            {biData.timingInsights.peakHourWindow && (
+              <span className="text-xs font-extrabold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200">
+                Peak Window: {biData.timingInsights.peakHourWindow}
+              </span>
             )}
           </div>
-        </SectionCard>
-      </div>
 
-      {/* ── Section: Sales Returns & Refunds Analysis ──────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-        <SectionCard
-          title="Sales Returns & Refunds Analysis"
-          subtitle="Returns rates, units returned, and refund valuations in selected period"
-          className="lg:col-span-12"
-        >
-          {/* Summary Strip */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-4 bg-orange-50/50 border border-orange-100/80 rounded-2xl mb-6">
-            <div className="text-center md:text-left">
-              <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider block">Overall Return Rate</span>
-              <span className="text-2xl font-black text-orange-800 block mt-1">{data.overallReturnRate}%</span>
-              <span className="text-[10px] text-slate-400 block mt-0.5">By unit volume sold ({data.totalItemsReturned} / {data.totalItemsSold})</span>
-            </div>
-            <div className="text-center md:text-left border-t md:border-t-0 md:border-l border-orange-100 pt-3 md:pt-0 md:pl-6">
-              <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider block">Total Refunds Issued</span>
-              <span className="text-2xl font-black text-orange-800 block mt-1">₹{data.totalRefundAmount.toLocaleString()}</span>
-              <span className="text-[10px] text-slate-400 block mt-0.5">Cash, UPI, Bank, and adjustments</span>
-            </div>
-            <div className="text-center md:text-left border-t md:border-t-0 md:border-l border-orange-100 pt-3 md:pt-0 md:pl-6">
-              <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider block">Items Returned</span>
-              <span className="text-2xl font-black text-orange-800 block mt-1">{data.totalItemsReturned} units</span>
-              <span className="text-[10px] text-slate-400 block mt-0.5">Restored to warehouse stock</span>
-            </div>
-            <div className="text-center md:text-left border-t md:border-t-0 md:border-l border-orange-100 pt-3 md:pt-0 md:pl-6">
-              <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider block">Active Return Records</span>
-              <span className="text-2xl font-black text-orange-800 block mt-1">
-                {(state.salesReturns || []).filter((r) => r.status !== "Cancelled").length} records
-              </span>
-              <span className="text-[10px] text-slate-400 block mt-0.5">Excludes voided transactions</span>
-            </div>
-          </div>
-
-          {/* Sub Grid for Product and Customer lists */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Return Rate by Product */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-                <Package size={15} className="text-orange-500" />
-                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Return Rate by Product</h3>
-              </div>
-              {data.productReturnRates.length === 0 ? (
-                <p className="text-xs text-slate-400 py-6 text-center">No product returns recorded in selected timeframe.</p>
-              ) : (
-                <div className="space-y-3">
-                  {data.productReturnRates.map((p) => (
-                    <div key={p.id} className="space-y-1">
-                      <div className="flex justify-between text-xs">
-                        <span className="font-bold text-slate-800 truncate max-w-[60%]">{p.name}</span>
-                        <span className="font-bold text-slate-900 font-mono">
-                          {p.rate}% <span className="text-slate-400 font-normal ml-1">({p.returnedQty} / {p.soldQty} units)</span>
-                        </span>
-                      </div>
-                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-orange-500 rounded-full transition-all duration-300"
-                          style={{ width: `${Math.min(p.rate, 100)}%` }}
-                        />
-                      </div>
-                    </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-center border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px]">
+                  <th className="py-2 px-3 text-left w-20">Day</th>
+                  {heatmapData.slots.map((s, idx) => (
+                    <th key={idx} className="py-2 px-3">{s.label}</th>
                   ))}
-                </div>
-              )}
-            </div>
-
-            {/* Return Rate by Customer */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-                <Users size={15} className="text-orange-500" />
-                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Return Rate by Customer</h3>
-              </div>
-              {data.customerReturnRates.length === 0 ? (
-                <p className="text-xs text-slate-400 py-6 text-center">No customer returns recorded in selected timeframe.</p>
-              ) : (
-                <div className="space-y-3">
-                  {data.customerReturnRates.map((c) => (
-                    <div key={c.id} className="space-y-1">
-                      <div className="flex justify-between text-xs">
-                        <span className="font-bold text-slate-800 truncate max-w-[60%]">{c.name}</span>
-                        <span className="font-bold text-slate-900 font-mono">
-                          {c.rate}% <span className="text-slate-400 font-normal ml-1">({c.returnedQty} / {c.soldQty} units)</span>
-                        </span>
-                      </div>
-                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-orange-400 rounded-full transition-all duration-300"
-                          style={{ width: `${Math.min(c.rate, 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </SectionCard>
-      </div>
-
-      {/* ── Section: Product Margins & Ledger Table ─────────────────────────── */}
-      <SectionCard
-        title="Accessory Profitability Ledger"
-        subtitle="Ranked view of the products driving the highest margins"
-      >
-        <div className="overflow-x-auto -mx-5 -mb-5 mt-2">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-y border-slate-100">
-                <th className="px-5 py-3 text-left">#</th>
-                <th className="px-5 py-3 text-left">Product</th>
-                <th className="px-5 py-3 text-left">Category</th>
-                <th className="px-5 py-3 text-right">Cost (Buy)</th>
-                <th className="px-5 py-3 text-right">Retail (Sell)</th>
-                <th className="px-5 py-3 text-right">Margin</th>
-                <th className="px-5 py-3 text-center">Stock</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {data.productMargins.map((p, i) => (
-                <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
-                  <td className="px-5 py-2.5 text-xs text-slate-450 font-mono">{i + 1}</td>
-                  <td className="px-5 py-2.5 font-bold text-slate-800 text-xs">{p.name}</td>
-                  <td className="px-5 py-2.5 text-slate-500 text-xs">{p.category}</td>
-                  <td className="px-5 py-2.5 text-right font-mono text-slate-500 text-xs">₹{p.currentCost.toLocaleString()}</td>
-                  <td className="px-5 py-2.5 text-right font-mono font-bold text-slate-800 text-xs">₹{p.sellPrice.toLocaleString()}</td>
-                  <td className="px-5 py-2.5 text-right">
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${p.margin >= 30 ? "bg-green-100 text-green-700" : p.margin >= 15 ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-600"
-                      }`}>
-                      {p.margin}%
-                    </span>
-                  </td>
-                  <td className="px-5 py-2.5 text-center font-bold text-xs text-slate-650 font-mono">{p.stock}</td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium">
+                {heatmapData.grid.map((row, rIdx) => (
+                  <tr key={rIdx} className="hover:bg-slate-50">
+                    <td className="py-2.5 px-3 font-bold text-navy-950 text-left">{row[0].day}</td>
+                    {row.map((cell, cIdx) => {
+                      const intensityPct = heatmapData.maxCellSales > 0 ? (cell.sales / heatmapData.maxCellSales) : 0;
+                      return (
+                        <td key={cIdx} className="p-1.5">
+                          <div
+                            className={`p-2.5 rounded-lg border transition-all text-[11px] font-mono flex flex-col items-center justify-center ${
+                              cell.sales > 0
+                                ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-950 font-bold"
+                                : "bg-slate-50 border-slate-100 text-slate-300"
+                            }`}
+                            style={{
+                              backgroundColor: cell.sales > 0 ? `rgba(16, 185, 129, ${Math.max(0.12, intensityPct * 0.75)})` : undefined
+                            }}
+                            title={`${cell.day} ${cell.slot}: ₹${cell.sales.toLocaleString()} (${cell.count} orders)`}
+                          >
+                            <span>₹{cell.sales > 0 ? cell.sales.toLocaleString() : "0"}</span>
+                            <span className="text-[9px] text-slate-500 font-sans font-normal">{cell.count} orders</span>
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </SectionCard>
 
-      {/* ══════════════════════════════════════════════════════════════════════
-          INTEGRATED REPORT PRINT PREVIEW SCREEN
-      ══════════════════════════════════════════════════════════════════════ */}
-      {showReport && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 overflow-y-auto px-4 py-8 print:p-0 print:bg-white print:static report-print-container">
-          <div className="max-w-4xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden print:border-none print:shadow-none print:rounded-none">
-
-            {/* Print action header (hidden on physical print output) */}
-            <div className="flex justify-between items-center px-6 py-4 bg-slate-50 border-b border-slate-150 print-hidden">
-              <button
-                type="button"
-                onClick={() => setShowReport(false)}
-                className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-800 border border-slate-200 bg-white px-3.5 py-2 rounded-xl transition cursor-pointer"
-              >
-                <ArrowRight size={13} className="rotate-180" />
-                Back to Dashboard
-              </button>
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="flex items-center gap-1.5 text-xs font-black text-white bg-green-600 hover:bg-green-700 px-4.5 py-2.5 rounded-xl transition shadow cursor-pointer"
-              >
-                <Printer size={14} />
-                Print Summary Report
-              </button>
+        {/* ── SECTION 9: PRESERVED DEDICATED SALES RETURNS ANALYTICS ─────── */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5 print:hidden">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <div>
+              <h3 className="text-sm font-extrabold text-navy-900">Sales Returns & Refunds Analysis</h3>
+              <p className="text-[11px] text-slate-400 font-medium">Return rates, units returned, and refund valuations in selected period</p>
             </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200">
+                Return Rate: {biData.returnsDetailed.returnRatePct}%
+              </span>
+            </div>
+          </div>
 
-            {/* Document body (Scales to standard A4 printing sizes) */}
-            <div className="p-8 sm:p-12 space-y-8 print:p-0">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/60 text-xs">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Period Return Records</span>
+              <span className="font-extrabold text-navy-950 text-base mt-0.5 block">{biData.returnsDetailed.periodCount} records</span>
+            </div>
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/60 text-xs">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Refund Value</span>
+              <span className="font-extrabold text-rose-600 text-base mt-0.5 block font-mono">₹{biData.returnsDetailed.periodRefundValue.toLocaleString()}</span>
+            </div>
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/60 text-xs">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Most Returned Item</span>
+              <span className="font-extrabold text-navy-950 text-xs mt-1 block truncate">
+                {biData.returnsDetailed.mostReturnedProduct ? biData.returnsDetailed.mostReturnedProduct.product.name : "None"}
+              </span>
+            </div>
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/60 text-xs">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Largest Single Refund</span>
+              <span className="font-extrabold text-navy-950 text-xs mt-1 block font-mono">
+                ₹{biData.returnsDetailed.largestRefundRecord ? biData.returnsDetailed.largestRefundRecord.refundAmount.toLocaleString() : 0}
+              </span>
+            </div>
+          </div>
+        </div>
 
-              {/* Report Document Title and Date stamps */}
-              <div className="flex justify-between items-start border-b border-slate-200 pb-6">
-                <div>
-                  <h1 className="text-2xl font-black text-navy-950">7 Star Car Accessories</h1>
-                  <p className="text-sm text-slate-500 font-semibold mt-0.5">AutoVault Business Management Summary</p>
-                  <p className="text-xs text-slate-450 mt-0.5 font-mono">System ID: autovault-7star-accessories</p>
-                </div>
-                <div className="text-right">
-                  <h2 className="text-sm font-extrabold text-slate-500 uppercase tracking-widest">Business Report</h2>
-                  <p className="text-xs font-black text-slate-700 mt-1">
-                    Period: {timeRange === "Custom"
-                      ? `${new Date(startDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} - ${new Date(endDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`
-                      : timeRange === "All"
-                        ? "All-Time Business Summary"
-                        : `${timeRange} Auditing`}
-                  </p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Generated: {new Date().toLocaleString("en-IN")}</p>
-                </div>
+        {/* ── SECTION 10: DETERMINISTIC SMART INSIGHTS SUMMARY BANNER ────── */}
+        <div className="bg-gradient-to-r from-navy-950 to-slate-900 text-white p-5 rounded-2xl shadow-md space-y-3 print:hidden">
+          <div className="flex items-center gap-2">
+            <Zap size={16} className="text-amber-400" />
+            <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-300">Deterministic Smart Insights Summary</h3>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+            {biData.smartInsights.map((insight, idx) => (
+              <div key={idx} className="bg-white/10 backdrop-blur-xs p-3 rounded-xl border border-white/10 space-y-1">
+                <h4 className="font-bold text-amber-300 leading-tight">{insight.title}</h4>
+                <ul className="space-y-0.5 text-[11px] text-slate-300">
+                  {insight.reasons.map((r, rIdx) => (
+                    <li key={rIdx} className="flex items-start gap-1.5">
+                      <span className="text-amber-400 font-bold">•</span>
+                      <span>{r}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
+            ))}
+          </div>
+        </div>
 
-              {/* Summary KPIs */}
-              <div className="grid grid-cols-3 gap-4">
-                <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Billed</span>
-                  <span className="text-xl font-extrabold text-slate-900 block mt-1">₹{data.totalBilled.toLocaleString()}</span>
-                  <span className="text-[10px] text-slate-400 block mt-0.5">{filteredInvoices.length} invoices issued</span>
-                </div>
-                <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Cash Collected</span>
-                  <span className="text-xl font-extrabold text-green-600 block mt-1">₹{data.totalRevenue.toLocaleString()}</span>
-                  <span className="text-[10px] text-slate-400 block mt-0.5">{Math.round((data.totalRevenue / (data.totalBilled || 1)) * 100)}% payment capture</span>
-                </div>
-                <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Net Profit Margin</span>
-                  <span className="text-xl font-extrabold text-emerald-600 block mt-1">₹{data.totalProfit.toLocaleString()}</span>
-                  <span className="text-[10px] text-slate-400 block mt-0.5">{data.totalBilled > 0 ? `${Math.round((data.totalProfit / data.totalBilled) * 100)}% average margin` : "0% net margin"}</span>
-                </div>
+        {/* ── SECTION 11: FULL EXECUTIVE BUSINESS REPORT (PRINT LAYOUT) ───── */}
+        <div className="hidden print:block space-y-6 pt-2 text-slate-900 bg-white font-sans">
+          {/* 1. REPORT PAGE HEADER */}
+          <div className="border-b-2 border-slate-900 pb-4 flex justify-between items-start">
+            <div>
+              <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tight">7 Star Car Accessories</h1>
+              <h2 className="text-sm font-bold text-slate-600 uppercase tracking-widest mt-0.5">Executive Analytics & BI Report</h2>
+              <p className="text-[11px] text-slate-500 font-medium mt-1">AutoVault ERP Business Intelligence Engine • Official Executive Report</p>
+            </div>
+            <div className="text-right text-xs space-y-1 font-mono">
+              <div><span className="text-slate-500 font-sans uppercase text-[10px]">Filter Scope:</span> <strong className="font-bold text-slate-900">{timeRange}</strong></div>
+              <div><span className="text-slate-500 font-sans uppercase text-[10px]">Date Range:</span> <strong className="font-bold text-slate-900">{startDate && endDate ? `${startDate} to ${endDate}` : "Full Period"}</strong></div>
+              <div><span className="text-slate-500 font-sans uppercase text-[10px]">Generated At:</span> <strong className="text-slate-900">{new Date().toLocaleString("en-IN")}</strong></div>
+            </div>
+          </div>
+
+          {/* 2. EXECUTIVE SUMMARY KPI CARDS */}
+          <div className="break-inside-avoid space-y-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b pb-1">1. Executive Snapshot</h3>
+            <div className="grid grid-cols-3 gap-3 text-xs">
+              <div className="p-3 border-2 border-slate-200 rounded-xl bg-slate-50/50">
+                <span className="text-[10px] font-bold text-slate-500 uppercase block">Total Billed</span>
+                <span className="text-base font-black text-slate-900 font-mono">₹{financialTotals.totalBilled.toLocaleString()}</span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">{filteredInvoices.length} invoices generated</span>
               </div>
-
-              {/* Debt & Receivables ledger */}
-              <div className="grid grid-cols-2 gap-6 pt-2">
-                <div>
-                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5 pb-1.5 border-b">Receivables Statement</h3>
-                  {data.debtCustomers.length === 0 ? (
-                    <p className="text-xs text-green-600 font-semibold py-2">✓ No pending debts recorded in this timeframe.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="flex justify-between items-center text-xs font-bold text-red-700 bg-red-50 p-2.5 rounded-lg mb-1">
-                        <span>Total Uncollected:</span>
-                        <span>₹{data.totalDebt.toLocaleString()}</span>
-                      </div>
-                      <table className="w-full text-[11px]">
-                        <thead>
-                          <tr className="text-slate-400 text-left border-b font-medium">
-                            <th className="pb-1 font-semibold">Customer</th>
-                            <th className="pb-1 font-semibold">Phone</th>
-                            <th className="pb-1 text-right font-semibold">Balance</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {data.debtCustomers.slice(0, 6).map((c) => (
-                            <tr key={c.id} className="border-b last:border-0">
-                              <td className="py-2 font-bold text-slate-800">{c.name}</td>
-                              <td className="py-2 text-slate-500">{c.phone}</td>
-                              <td className="py-2 text-right font-bold text-red-600">₹{c.debt.toLocaleString()}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5 pb-1.5 border-b">Payment Method mix</h3>
-                  <table className="w-full text-[11px]">
-                    <thead>
-                      <tr className="text-slate-400 text-left border-b font-medium">
-                        <th className="pb-1 font-semibold">Method</th>
-                        <th className="pb-1 text-center font-semibold">Transactions</th>
-                        <th className="pb-1 text-right font-semibold">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.methodData.map((m) => (
-                        <tr key={m.method} className="border-b last:border-0">
-                          <td className="py-2 font-bold text-slate-800">{m.method}</td>
-                          <td className="py-2 text-center text-slate-500">{m.count}</td>
-                          <td className="py-2 text-right font-black text-slate-700">₹{m.total.toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+              <div className="p-3 border-2 border-slate-200 rounded-xl bg-slate-50/50">
+                <span className="text-[10px] font-bold text-slate-500 uppercase block">Net Revenue (Collected)</span>
+                <span className="text-base font-black text-emerald-800 font-mono">₹{financialTotals.totalRevenue.toLocaleString()}</span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">After sales returns & refunds</span>
               </div>
-
-              {/* Product and Category Sales leaderboards */}
-              <div className="grid grid-cols-2 gap-6 pt-2">
-                <div>
-                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5 pb-1.5 border-b">Product movement leaders</h3>
-                  {data.topProducts.length === 0 ? (
-                    <p className="text-xs text-slate-450 py-2">No product units sold in this range.</p>
-                  ) : (
-                    <table className="w-full text-[11px]">
-                      <thead>
-                        <tr className="text-slate-400 text-left border-b font-medium">
-                          <th className="pb-1 font-semibold">Product name</th>
-                          <th className="pb-1 text-center font-semibold">Qty</th>
-                          <th className="pb-1 text-right font-semibold">Net Profit</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.topProducts.map((p) => (
-                          <tr key={p.id} className="border-b last:border-0 font-medium">
-                            <td className="py-2 text-slate-800 truncate max-w-[150px]">{p.name}</td>
-                            <td className="py-2 text-center text-slate-500">{p.qty}</td>
-                            <td className="py-2 text-right text-emerald-600 font-bold">₹{p.profit.toLocaleString()}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-
-                <div>
-                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5 pb-1.5 border-b">Category contributions</h3>
-                  {data.categoryData.length === 0 ? (
-                    <p className="text-xs text-slate-450 py-2">No categories recorded in range.</p>
-                  ) : (
-                    <table className="w-full text-[11px]">
-                      <thead>
-                        <tr className="text-slate-400 text-left border-b font-medium">
-                          <th className="pb-1 font-semibold">Category</th>
-                          <th className="pb-1 text-center font-semibold">Units</th>
-                          <th className="pb-1 text-right font-semibold">Revenue</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.categoryData.map((c) => (
-                          <tr key={c.cat} className="border-b last:border-0 font-medium">
-                            <td className="py-2 text-slate-800">{c.cat}</td>
-                            <td className="py-2 text-center text-slate-500">{c.qty}</td>
-                            <td className="py-2 text-right text-slate-900 font-bold">₹{c.revenue.toLocaleString()}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
+              <div className="p-3 border-2 border-slate-200 rounded-xl bg-slate-50/50">
+                <span className="text-[10px] font-bold text-slate-500 uppercase block">Gross Trading Profit</span>
+                <span className="text-base font-black text-indigo-900 font-mono">₹{financialTotals.totalProfit.toLocaleString()}</span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">Margin: {biData.waterfall.marginPct}%</span>
               </div>
+              <div className="p-3 border-2 border-slate-200 rounded-xl bg-slate-50/50">
+                <span className="text-[10px] font-bold text-slate-500 uppercase block">Pending Customer Debt</span>
+                <span className="text-base font-black text-rose-800 font-mono">₹{biData.custDebt.toLocaleString()}</span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">{allTimeDebtorsList.length} outstanding accounts</span>
+              </div>
+              <div className="p-3 border-2 border-slate-200 rounded-xl bg-slate-50/50">
+                <span className="text-[10px] font-bold text-slate-500 uppercase block">Total Liquid Cash</span>
+                <span className="text-base font-black text-emerald-900 font-mono">₹{biData.liquidCash.toLocaleString()}</span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">Cash + Bank + UPI</span>
+              </div>
+              <div className="p-3 border-2 border-slate-200 rounded-xl bg-slate-50/50">
+                <span className="text-[10px] font-bold text-slate-500 uppercase block">Business Health Score</span>
+                <span className="text-base font-black text-navy-950 font-mono">{biData.healthScore.score} / 100</span>
+                <span className="text-[10px] font-bold text-slate-700 block mt-0.5">Status: {biData.healthScore.status}</span>
+              </div>
+            </div>
+          </div>
 
-              {/* Out of Stock Alert Summary on Print page */}
-              {data.outOfStock.length > 0 && (
-                <div className="pt-2">
-                  <h3 className="text-xs font-bold text-red-600 uppercase tracking-wider mb-2.5 pb-1.5 border-b">Critical Warehouse Alert (Out of Stock)</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {data.outOfStock.slice(0, 8).map((p) => (
-                      <span key={p.id} className="text-[10px] font-bold border border-red-200 text-red-700 bg-red-50/50 px-2 py-1 rounded-lg">
-                        {p.name} (SKU: {p.sku})
-                      </span>
-                    ))}
-                    {data.outOfStock.length > 8 && (
-                      <span className="text-[10px] font-semibold text-slate-400 px-1 py-1">
-                        + {data.outOfStock.length - 8} more products out of stock
-                      </span>
-                    )}
+          {/* 3. FINANCIAL SUMMARY TABLE */}
+          <div className="break-inside-avoid space-y-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b pb-1">2. Financial Reconciliation Ledger</h3>
+            <table className="w-full text-left border-collapse text-xs border border-slate-300">
+              <thead>
+                <tr className="bg-slate-100 border-b border-slate-300 font-bold uppercase text-[10px] text-slate-700">
+                  <th className="py-2 px-3 border-r">Financial Line Item</th>
+                  <th className="py-2 px-3 border-r text-right">Amount (₹)</th>
+                  <th className="py-2 px-3 text-left">Description / Notes</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 font-medium">
+                <tr>
+                  <td className="py-2 px-3 border-r font-bold">1. Gross Billed Total</td>
+                  <td className="py-2 px-3 border-r text-right font-mono font-bold">₹{biData.waterfall.grossBilled.toLocaleString()}</td>
+                  <td className="py-2 px-3 text-slate-600">Total invoice face value billed to customers</td>
+                </tr>
+                <tr>
+                  <td className="py-2 px-3 border-r font-bold text-rose-800">2. Less: Sales Returns & Refunds</td>
+                  <td className="py-2 px-3 border-r text-right font-mono font-bold text-rose-800">-₹{biData.waterfall.returnsRefund.toLocaleString()}</td>
+                  <td className="py-2 px-3 text-slate-600">Customer refunds issued for returned items</td>
+                </tr>
+                <tr className="bg-emerald-50/50 font-bold">
+                  <td className="py-2 px-3 border-r text-emerald-950">3. Net Collected Revenue</td>
+                  <td className="py-2 px-3 border-r text-right font-mono font-black text-emerald-800">₹{biData.waterfall.netRevenue.toLocaleString()}</td>
+                  <td className="py-2 px-3 text-emerald-900">Actual net money earned from sales</td>
+                </tr>
+                <tr>
+                  <td className="py-2 px-3 border-r font-bold text-slate-700">4. Less: Cost of Goods Sold (COGS)</td>
+                  <td className="py-2 px-3 border-r text-right font-mono font-bold text-slate-700">-₹{biData.waterfall.cogs.toLocaleString()}</td>
+                  <td className="py-2 px-3 text-slate-600">Cost value of inventory items sold</td>
+                </tr>
+                <tr className="bg-indigo-50/50 font-bold">
+                  <td className="py-2 px-3 border-r text-indigo-950">5. Net Gross Trading Profit</td>
+                  <td className="py-2 px-3 border-r text-right font-mono font-black text-indigo-900">₹{biData.waterfall.grossProfit.toLocaleString()}</td>
+                  <td className="py-2 px-3 text-indigo-900">Trading profit margin ({biData.waterfall.marginPct}%)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* 4. REVENUE & PROFIT TREND CHART */}
+          <div className="break-inside-avoid space-y-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b pb-1">3. Sales & Trading Profit Trajectory</h3>
+            <div className="p-4 border border-slate-300 rounded-xl space-y-3 bg-white">
+              <div className="flex justify-between items-center text-xs font-bold text-slate-700">
+                <span>Daily Revenue (Blue) & Gross Profit (Green) Curve</span>
+                <span>Average Order Value: ₹{biData.periodComp.currentAOV.toLocaleString()}</span>
+              </div>
+              <svg className="w-full h-44 overflow-visible" viewBox="0 0 800 200" preserveAspectRatio="none">
+                {[0, 50, 100, 150, 200].map((y) => (
+                  <line key={y} x1="0" y1={y} x2="800" y2={y} stroke="#e2e8f0" strokeWidth="1" />
+                ))}
+                <line x1="0" y1={chartData.yZero} x2="800" y2={chartData.yZero} stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="3 3" />
+                <path d={chartData.salesPath} fill="none" stroke="#0284c7" strokeWidth="2.5" />
+                <path d={chartData.profitPath} fill="none" stroke="#10b981" strokeWidth="2.5" strokeDasharray="4 2" />
+                {chartData.points.map((pt, idx) => (
+                  <g key={idx}>
+                    <circle cx={pt.x} cy={pt.ySales} r="3.5" fill="#0284c7" />
+                    <circle cx={pt.x} cy={pt.yProfit} r="3.5" fill="#10b981" />
+                  </g>
+                ))}
+              </svg>
+              <div className="flex justify-between text-[9px] font-bold text-slate-600 font-mono">
+                {chartData.points.map((pt, idx) => (
+                  <span key={idx}>{pt.dateLabel}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 5. MONEY VAULT & LIABILITIES */}
+          <div className="break-inside-avoid space-y-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b pb-1">4. Money Vault & Capital Breakdown</h3>
+            <div className="grid grid-cols-2 gap-4 text-xs">
+              <div className="p-3 border border-slate-300 rounded-xl space-y-2">
+                <h4 className="font-bold text-slate-900 border-b pb-1 uppercase text-[10px]">Liquid Cash Drawers</h4>
+                <div className="flex justify-between py-1 border-b"><span>Cash Till Drawer:</span> <strong className="font-mono">₹{getCashBalance().toLocaleString()}</strong></div>
+                <div className="flex justify-between py-1 border-b"><span>Bank Account:</span> <strong className="font-mono">₹{getBankBalance().toLocaleString()}</strong></div>
+                <div className="flex justify-between py-1 border-b"><span>Digital UPI Account:</span> <strong className="font-mono">₹{getUPIBalance().toLocaleString()}</strong></div>
+                <div className="flex justify-between py-1 font-bold text-emerald-800 pt-1"><span>Total Liquid Cash:</span> <strong className="font-mono">₹{biData.liquidCash.toLocaleString()}</strong></div>
+              </div>
+              <div className="p-3 border border-slate-300 rounded-xl space-y-2">
+                <h4 className="font-bold text-slate-900 border-b pb-1 uppercase text-[10px]">Liabilities & Capital</h4>
+                <div className="flex justify-between py-1 border-b"><span>Uncollected Customer Debt:</span> <strong className="font-mono text-rose-700">₹{biData.custDebt.toLocaleString()}</strong></div>
+                <div className="flex justify-between py-1 border-b"><span>Supplier Credit Payables:</span> <strong className="font-mono text-rose-700">₹{biData.supPayables.toLocaleString()}</strong></div>
+                <div className="flex justify-between py-1 border-b"><span>Active Warehouse Inventory:</span> <strong className="font-mono">₹{getInventoryValue().toLocaleString()}</strong></div>
+                <div className="flex justify-between py-1 font-bold text-slate-800 pt-1"><span>Dead Stock Capital:</span> <strong className="font-mono text-rose-800">₹{biData.velocityInsights.deadStockValuation.toLocaleString()}</strong></div>
+              </div>
+            </div>
+          </div>
+
+          {/* 6. BUSINESS HEALTH SCORE & BREAKDOWN */}
+          <div className="break-inside-avoid space-y-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b pb-1">5. Business Health Assessment ({biData.healthScore.score}/100 — {biData.healthScore.status})</h3>
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              {Object.entries(biData.healthScore.breakdown).map(([key, item]) => (
+                <div key={key} className="p-2.5 border border-slate-300 rounded-lg flex justify-between items-center">
+                  <span className="font-bold capitalize text-[11px] text-slate-700">{key.replace(/([A-Z])/g, " $1")}</span>
+                  <span className="font-mono font-black">{item.score} / {item.max}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 7. OWNER ACTION CENTER */}
+          <div className="break-inside-avoid space-y-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b pb-1">6. Owner Action Recommendations</h3>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              {biData.recommendedActions.map((action) => (
+                <div key={action.id} className="p-3 border border-slate-300 rounded-xl space-y-1 bg-slate-50/50">
+                  <div className="flex justify-between font-bold">
+                    <span className="text-rose-800 uppercase text-[10px]">{action.type} • {action.category}</span>
                   </div>
+                  <h4 className="font-bold text-slate-900">{action.title}</h4>
+                  <p className="text-[11px] text-slate-600">{action.action}</p>
+                  <span className="text-[10px] text-slate-500 block pt-1 border-t">Reason: {action.reason}</span>
                 </div>
-              )}
+              ))}
+            </div>
+          </div>
 
-              {/* Print Footer */}
-              <div className="pt-8 border-t border-dashed border-slate-200 text-center text-[10px] text-slate-400 font-medium">
-                This document represents an official business summary generated directly from AutoVault POS databases.
-                Printed on {new Date().toLocaleDateString("en-IN")} at {new Date().toLocaleTimeString("en-IN")}.
+          {/* 8. INVENTORY VELOCITY & RUNOUT PREDICTIONS */}
+          <div className="break-inside-avoid space-y-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b pb-1">7. Inventory Velocity & Stock Runout Risk</h3>
+            <table className="w-full text-left border-collapse text-xs border border-slate-300">
+              <thead>
+                <tr className="bg-slate-100 border-b border-slate-300 font-bold uppercase text-[10px] text-slate-700">
+                  <th className="py-2 px-3 border-r">Product Name</th>
+                  <th className="py-2 px-3 border-r text-right">Stock</th>
+                  <th className="py-2 px-3 border-r text-right">Velocity</th>
+                  <th className="py-2 px-3 border-r text-center">Runout Risk</th>
+                  <th className="py-2 px-3 text-center">Confidence</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 font-medium">
+                {biData.runoutPredictions.slice(0, 8).map((pred) => (
+                  <tr key={pred.productId}>
+                    <td className="py-1.5 px-3 border-r font-bold text-slate-900">{pred.productName}</td>
+                    <td className="py-1.5 px-3 border-r text-right font-mono font-bold">{pred.stock}</td>
+                    <td className="py-1.5 px-3 border-r text-right font-mono">{pred.avgDailySales}/day</td>
+                    <td className="py-1.5 px-3 border-r text-center font-bold text-rose-800">{pred.displayMessage}</td>
+                    <td className="py-1.5 px-3 text-center text-slate-600">{pred.confidence}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 9. PRODUCT PERFORMANCE LEDGER */}
+          <div className="break-inside-avoid space-y-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b pb-1">8. Top Revenue Products</h3>
+            <table className="w-full text-left border-collapse text-xs border border-slate-300">
+              <thead>
+                <tr className="bg-slate-100 border-b border-slate-300 font-bold uppercase text-[10px] text-slate-700">
+                  <th className="py-2 px-3 border-r">Product</th>
+                  <th className="py-2 px-3 border-r">SKU</th>
+                  <th className="py-2 px-3 border-r text-right">Units Sold</th>
+                  <th className="py-2 px-3 border-r text-right">Revenue</th>
+                  <th className="py-2 px-3 border-r text-right">Gross Profit</th>
+                  <th className="py-2 px-3 text-right">Margin %</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 font-medium">
+                {financialTotals.sortedProductsByRevenue.slice(0, 8).map((item) => {
+                  const marginPct = item.revenue > 0 ? Math.round((item.profit / item.revenue) * 100) : 0;
+                  return (
+                    <tr key={item.product.id}>
+                      <td className="py-1.5 px-3 border-r font-bold text-slate-900">{item.product.name}</td>
+                      <td className="py-1.5 px-3 border-r font-mono text-slate-500">{item.product.sku}</td>
+                      <td className="py-1.5 px-3 border-r text-right font-mono">{item.qty}</td>
+                      <td className="py-1.5 px-3 border-r text-right font-mono font-bold">₹{item.revenue.toLocaleString()}</td>
+                      <td className="py-1.5 px-3 border-r text-right font-mono font-bold text-emerald-800">₹{item.profit.toLocaleString()}</td>
+                      <td className="py-1.5 px-3 text-right font-mono font-bold">{marginPct}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 10. CUSTOMER & SUPPLIER INTELLIGENCE */}
+          <div className="break-inside-avoid space-y-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b pb-1">9. Customer & Supplier Intelligence</h3>
+            <div className="grid grid-cols-2 gap-4 text-xs">
+              <div className="p-3 border border-slate-300 rounded-xl space-y-1.5">
+                <h4 className="font-bold border-b pb-1 uppercase text-[10px] text-slate-700">Customer Intelligence</h4>
+                <div className="flex justify-between py-1 border-b"><span>Highest LTV Customer:</span> <strong>{biData.customerExt.highestLtvCustomer?.customer.name || "—"}</strong></div>
+                <div className="flex justify-between py-1 border-b"><span>Largest Debtor:</span> <strong className="text-rose-800">{biData.customerExt.highestDebtCustomer?.customer.name || "—"}</strong></div>
+                <div className="flex justify-between py-1 border-b"><span>Repeat Purchase Rate:</span> <strong>{biData.customerExt.repeatPurchasePct}%</strong></div>
+                <div className="flex justify-between py-1"><span>Avg Spend / Customer:</span> <strong className="font-mono">₹{biData.customerExt.avgSpendPerCustomer.toLocaleString()}</strong></div>
+              </div>
+              <div className="p-3 border border-slate-300 rounded-xl space-y-1.5">
+                <h4 className="font-bold border-b pb-1 uppercase text-[10px] text-slate-700">Supplier Intelligence</h4>
+                <div className="flex justify-between py-1 border-b"><span>Top Vendor by Spend:</span> <strong>{biData.supplierExt.topSupplierBySpend?.supplier.name || "—"}</strong></div>
+                <div className="flex justify-between py-1 border-b"><span>Largest Supplier Due:</span> <strong className="text-rose-800">{biData.supplierExt.mostOutstandingSupplier?.supplier.name || "—"}</strong></div>
+                <div className="flex justify-between py-1 border-b"><span>Avg Purchase Ticket:</span> <strong className="font-mono">₹{biData.supplierExt.avgPurchaseValue.toLocaleString()}</strong></div>
+                <div className="flex justify-between py-1"><span>Total Purchase Volume:</span> <strong className="font-mono">₹{biData.supplierExt.totalPurchasesInPeriod.toLocaleString()}</strong></div>
               </div>
             </div>
+          </div>
 
+          {/* 11. SALES HEATMAP */}
+          <div className="break-inside-avoid space-y-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b pb-1">10. Sales Heatmap (Day × Operating Hours)</h3>
+            <table className="w-full text-center border-collapse text-xs border border-slate-300">
+              <thead>
+                <tr className="bg-slate-100 border-b border-slate-300 font-bold uppercase text-[9px] text-slate-700">
+                  <th className="py-1.5 px-2 border-r text-left">Day</th>
+                  {heatmapData.slots.map((s, idx) => (
+                    <th key={idx} className="py-1.5 px-2 border-r">{s.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 font-mono text-[10px]">
+                {heatmapData.grid.map((row, rIdx) => (
+                  <tr key={rIdx}>
+                    <td className="py-1.5 px-2 border-r font-bold text-slate-900 text-left font-sans">{row[0].day}</td>
+                    {row.map((cell, cIdx) => (
+                      <td key={cIdx} className="py-1.5 px-2 border-r">
+                        ₹{cell.sales > 0 ? cell.sales.toLocaleString() : "0"}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 12. DETERMINISTIC SMART INSIGHTS */}
+          <div className="break-inside-avoid space-y-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b pb-1">11. Deterministic Smart Insights Summary</h3>
+            <div className="space-y-2 text-xs">
+              {biData.smartInsights.map((insight, idx) => (
+                <div key={idx} className="p-3 border border-slate-300 rounded-xl space-y-1">
+                  <h4 className="font-bold text-slate-900">{insight.title}</h4>
+                  <ul className="list-disc list-inside space-y-0.5 text-[11px] text-slate-700">
+                    {insight.reasons.map((r, rIdx) => (
+                      <li key={rIdx}>{r}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 13. REPORT FOOTER */}
+          <div className="border-t-2 border-slate-900 pt-3 flex justify-between items-center text-[10px] text-slate-500 font-mono">
+            <div>Generated by <strong>AutoVault ERP Engine</strong> • 7 Star Car Accessories</div>
+            <div>Official Executive Business Document</div>
+            <div>Automated PDF/Print Output</div>
+          </div>
+        </div>
+
+      </div>
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/*  MODALS CONTAINER (KPI Explainability & Card Drill-downs)          */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+
+      {/* 1. KPI EXPLAINABILITY MODAL */}
+      {activeExplainKey && KPI_EXPLANATIONS[activeExplainKey] && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[100] animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2 text-navy-950 font-black text-sm">
+                <Info size={16} className="text-emerald-600" />
+                <span>{KPI_EXPLANATIONS[activeExplainKey].title}</span>
+              </div>
+              <button onClick={() => setActiveExplainKey(null)} className="p-1 hover:bg-slate-100 rounded-lg cursor-pointer">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Mathematical Formula</span>
+                <div className="bg-slate-50 p-2.5 rounded-lg border font-mono text-slate-800 mt-1 font-bold">
+                  {KPI_EXPLANATIONS[activeExplainKey].formula}
+                </div>
+              </div>
+
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Canonical Source Tables</span>
+                <p className="text-slate-700 font-medium mt-0.5">{KPI_EXPLANATIONS[activeExplainKey].sources.join(", ")}</p>
+              </div>
+
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Business Meaning</span>
+                <p className="text-slate-600 font-medium mt-0.5 leading-relaxed">{KPI_EXPLANATIONS[activeExplainKey].meaning}</p>
+              </div>
+
+              <div className="pt-2 border-t text-[10px] text-slate-400 flex justify-between">
+                <span>Update Frequency: {KPI_EXPLANATIONS[activeExplainKey].updateFrequency}</span>
+                <span className="font-bold text-emerald-600">Deterministic ERP Rule</span>
+              </div>
+            </div>
           </div>
         </div>
       )}
 
-    </div>
-  );
-}
+      {/* 2. MONEY VAULT DRILL-DOWN MODAL */}
+      {activeDrillModal === "moneyVault" && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[100] animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between border-b pb-3">
+              <h3 className="font-black text-navy-950 text-sm flex items-center gap-2">
+                <DollarSign size={16} className="text-emerald-600" />
+                Money Vault Liquid Cash Breakdown
+              </h3>
+              <button onClick={() => setActiveDrillModal(null)} className="p-1 hover:bg-slate-100 rounded-lg cursor-pointer">
+                <X size={16} />
+              </button>
+            </div>
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  SECTION CARD UTILITY
-// ─────────────────────────────────────────────────────────────────────────────
+            <div className="space-y-3 text-xs">
+              <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 flex justify-between items-center">
+                <span className="font-bold text-emerald-900">Total Liquid Cash Available</span>
+                <span className="font-mono font-black text-lg text-emerald-700">₹{biData.liquidCash.toLocaleString()}</span>
+              </div>
 
-function SectionCard({
-  title,
-  subtitle,
-  titleClass = "text-slate-800",
-  action,
-  children,
-  className = "",
-}: {
-  title: string;
-  subtitle?: string;
-  titleClass?: string;
-  action?: { label: string; href: string };
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={`bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition duration-200 ${className}`}>
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <h2 className={`font-extrabold text-slate-900 text-sm md:text-base leading-tight ${titleClass}`}>{title}</h2>
-          {subtitle && <p className="text-xs text-slate-400 mt-1">{subtitle}</p>}
+              <div className="space-y-2 border-t pt-2">
+                <div className="flex justify-between py-1.5 border-b font-medium">
+                  <span>Cash Drawer (Till)</span>
+                  <span className="font-mono font-bold">₹{getCashBalance().toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between py-1.5 border-b font-medium">
+                  <span>Bank Account</span>
+                  <span className="font-mono font-bold">₹{getBankBalance().toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between py-1.5 border-b font-medium">
+                  <span>Digital UPI Account</span>
+                  <span className="font-mono font-bold">₹{getUPIBalance().toLocaleString()}</span>
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end">
+                <button
+                  onClick={() => setActiveDrillModal(null)}
+                  className="px-4 py-2 bg-navy-900 text-white font-bold rounded-xl text-xs cursor-pointer min-h-[44px]"
+                >
+                  Close Vault
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-        {action && (
-          <Link
-            href={action.href}
-            className="text-xs text-amber-500 hover:text-amber-600 font-bold flex items-center gap-1 shrink-0 ml-4 cursor-pointer"
-          >
-            {action.label} <ArrowRight size={12} />
-          </Link>
-        )}
-      </div>
-      {children}
+      )}
+
+      {/* 3. CUSTOMER DEBTORS DRILL-DOWN MODAL */}
+      {activeDrillModal === "debtors" && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[100] animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl border border-slate-200 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between border-b pb-3 shrink-0">
+              <h3 className="font-black text-navy-950 text-sm flex items-center gap-2">
+                <CreditCard size={16} className="text-amber-600" />
+                Customer Debtors Ledger ({allTimeDebtorsList.length})
+              </h3>
+              <button onClick={() => setActiveDrillModal(null)} className="p-1 hover:bg-slate-100 rounded-lg cursor-pointer">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto space-y-2 text-xs flex-1 pr-1">
+              {allTimeDebtorsList.map((c) => (
+                <div key={c.id} className="p-3 bg-slate-50 rounded-xl border flex justify-between items-center">
+                  <div>
+                    <h4 className="font-bold text-navy-950">{c.name}</h4>
+                    <span className="text-[10px] text-slate-400 font-mono">Phone: {c.phone || "—"} • {c.visits || 0} visits</span>
+                  </div>
+                  <span className="font-mono font-extrabold text-rose-600 text-sm">₹{(c.debt || 0).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-3 border-t shrink-0 flex justify-between items-center text-xs">
+              <span className="font-bold text-slate-700">Total Receivables: ₹{biData.custDebt.toLocaleString()}</span>
+              <button
+                onClick={() => setActiveDrillModal(null)}
+                className="px-4 py-2 bg-navy-900 text-white font-bold rounded-xl text-xs cursor-pointer min-h-[44px]"
+              >
+                Close Ledger
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. DEAD STOCK DRILL-DOWN MODAL */}
+      {activeDrillModal === "deadStock" && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[100] animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl border border-slate-200 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between border-b pb-3 shrink-0">
+              <h3 className="font-black text-navy-950 text-sm flex items-center gap-2">
+                <AlertTriangle size={16} className="text-rose-600" />
+                Dead Stock Stagnant Inventory
+              </h3>
+              <button onClick={() => setActiveDrillModal(null)} className="p-1 hover:bg-slate-100 rounded-lg cursor-pointer">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto space-y-2 text-xs flex-1 pr-1">
+              {biData.velocityInsights.deadStockProducts.map((p) => (
+                <div key={p.id} className="p-3 bg-rose-50/50 rounded-xl border border-rose-200/60 flex justify-between items-center">
+                  <div>
+                    <h4 className="font-bold text-navy-950">{p.name}</h4>
+                    <span className="text-[10px] text-slate-400 font-mono">SKU: {p.sku} • Stock: {p.stock} units</span>
+                  </div>
+                  <span className="font-mono font-bold text-rose-700">₹{(p.stock * p.currentCost).toLocaleString()} locked</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-3 border-t shrink-0 flex justify-between items-center text-xs">
+              <span className="font-bold text-slate-700">Total Dead Capital: ₹{biData.velocityInsights.deadStockValuation.toLocaleString()}</span>
+              <button
+                onClick={() => setActiveDrillModal(null)}
+                className="px-4 py-2 bg-navy-900 text-white font-bold rounded-xl text-xs cursor-pointer min-h-[44px]"
+              >
+                Close List
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. LOW STOCK RUNOUT PREDICTIONS DRILL-DOWN MODAL */}
+      {activeDrillModal === "lowStock" && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[100] animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-2xl border border-slate-200 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between border-b pb-3 shrink-0">
+              <h3 className="font-black text-navy-950 text-sm flex items-center gap-2">
+                <Package size={16} className="text-amber-600" />
+                Low Stock & Predictive Runout Inventory ({biData.runoutPredictions.length})
+              </h3>
+              <button onClick={() => setActiveDrillModal(null)} className="p-1 hover:bg-slate-100 rounded-lg cursor-pointer">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto space-y-2 text-xs flex-1 pr-1">
+              {biData.runoutPredictions.map((pred) => (
+                <div key={pred.productId} className="p-3 bg-slate-50 rounded-xl border flex justify-between items-center gap-3">
+                  <div className="space-y-0.5">
+                    <h4 className="font-bold text-navy-950">{pred.productName}</h4>
+                    <span className="text-[10px] text-slate-400 font-mono">SKU: {pred.sku} • Stock: <strong>{pred.stock}</strong> • Velocity: {pred.avgDailySales}/day</span>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span
+                      className={`inline-block text-[10px] font-extrabold px-2.5 py-1 rounded-md ${
+                        pred.priority === "Critical"
+                          ? "bg-rose-100 text-rose-800"
+                          : pred.priority === "High"
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-emerald-100 text-emerald-800"
+                      }`}
+                    >
+                      {pred.displayMessage}
+                    </span>
+                    <span className="block text-[9px] font-bold text-slate-400 mt-1">Confidence: {pred.confidence}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-3 border-t shrink-0 flex justify-between items-center text-xs">
+              <span className="font-bold text-slate-700">Predictive Stock Depletion Engine</span>
+              <button
+                onClick={() => setActiveDrillModal(null)}
+                className="px-4 py-2 bg-navy-900 text-white font-bold rounded-xl text-xs cursor-pointer min-h-[44px]"
+              >
+                Close Predictions
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

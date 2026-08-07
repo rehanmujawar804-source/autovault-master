@@ -7,6 +7,10 @@ import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import { calculateRevenue } from "@/lib/revenueUtils";
 import { calculateProfit } from "@/lib/profitUtils";
+import {
+  generateFinanceXLSXWorkbook,
+  generateFinanceCSVText,
+} from "@/lib/spreadsheetUtils";
 import type { FinanceCategory, PaymentMethod, FinanceTransaction } from "@/types";
 import {
   Wallet,
@@ -34,12 +38,17 @@ import {
   Tag,
   Clock,
   ChevronRight,
+  ChevronLeft,
   HelpCircle,
   PlusCircle,
   X,
   Plus,
   AlertCircle,
   Check,
+  Download,
+  FileSpreadsheet,
+  Printer,
+  RotateCcw,
 } from "lucide-react";
 
 function formatDisplayDate(dateStr?: string) {
@@ -122,6 +131,7 @@ export default function FinancePage() {
     getTotalSupplierOutstanding,
     getTotalOutstandingDebt,
     getInventoryValue,
+    showToast,
   } = useStore();
 
   // Role Guard
@@ -142,8 +152,15 @@ export default function FinancePage() {
   const [methodFilter, setMethodFilter] = useState<string>("All");
   const [accountFilter, setAccountFilter] = useState<string>("All");
 
+  // Client-side Ledger Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(25);
+
   // Informational Guide Toggle
   const [showConceptGuide, setShowConceptGuide] = useState(true);
+
+  // UI-only Transaction Reversal Placeholder Modal State
+  const [reversalModalTx, setReversalModalTx] = useState<FinanceTransaction | null>(null);
 
   // ── Record Expense Modal State ─────────────────────────────────────────────
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
@@ -275,6 +292,7 @@ export default function FinancePage() {
       .map((cat) => ({
         category: cat,
         amount: getExpenseByCategory(cat),
+        isOperating: OPERATING_EXPENSE_CATEGORIES.includes(cat as FinanceCategory),
       }))
       .filter((item) => item.amount > 0 || state.financeTransactions?.some((t) => t.category === item.category));
   }, [state.financeTransactions, getExpenseByCategory]);
@@ -328,7 +346,7 @@ export default function FinancePage() {
         (t) =>
           (t.notes || "").toLowerCase().includes(q) ||
           t.category.toLowerCase().includes(q) ||
-          t.referenceId.toLowerCase().includes(q) ||
+          (t.referenceId || "").toLowerCase().includes(q) ||
           t.id.toLowerCase().includes(q) ||
           t.method.toLowerCase().includes(q)
       );
@@ -346,6 +364,19 @@ export default function FinancePage() {
     searchQuery,
   ]);
 
+  // Reset pagination to Page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [typeFilter, categoryFilter, methodFilter, accountFilter, fromDate, toDate, searchQuery]);
+
+  // ── Paginated Ledger Calculation ──────────────────────────────────────────
+  const totalPages = Math.ceil(filteredLedger.length / pageSize) || 1;
+
+  const paginatedLedger = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredLedger.slice(start, start + pageSize);
+  }, [filteredLedger, currentPage, pageSize]);
+
   // ── Filtered Summary Totals ────────────────────────────────────────────────
   const filteredSummary = useMemo(() => {
     let income = 0;
@@ -361,6 +392,46 @@ export default function FinancePage() {
       count: filteredLedger.length,
     };
   }, [filteredLedger]);
+
+  // ── Export & Print Handlers ────────────────────────────────────────────────
+  function handleExportCSV() {
+    try {
+      const csv = generateFinanceCSVText(filteredLedger);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `autovault_finance_ledger_${todayISOString()}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast("Exported filtered ledger to CSV", "success");
+    } catch {
+      showToast("Failed to export CSV file.", "error");
+    }
+  }
+
+  async function handleExportExcel() {
+    try {
+      const blob = await generateFinanceXLSXWorkbook(filteredLedger);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `autovault_finance_ledger_${todayISOString()}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast("Exported filtered ledger to Excel (.xlsx)", "success");
+    } catch {
+      showToast("Failed to export Excel workbook.", "error");
+    }
+  }
+
+  function handlePrintReport() {
+    window.print();
+  }
 
   // ── Handle Expense Form Submission ──────────────────────────────────────────
   function handleRecordExpenseSubmit(e: React.FormEvent) {
@@ -508,9 +579,25 @@ export default function FinancePage() {
   }
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-12">
+    <div className="space-y-6 max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 pb-12 print:p-0 print:max-w-none">
+      {/* ── PRINT HEADER (Printed Document Only) ────────────────────────── */}
+      <div className="hidden print:block mb-6 pb-4 border-b border-slate-300">
+        <div className="flex justify-between items-start">
+          <div>
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">AUTOVAULT ERP — FINANCE REPORT</h1>
+            <p className="text-xs text-slate-600 mt-0.5">
+              Official Financial Position & Chronological Audit Ledger
+            </p>
+          </div>
+          <div className="text-right text-xs text-slate-500 font-mono">
+            <p>Generated: {new Date().toLocaleString("en-IN")}</p>
+            <p>Scope: {fromDate || "Beginning"} to {toDate || "Present"}</p>
+          </div>
+        </div>
+      </div>
+
       {/* ── HEADER ─────────────────────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm print:hidden">
         <div className="flex items-center gap-3.5">
           <div className="w-12 h-12 rounded-xl bg-navy-950 text-yellow-400 flex items-center justify-center shrink-0 shadow-md ring-1 ring-black/5">
             <Wallet size={24} />
@@ -528,7 +615,40 @@ export default function FinancePage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Export CSV Button */}
+          <button
+            type="button"
+            onClick={handleExportCSV}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-200 transition-all cursor-pointer min-h-[44px]"
+            title="Export filtered transactions to CSV file"
+          >
+            <Download size={15} className="text-slate-600" />
+            CSV
+          </button>
+
+          {/* Export Excel Button */}
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs rounded-xl border border-emerald-200/80 transition-all cursor-pointer min-h-[44px]"
+            title="Export filtered ledger to Excel (.xlsx)"
+          >
+            <FileSpreadsheet size={15} className="text-emerald-600" />
+            Excel
+          </button>
+
+          {/* Print Report Button */}
+          <button
+            type="button"
+            onClick={handlePrintReport}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-navy-900 hover:bg-navy-950 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer min-h-[44px]"
+            title="Print clean financial report"
+          >
+            <Printer size={15} className="text-yellow-400" />
+            Print Report
+          </button>
+
           {/* Record Money In Button */}
           <button
             type="button"
@@ -542,7 +662,7 @@ export default function FinancePage() {
               setMoneyInFormError("");
               setIsMoneyInModalOpen(true);
             }}
-            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer active:scale-95"
+            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer min-h-[44px] active:scale-95"
           >
             <PlusCircle size={16} />
             + Record Money In
@@ -552,7 +672,7 @@ export default function FinancePage() {
           <button
             type="button"
             onClick={() => setIsExpenseModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer active:scale-95"
+            className="flex items-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer min-h-[44px] active:scale-95"
           >
             <PlusCircle size={16} />
             + Record Expense
@@ -561,7 +681,7 @@ export default function FinancePage() {
           <button
             type="button"
             onClick={() => setShowConceptGuide((prev) => !prev)}
-            className="flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer min-h-[44px]"
           >
             <HelpCircle size={14} className="text-slate-500" />
             {showConceptGuide ? "Hide Guide" : "Accounting Guide"}
@@ -586,92 +706,111 @@ export default function FinancePage() {
           </span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {/* Responsive Grid: 1 col on mobile, 2 col on sm tablet, 5 col on desktop */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           {/* Cash Balance */}
-          <div className="bg-slate-800/80 border border-emerald-500/30 rounded-xl p-3.5 space-y-1">
+          <div className="bg-slate-800/80 border border-emerald-500/30 rounded-xl p-3.5 space-y-1 overflow-hidden">
             <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block">Cash Balance</span>
-            <p className="text-lg font-black text-white">₹{cashBalance.toLocaleString()}</p>
-            <span className="text-[10px] text-slate-400 block">Physical Cash In Hand</span>
+            <p className="text-lg font-black font-mono text-white truncate" title={`₹${cashBalance.toLocaleString()}`}>
+              ₹{cashBalance.toLocaleString()}
+            </p>
+            <span className="text-[10px] text-slate-400 block truncate">Physical Cash In Hand</span>
           </div>
 
           {/* Bank Balance */}
-          <div className="bg-slate-800/80 border border-blue-500/30 rounded-xl p-3.5 space-y-1">
+          <div className="bg-slate-800/80 border border-blue-500/30 rounded-xl p-3.5 space-y-1 overflow-hidden">
             <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 block">Bank Balance</span>
-            <p className="text-lg font-black text-white">₹{bankBalance.toLocaleString()}</p>
-            <span className="text-[10px] text-slate-400 block">Bank Account Funds</span>
+            <p className="text-lg font-black font-mono text-white truncate" title={`₹${bankBalance.toLocaleString()}`}>
+              ₹{bankBalance.toLocaleString()}
+            </p>
+            <span className="text-[10px] text-slate-400 block truncate">Bank Account Funds</span>
           </div>
 
           {/* UPI Balance */}
-          <div className="bg-slate-800/80 border border-purple-500/30 rounded-xl p-3.5 space-y-1">
+          <div className="bg-slate-800/80 border border-purple-500/30 rounded-xl p-3.5 space-y-1 overflow-hidden">
             <span className="text-[10px] font-bold uppercase tracking-wider text-purple-400 block">UPI Balance</span>
-            <p className="text-lg font-black text-white">₹{upiBalance.toLocaleString()}</p>
-            <span className="text-[10px] text-slate-400 block">Digital Wallet / UPI</span>
+            <p className="text-lg font-black font-mono text-white truncate" title={`₹${upiBalance.toLocaleString()}`}>
+              ₹{upiBalance.toLocaleString()}
+            </p>
+            <span className="text-[10px] text-slate-400 block truncate">Digital Wallet / UPI</span>
           </div>
 
           {/* Receivables */}
-          <Link href="/customers" className="bg-slate-800/80 border border-amber-500/30 rounded-xl p-3.5 space-y-1 hover:border-amber-400 transition-colors block group">
+          <Link href="/customers" className="bg-slate-800/80 border border-amber-500/30 rounded-xl p-3.5 space-y-1 hover:border-amber-400 transition-colors block group overflow-hidden">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block">Receivables</span>
-              <ChevronRight size={12} className="text-slate-500 group-hover:text-amber-400 transition-colors" />
+              <ChevronRight size={12} className="text-slate-500 group-hover:text-amber-400 transition-colors shrink-0" />
             </div>
-            <p className="text-lg font-black text-white">₹{totalCustomerReceivables.toLocaleString()}</p>
-            <span className="text-[10px] text-slate-400 block">Customer Debt</span>
+            <p className="text-lg font-black font-mono text-white truncate" title={`₹${totalCustomerReceivables.toLocaleString()}`}>
+              ₹{totalCustomerReceivables.toLocaleString()}
+            </p>
+            <span className="text-[10px] text-slate-400 block truncate">Customer Debt</span>
           </Link>
 
           {/* Payables */}
-          <Link href="/suppliers" className="bg-slate-800/80 border border-rose-500/30 rounded-xl p-3.5 space-y-1 hover:border-rose-400 transition-colors block group">
+          <Link href="/suppliers" className="bg-slate-800/80 border border-rose-500/30 rounded-xl p-3.5 space-y-1 hover:border-rose-400 transition-colors block group overflow-hidden">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400 block">Payables</span>
-              <ChevronRight size={12} className="text-slate-500 group-hover:text-rose-400 transition-colors" />
+              <ChevronRight size={12} className="text-slate-500 group-hover:text-rose-400 transition-colors shrink-0" />
             </div>
-            <p className="text-lg font-black text-white">₹{totalSupplierPayables.toLocaleString()}</p>
-            <span className="text-[10px] text-slate-400 block">Supplier Dues</span>
+            <p className="text-lg font-black font-mono text-white truncate" title={`₹${totalSupplierPayables.toLocaleString()}`}>
+              ₹{totalSupplierPayables.toLocaleString()}
+            </p>
+            <span className="text-[10px] text-slate-400 block truncate">Supplier Dues</span>
           </Link>
 
           {/* Inventory Valuation */}
-          <Link href="/inventory" className="bg-slate-800/80 border border-amber-400/30 rounded-xl p-3.5 space-y-1 hover:border-amber-300 transition-colors block group">
+          <Link href="/inventory" className="bg-slate-800/80 border border-amber-400/30 rounded-xl p-3.5 space-y-1 hover:border-amber-300 transition-colors block group overflow-hidden">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase tracking-wider text-amber-300 block">Inventory Value</span>
-              <ChevronRight size={12} className="text-slate-500 group-hover:text-amber-300 transition-colors" />
+              <ChevronRight size={12} className="text-slate-500 group-hover:text-amber-300 transition-colors shrink-0" />
             </div>
-            <p className="text-lg font-black text-white">₹{totalInventoryValue.toLocaleString()}</p>
-            <span className="text-[10px] text-slate-400 block">Stock × Current Cost</span>
+            <p className="text-lg font-black font-mono text-white truncate" title={`₹${totalInventoryValue.toLocaleString()}`}>
+              ₹{totalInventoryValue.toLocaleString()}
+            </p>
+            <span className="text-[10px] text-slate-400 block truncate">Stock × Current Cost</span>
           </Link>
 
           {/* Revenue */}
-          <Link href="/analytics" className="bg-slate-800/80 border border-cyan-500/30 rounded-xl p-3.5 space-y-1 hover:border-cyan-400 transition-colors block group">
+          <Link href="/analytics" className="bg-slate-800/80 border border-cyan-500/30 rounded-xl p-3.5 space-y-1 hover:border-cyan-400 transition-colors block group overflow-hidden">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400 block">Revenue</span>
-              <ChevronRight size={12} className="text-slate-500 group-hover:text-cyan-400 transition-colors" />
+              <ChevronRight size={12} className="text-slate-500 group-hover:text-cyan-400 transition-colors shrink-0" />
             </div>
-            <p className="text-lg font-black text-white">₹{totalRevenue.toLocaleString()}</p>
-            <span className="text-[10px] text-slate-400 block">Completed Sales Value</span>
+            <p className="text-lg font-black font-mono text-white truncate" title={`₹${totalRevenue.toLocaleString()}`}>
+              ₹{totalRevenue.toLocaleString()}
+            </p>
+            <span className="text-[10px] text-slate-400 block truncate">Completed Sales Value</span>
           </Link>
 
           {/* Gross Profit */}
-          <Link href="/analytics" className="bg-slate-800/80 border border-indigo-500/30 rounded-xl p-3.5 space-y-1 hover:border-indigo-400 transition-colors block group">
+          <Link href="/analytics" className="bg-slate-800/80 border border-indigo-500/30 rounded-xl p-3.5 space-y-1 hover:border-indigo-400 transition-colors block group overflow-hidden">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400 block">Gross Profit</span>
-              <ChevronRight size={12} className="text-slate-500 group-hover:text-indigo-400 transition-colors" />
+              <ChevronRight size={12} className="text-slate-500 group-hover:text-indigo-400 transition-colors shrink-0" />
             </div>
-            <p className="text-lg font-black text-white">₹{totalGrossProfit.toLocaleString()}</p>
-            <span className="text-[10px] text-slate-400 block">Revenue − COGS</span>
+            <p className="text-lg font-black font-mono text-white truncate" title={`₹${totalGrossProfit.toLocaleString()}`}>
+              ₹{totalGrossProfit.toLocaleString()}
+            </p>
+            <span className="text-[10px] text-slate-400 block truncate">Revenue − COGS</span>
           </Link>
 
           {/* Total Operating Expenses */}
-          <div className="bg-slate-800/80 border border-pink-500/30 rounded-xl p-3.5 space-y-1">
+          <div className="bg-slate-800/80 border border-pink-500/30 rounded-xl p-3.5 space-y-1 overflow-hidden">
             <span className="text-[10px] font-bold uppercase tracking-wider text-pink-400 block">Op Expenses</span>
-            <p className="text-lg font-black text-rose-400">₹{totalOperatingExpenses.toLocaleString()}</p>
-            <span className="text-[10px] text-slate-400 block">Utilities, Rent, etc.</span>
+            <p className="text-lg font-black font-mono text-rose-400 truncate" title={`₹${totalOperatingExpenses.toLocaleString()}`}>
+              ₹{totalOperatingExpenses.toLocaleString()}
+            </p>
+            <span className="text-[10px] text-slate-400 block truncate">Utilities, Rent, etc.</span>
           </div>
 
           {/* Net Profit */}
-          <div className="bg-slate-800/80 border border-teal-500/40 rounded-xl p-3.5 space-y-1 bg-gradient-to-b from-slate-800 to-slate-900">
+          <div className="bg-slate-800/80 border border-teal-500/40 rounded-xl p-3.5 space-y-1 bg-gradient-to-b from-slate-800 to-slate-900 overflow-hidden">
             <span className="text-[10px] font-bold uppercase tracking-wider text-teal-300 block">Net Profit</span>
-            <p className={`text-lg font-black ${netProfit >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+            <p className={`text-lg font-black font-mono truncate ${netProfit >= 0 ? "text-emerald-400" : "text-rose-400"}`} title={`₹${netProfit.toLocaleString()}`}>
               ₹{netProfit.toLocaleString()}
             </p>
-            <span className="text-[10px] text-slate-400 block">Gross Profit − OpEx</span>
+            <span className="text-[10px] text-slate-400 block truncate">Gross Profit − OpEx</span>
           </div>
         </div>
       </div>
@@ -705,7 +844,7 @@ export default function FinancePage() {
           <button
             type="button"
             onClick={handleOpenOpeningModal}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${!isOpeningConfigured
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 min-h-[44px] ${!isOpeningConfigured
                 ? "bg-amber-600 hover:bg-amber-700 text-white shadow-md active:scale-95"
                 : "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
               }`}
@@ -716,30 +855,31 @@ export default function FinancePage() {
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80">
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 overflow-hidden">
             <span className="text-[10px] font-bold uppercase text-slate-500 block">Opening Cash</span>
-            <p className="text-base font-black text-slate-900 mt-0.5">₹{openingCash.toLocaleString()}</p>
+            <p className="text-base font-black font-mono text-slate-900 mt-0.5 truncate">₹{openingCash.toLocaleString()}</p>
             <span className="text-[10px] text-slate-400 font-mono block">(acc-cash)</span>
           </div>
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80">
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 overflow-hidden">
             <span className="text-[10px] font-bold uppercase text-slate-500 block">Opening Bank</span>
-            <p className="text-base font-black text-slate-900 mt-0.5">₹{openingBank.toLocaleString()}</p>
+            <p className="text-base font-black font-mono text-slate-900 mt-0.5 truncate">₹{openingBank.toLocaleString()}</p>
             <span className="text-[10px] text-slate-400 font-mono block">(acc-bank)</span>
           </div>
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80">
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 overflow-hidden">
             <span className="text-[10px] font-bold uppercase text-slate-500 block">Opening UPI</span>
-            <p className="text-base font-black text-slate-900 mt-0.5">₹{openingUPI.toLocaleString()}</p>
+            <p className="text-base font-black font-mono text-slate-900 mt-0.5 truncate">₹{openingUPI.toLocaleString()}</p>
             <span className="text-[10px] text-slate-400 font-mono block">(acc-upi)</span>
           </div>
-          <div className="bg-amber-500/10 p-3 rounded-xl border border-amber-500/20">
+          <div className="bg-amber-500/10 p-3 rounded-xl border border-amber-500/20 overflow-hidden">
             <span className="text-[10px] font-bold uppercase text-amber-800 block">Total Opening Funds</span>
-            <p className="text-base font-black text-amber-900 mt-0.5">₹{totalOpeningFunds.toLocaleString()}</p>
+            <p className="text-base font-black font-mono text-amber-900 mt-0.5 truncate">₹{totalOpeningFunds.toLocaleString()}</p>
             <span className="text-[10px] text-amber-700 block">Cash + Bank + UPI</span>
           </div>
         </div>
       </div>
+
       {showConceptGuide && (
-        <div className="bg-amber-50/90 border border-amber-200 rounded-2xl p-4 space-y-3 relative text-amber-900 text-xs">
+        <div className="bg-amber-50/90 border border-amber-200 rounded-2xl p-4 space-y-3 relative text-amber-900 text-xs print:hidden">
           <div className="flex items-center justify-between border-b border-amber-200/60 pb-2">
             <span className="font-extrabold flex items-center gap-1.5 text-amber-950 uppercase tracking-wider text-[11px]">
               <Info size={15} className="text-amber-600" />
@@ -792,13 +932,15 @@ export default function FinancePage() {
               </div>
             </div>
             <div>
-              <p className="text-2xl font-black text-white">₹{totalAvailable.toLocaleString()}</p>
+              <p className="text-2xl font-black font-mono text-white truncate" title={`₹${totalAvailable.toLocaleString()}`}>
+                ₹{totalAvailable.toLocaleString()}
+              </p>
               <p className="text-[11px] text-slate-400 mt-1">Cash + Bank + UPI Account Balances</p>
             </div>
           </div>
 
           {/* Cash Account */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3 hover:border-emerald-300 transition-colors">
+          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3 hover:border-emerald-300 transition-colors overflow-hidden">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Cash Account</span>
               <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
@@ -806,13 +948,15 @@ export default function FinancePage() {
               </div>
             </div>
             <div>
-              <p className="text-2xl font-black text-slate-900">₹{cashBalance.toLocaleString()}</p>
+              <p className="text-2xl font-black font-mono text-slate-900 truncate" title={`₹${cashBalance.toLocaleString()}`}>
+                ₹{cashBalance.toLocaleString()}
+              </p>
               <p className="text-[11px] text-slate-500 mt-1">Physical cash in register (acc-cash)</p>
             </div>
           </div>
 
           {/* Bank Account */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3 hover:border-blue-300 transition-colors">
+          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3 hover:border-blue-300 transition-colors overflow-hidden">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Bank Account</span>
               <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -820,13 +964,15 @@ export default function FinancePage() {
               </div>
             </div>
             <div>
-              <p className="text-2xl font-black text-slate-900">₹{bankBalance.toLocaleString()}</p>
+              <p className="text-2xl font-black font-mono text-slate-900 truncate" title={`₹${bankBalance.toLocaleString()}`}>
+                ₹{bankBalance.toLocaleString()}
+              </p>
               <p className="text-[11px] text-slate-500 mt-1">Card & bank transfers (acc-bank)</p>
             </div>
           </div>
 
           {/* UPI Account */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3 hover:border-violet-300 transition-colors">
+          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3 hover:border-violet-300 transition-colors overflow-hidden">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">UPI Account</span>
               <div className="w-8 h-8 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center">
@@ -834,7 +980,9 @@ export default function FinancePage() {
               </div>
             </div>
             <div>
-              <p className="text-2xl font-black text-slate-900">₹{upiBalance.toLocaleString()}</p>
+              <p className="text-2xl font-black font-mono text-slate-900 truncate" title={`₹${upiBalance.toLocaleString()}`}>
+                ₹{upiBalance.toLocaleString()}
+              </p>
               <p className="text-[11px] text-slate-500 mt-1">Digital UPI collections (acc-upi)</p>
             </div>
           </div>
@@ -851,21 +999,25 @@ export default function FinancePage() {
           <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Today's Activity</span>
-              <span className="text-[11px] text-slate-400">{todayISOString()}</span>
+              <span className="text-[11px] text-slate-400 font-mono">{todayISOString()}</span>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-emerald-50/60 p-3 rounded-xl border border-emerald-100">
+              <div className="bg-emerald-50/60 p-3 rounded-xl border border-emerald-100 overflow-hidden">
                 <span className="text-[10px] font-bold uppercase text-emerald-700 block">Money In</span>
-                <p className="text-lg font-black text-emerald-700 mt-0.5">₹{todayIncome.toLocaleString()}</p>
+                <p className="text-lg font-black font-mono text-emerald-700 mt-0.5 truncate" title={`₹${todayIncome.toLocaleString()}`}>
+                  ₹{todayIncome.toLocaleString()}
+                </p>
               </div>
-              <div className="bg-rose-50/60 p-3 rounded-xl border border-rose-100">
+              <div className="bg-rose-50/60 p-3 rounded-xl border border-rose-100 overflow-hidden">
                 <span className="text-[10px] font-bold uppercase text-rose-700 block">Money Out</span>
-                <p className="text-lg font-black text-rose-700 mt-0.5">₹{todayExpense.toLocaleString()}</p>
+                <p className="text-lg font-black font-mono text-rose-700 mt-0.5 truncate" title={`₹${todayExpense.toLocaleString()}`}>
+                  ₹{todayExpense.toLocaleString()}
+                </p>
               </div>
             </div>
             <div className="flex items-center justify-between pt-1">
               <span className="text-xs text-slate-500 font-medium">Today's Net Cash Flow</span>
-              <span className={`text-sm font-black ${todayNetCashFlow >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+              <span className={`text-sm font-black font-mono ${todayNetCashFlow >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
                 {todayNetCashFlow >= 0 ? "+" : ""}₹{todayNetCashFlow.toLocaleString()}
               </span>
             </div>
@@ -875,21 +1027,25 @@ export default function FinancePage() {
           <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">This Month's Activity</span>
-              <span className="text-[11px] text-slate-400">{currentMonthStr}</span>
+              <span className="text-[11px] text-slate-400 font-mono">{currentMonthStr}</span>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-emerald-50/60 p-3 rounded-xl border border-emerald-100">
+              <div className="bg-emerald-50/60 p-3 rounded-xl border border-emerald-100 overflow-hidden">
                 <span className="text-[10px] font-bold uppercase text-emerald-700 block">Money In</span>
-                <p className="text-lg font-black text-emerald-700 mt-0.5">₹{monthlyIncome.toLocaleString()}</p>
+                <p className="text-lg font-black font-mono text-emerald-700 mt-0.5 truncate" title={`₹${monthlyIncome.toLocaleString()}`}>
+                  ₹{monthlyIncome.toLocaleString()}
+                </p>
               </div>
-              <div className="bg-rose-50/60 p-3 rounded-xl border border-rose-100">
+              <div className="bg-rose-50/60 p-3 rounded-xl border border-rose-100 overflow-hidden">
                 <span className="text-[10px] font-bold uppercase text-rose-700 block">Money Out</span>
-                <p className="text-lg font-black text-rose-700 mt-0.5">₹{monthlyExpense.toLocaleString()}</p>
+                <p className="text-lg font-black font-mono text-rose-700 mt-0.5 truncate" title={`₹${monthlyExpense.toLocaleString()}`}>
+                  ₹{monthlyExpense.toLocaleString()}
+                </p>
               </div>
             </div>
             <div className="flex items-center justify-between pt-1">
               <span className="text-xs text-slate-500 font-medium">Monthly Net Cash Flow</span>
-              <span className={`text-sm font-black ${monthlyNetCashFlow >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+              <span className={`text-sm font-black font-mono ${monthlyNetCashFlow >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
                 {monthlyNetCashFlow >= 0 ? "+" : ""}₹{monthlyNetCashFlow.toLocaleString()}
               </span>
             </div>
@@ -910,7 +1066,7 @@ export default function FinancePage() {
                   type="date"
                   value={fromDate}
                   onChange={(e) => setFromDate(e.target.value)}
-                  className="w-full text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  className="w-full text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
                 />
               </div>
               <div>
@@ -919,13 +1075,13 @@ export default function FinancePage() {
                   type="date"
                   value={toDate}
                   onChange={(e) => setToDate(e.target.value)}
-                  className="w-full text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  className="w-full text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
                 />
               </div>
             </div>
-            <div className="bg-slate-900 text-white p-3 rounded-xl flex items-center justify-between">
+            <div className="bg-slate-900 text-white p-3.5 rounded-xl flex items-center justify-between">
               <span className="text-xs text-slate-300 font-medium">Net Cash Flow (Range)</span>
-              <span className={`text-base font-black ${rangeNetCashFlow >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+              <span className={`text-base font-black font-mono ${rangeNetCashFlow >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                 {rangeNetCashFlow >= 0 ? "+" : ""}₹{rangeNetCashFlow.toLocaleString()}
               </span>
             </div>
@@ -955,7 +1111,7 @@ export default function FinancePage() {
                 <div key={item.category} className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-semibold text-slate-800">{item.category}</span>
-                    <span className="font-bold text-emerald-700">₹{item.amount.toLocaleString()}</span>
+                    <span className="font-bold font-mono text-emerald-700">₹{item.amount.toLocaleString()}</span>
                   </div>
                   <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                     <div
@@ -969,46 +1125,84 @@ export default function FinancePage() {
           </div>
         </div>
 
-        {/* Expense by Category */}
+        {/* Expense Breakdown with Accounting Visual Separation */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <h3 className="text-xs font-extrabold uppercase tracking-wider text-rose-800 flex items-center gap-2">
               <TrendingDown size={16} className="text-rose-600" />
-              Expense Breakdown by Category (Operating + Inventory)
+              Expense Breakdown (OpEx vs Inventory Assets)
             </h3>
             <span className="text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full">
               Total Out
             </span>
           </div>
 
-          <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
-            {expenseByCategoryData.map((item) => {
-              const maxExpense = Math.max(...expenseByCategoryData.map((i) => i.amount), 1);
-              const pct = Math.round((item.amount / maxExpense) * 100);
-              const isOperating = OPERATING_EXPENSE_CATEGORIES.includes(item.category);
-              return (
-                <div key={item.category} className="space-y-1">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-slate-800 flex items-center gap-1.5">
-                      {item.category}
-                      {isOperating && (
-                        <span className="text-[9px] bg-purple-50 text-purple-700 px-1.5 py-0.2 rounded border border-purple-200">
-                          OpEx
+          <div className="space-y-4 max-h-80 overflow-y-auto pr-1">
+            {/* Section 1: Operating Overhead Expenses */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-[10px] font-extrabold uppercase tracking-wider text-purple-700 bg-purple-50 px-2.5 py-1 rounded-md border border-purple-100">
+                <span>Operating Overhead Expenses (OpEx)</span>
+                <span>Subtotal Outflow</span>
+              </div>
+              {expenseByCategoryData
+                .filter((item) => item.isOperating)
+                .map((item) => {
+                  const maxExpense = Math.max(...expenseByCategoryData.map((i) => i.amount), 1);
+                  const pct = Math.round((item.amount / maxExpense) * 100);
+                  return (
+                    <div key={item.category} className="space-y-1 pl-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                          {item.category}
+                          <span className="text-[9px] bg-purple-50 text-purple-700 px-1.5 py-0.2 rounded border border-purple-200">
+                            OpEx
+                          </span>
                         </span>
-                      )}
-                    </span>
-                    <span className="font-bold text-rose-700">₹{item.amount.toLocaleString()}</span>
-                  </div>
-                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all duration-300 ${isOperating ? "bg-purple-500" : "bg-rose-500"
-                        }`}
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+                        <span className="font-bold font-mono text-purple-700">₹{item.amount.toLocaleString()}</span>
+                      </div>
+                      <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-300 bg-purple-500"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            {/* Section 2: Inventory Purchase & Vendor Outflows */}
+            <div className="space-y-2 pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-between text-[10px] font-extrabold uppercase tracking-wider text-rose-700 bg-rose-50 px-2.5 py-1 rounded-md border border-rose-100">
+                <span>Inventory Purchases & Supplier Outflows</span>
+                <span>Asset / Vendor Transfer</span>
+              </div>
+              {expenseByCategoryData
+                .filter((item) => !item.isOperating)
+                .map((item) => {
+                  const maxExpense = Math.max(...expenseByCategoryData.map((i) => i.amount), 1);
+                  const pct = Math.round((item.amount / maxExpense) * 100);
+                  return (
+                    <div key={item.category} className="space-y-1 pl-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                          {item.category}
+                          <span className="text-[9px] bg-rose-50 text-rose-700 px-1.5 py-0.2 rounded border border-rose-200">
+                            Asset/Supply
+                          </span>
+                        </span>
+                        <span className="font-bold font-mono text-rose-700">₹{item.amount.toLocaleString()}</span>
+                      </div>
+                      <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-300 bg-rose-500"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
           </div>
         </div>
       </div>
@@ -1026,28 +1220,30 @@ export default function FinancePage() {
             </p>
           </div>
 
-          {/* Search bar */}
-          <div className="relative w-full md:w-72">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search category, notes, ref..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-navy-900"
-            />
+          <div className="flex items-center gap-2">
+            {/* Search bar */}
+            <div className="relative w-full md:w-64">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search category, notes, ref..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
+              />
+            </div>
           </div>
         </div>
 
         {/* Filter Controls Strip */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-xs print:hidden">
           {/* Type Filter */}
           <div>
             <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Type</label>
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value as any)}
-              className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-medium text-slate-800 focus:outline-none"
+              className="w-full bg-white border border-slate-200 rounded-lg px-2 py-2 font-medium text-slate-800 focus:outline-none min-h-[44px]"
             >
               <option value="All">All Types</option>
               <option value="Income">Income (+)</option>
@@ -1061,7 +1257,7 @@ export default function FinancePage() {
             <select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
-              className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-medium text-slate-800 focus:outline-none"
+              className="w-full bg-white border border-slate-200 rounded-lg px-2 py-2 font-medium text-slate-800 focus:outline-none min-h-[44px]"
             >
               {availableCategories.map((c) => (
                 <option key={c} value={c}>
@@ -1077,7 +1273,7 @@ export default function FinancePage() {
             <select
               value={methodFilter}
               onChange={(e) => setMethodFilter(e.target.value)}
-              className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-medium text-slate-800 focus:outline-none"
+              className="w-full bg-white border border-slate-200 rounded-lg px-2 py-2 font-medium text-slate-800 focus:outline-none min-h-[44px]"
             >
               <option value="All">All Methods</option>
               <option value="Cash">Cash</option>
@@ -1093,7 +1289,7 @@ export default function FinancePage() {
             <select
               value={accountFilter}
               onChange={(e) => setAccountFilter(e.target.value)}
-              className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-medium text-slate-800 focus:outline-none"
+              className="w-full bg-white border border-slate-200 rounded-lg px-2 py-2 font-medium text-slate-800 focus:outline-none min-h-[44px]"
             >
               <option value="All">All Accounts</option>
               <option value="acc-cash">Cash (acc-cash)</option>
@@ -1115,7 +1311,7 @@ export default function FinancePage() {
                 setFromDate(firstDayOfMonthISOString());
                 setToDate(todayISOString());
               }}
-              className="w-full py-1.5 px-3 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold rounded-lg transition-colors text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2 px-3 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold rounded-lg transition-colors text-xs flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px]"
             >
               <RefreshCw size={13} />
               Reset Filters
@@ -1132,15 +1328,15 @@ export default function FinancePage() {
           <div className="flex items-center gap-4">
             <div>
               <span className="text-slate-400 text-[10px] uppercase block">Income</span>
-              <span className="font-extrabold text-emerald-400">₹{filteredSummary.income.toLocaleString()}</span>
+              <span className="font-extrabold font-mono text-emerald-400">₹{filteredSummary.income.toLocaleString()}</span>
             </div>
             <div>
               <span className="text-slate-400 text-[10px] uppercase block">Expenses</span>
-              <span className="font-extrabold text-rose-400">₹{filteredSummary.expense.toLocaleString()}</span>
+              <span className="font-extrabold font-mono text-rose-400">₹{filteredSummary.expense.toLocaleString()}</span>
             </div>
             <div>
               <span className="text-slate-400 text-[10px] uppercase block">Net Cash</span>
-              <span className={`font-extrabold ${filteredSummary.net >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+              <span className={`font-extrabold font-mono ${filteredSummary.net >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                 {filteredSummary.net >= 0 ? "+" : ""}₹{filteredSummary.net.toLocaleString()}
               </span>
             </div>
@@ -1158,17 +1354,18 @@ export default function FinancePage() {
                 <th className="p-3">Method / Account</th>
                 <th className="p-3">Reference / Entity</th>
                 <th className="p-3">Notes</th>
+                <th className="p-3 text-center print:hidden">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredLedger.length === 0 ? (
+              {paginatedLedger.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-400 italic bg-slate-50/50">
+                  <td colSpan={7} className="p-8 text-center text-slate-400 italic bg-slate-50/50">
                     No finance transactions match the selected filter criteria.
                   </td>
                 </tr>
               ) : (
-                filteredLedger.map((tx) => {
+                paginatedLedger.map((tx) => {
                   const isIncome = tx.type === "Income";
                   const isOpEx = OPERATING_EXPENSE_CATEGORIES.includes(tx.category);
                   return (
@@ -1192,7 +1389,7 @@ export default function FinancePage() {
                           <span className="font-semibold text-slate-800">{tx.category}</span>
                         </div>
                       </td>
-                      <td className="p-3 text-right font-extrabold whitespace-nowrap">
+                      <td className="p-3 text-right font-mono font-extrabold whitespace-nowrap">
                         <span className={isIncome ? "text-emerald-600" : "text-rose-600"}>
                           {isIncome ? "+" : "-"}₹{tx.amount.toLocaleString()}
                         </span>
@@ -1211,6 +1408,19 @@ export default function FinancePage() {
                       <td className="p-3 text-slate-600 max-w-xs truncate" title={tx.notes}>
                         {tx.notes || "—"}
                       </td>
+                      <td className="p-3 text-center print:hidden">
+                        {isOwner && (
+                          <button
+                            type="button"
+                            onClick={() => setReversalModalTx(tx)}
+                            className="px-2.5 py-1.5 text-[11px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200/80 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1 min-h-[36px]"
+                            title="Reversal Audit Info"
+                          >
+                            <RotateCcw size={12} />
+                            Reverse
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   );
                 })
@@ -1218,11 +1428,125 @@ export default function FinancePage() {
             </tbody>
           </table>
         </div>
+
+        {/* ── CLIENT-SIDE PAGINATION CONTROLS ───────────────────────────────── */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-4 border-t border-slate-200 text-xs print:hidden">
+          <div className="flex items-center gap-2 text-slate-600 font-medium">
+            <span>Show</span>
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setCurrentPage(1);
+              }}
+              className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-bold text-slate-800 focus:outline-none min-h-[38px]"
+            >
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+            <span>entries per page</span>
+            <span className="text-slate-400 font-mono ml-2">
+              (Showing {filteredLedger.length === 0 ? 0 : (currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, filteredLedger.length)} of {filteredLedger.length})
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <button
+              type="button"
+              disabled={currentPage <= 1}
+              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+              className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[38px] flex items-center gap-1 cursor-pointer"
+            >
+              <ChevronLeft size={14} /> Previous
+            </button>
+
+            <span className="font-bold text-slate-700 px-2 font-mono">
+              Page {currentPage} of {totalPages}
+            </span>
+
+            <button
+              type="button"
+              disabled={currentPage >= totalPages}
+              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+              className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[38px] flex items-center gap-1 cursor-pointer"
+            >
+              Next <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
       </div>
+
+      {/* ── TRANSACTION REVERSAL CONFIRMATION MODAL PLACEHOLDER (UI ONLY) ────────── */}
+      {reversalModalTx && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 print:hidden">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden space-y-0">
+            <div className="bg-amber-600 text-white p-5 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-white flex items-center justify-center border border-amber-400/30">
+                  <RotateCcw size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black tracking-tight">Transaction Reversal Audit Notice</h3>
+                  <p className="text-[11px] text-amber-100">Phase 3 Audit Controls Preview</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReversalModalTx(null)}
+                className="text-amber-100 hover:text-white transition-colors cursor-pointer p-1"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs leading-relaxed">
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 space-y-1.5 text-amber-900">
+                <p className="font-bold flex items-center gap-1.5 text-amber-950">
+                  <Info size={16} className="text-amber-600 shrink-0" />
+                  Feature Notice
+                </p>
+                <p className="text-[11px]">
+                  This feature will be implemented in the next accounting phase. Manual transaction reversals are strictly audited to ensure financial integrity.
+                </p>
+              </div>
+
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2 font-mono text-[11px]">
+                <div className="flex justify-between border-b border-slate-200/60 pb-1">
+                  <span className="text-slate-500">Transaction ID:</span>
+                  <span className="font-bold text-slate-800">{reversalModalTx.id}</span>
+                </div>
+                <div className="flex justify-between border-b border-slate-200/60 pb-1">
+                  <span className="text-slate-500">Category:</span>
+                  <span className="font-bold text-slate-800">{reversalModalTx.category}</span>
+                </div>
+                <div className="flex justify-between border-b border-slate-200/60 pb-1">
+                  <span className="text-slate-500">Amount:</span>
+                  <span className="font-extrabold text-slate-900">₹{reversalModalTx.amount.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Date:</span>
+                  <span className="text-slate-700">{formatDisplayDate(reversalModalTx.date)}</span>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setReversalModalTx(null)}
+                  className="px-5 py-2.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer min-h-[44px]"
+                >
+                  Close & Return
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── RECORD OPERATING EXPENSE MODAL ─────────────────────────────────────── */}
       {isExpenseModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 print:hidden">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden space-y-0">
             {/* Modal Header */}
             <div className="bg-navy-950 text-white p-5 flex items-center justify-between">
@@ -1264,7 +1588,7 @@ export default function FinancePage() {
                 <select
                   value={expenseCategory}
                   onChange={(e) => setExpenseCategory(e.target.value as FinanceCategory)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
                   required
                 >
                   {OPERATING_EXPENSE_CATEGORIES.map((cat) => (
@@ -1289,7 +1613,7 @@ export default function FinancePage() {
                     placeholder="e.g. 5000"
                     value={expenseAmountInput}
                     onChange={(e) => setExpenseAmountInput(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                    className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
                     required
                   />
                 </div>
@@ -1306,7 +1630,7 @@ export default function FinancePage() {
                       key={method}
                       type="button"
                       onClick={() => setExpenseMethod(method)}
-                      className={`py-2 px-3 rounded-xl font-bold border text-center transition-all cursor-pointer ${expenseMethod === method
+                      className={`py-2.5 px-3 rounded-xl font-bold border text-center transition-all cursor-pointer min-h-[44px] ${expenseMethod === method
                           ? "bg-navy-950 text-yellow-400 border-navy-950 shadow-xs"
                           : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
                         }`}
@@ -1315,7 +1639,7 @@ export default function FinancePage() {
                     </button>
                   ))}
                 </div>
-                <p className="text-[10px] text-slate-400 mt-1">
+                <p className="text-[10px] text-slate-400 mt-1 font-mono">
                   Account: {expenseMethod === "Cash" ? "acc-cash" : expenseMethod === "UPI" ? "acc-upi" : "acc-bank"}
                 </p>
               </div>
@@ -1329,7 +1653,7 @@ export default function FinancePage() {
                   type="date"
                   value={expenseDate}
                   onChange={(e) => setExpenseDate(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
                   required
                 />
               </div>
@@ -1353,14 +1677,14 @@ export default function FinancePage() {
                 <button
                   type="button"
                   onClick={() => setIsExpenseModalOpen(false)}
-                  className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                  className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer min-h-[44px]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmittingExpense}
-                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50 min-h-[44px]"
                 >
                   {isSubmittingExpense ? (
                     <>
@@ -1379,9 +1703,10 @@ export default function FinancePage() {
           </div>
         </div>
       )}
+
       {/* ── RECORD MONEY IN MODAL ────────────────────────────────────────────────── */}
       {isMoneyInModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 print:hidden">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden space-y-0">
             <div className="bg-navy-950 text-white p-5 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -1420,7 +1745,7 @@ export default function FinancePage() {
                 <select
                   value={moneyInCategory}
                   onChange={(e) => setMoneyInCategory(e.target.value as any)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
                   required
                 >
                   <option value="Owner Capital">Owner Capital (Owner investment)</option>
@@ -1442,7 +1767,7 @@ export default function FinancePage() {
                     placeholder="e.g. 50000"
                     value={moneyInAmountInput}
                     onChange={(e) => setMoneyInAmountInput(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                    className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
                     required
                   />
                 </div>
@@ -1458,7 +1783,7 @@ export default function FinancePage() {
                       key={method}
                       type="button"
                       onClick={() => setMoneyInMethod(method)}
-                      className={`py-2 px-3 rounded-xl font-bold border text-center transition-all cursor-pointer ${moneyInMethod === method
+                      className={`py-2.5 px-3 rounded-xl font-bold border text-center transition-all cursor-pointer min-h-[44px] ${moneyInMethod === method
                           ? "bg-navy-950 text-yellow-400 border-navy-950 shadow-xs"
                           : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
                         }`}
@@ -1467,7 +1792,7 @@ export default function FinancePage() {
                     </button>
                   ))}
                 </div>
-                <p className="text-[10px] text-slate-400 mt-1">
+                <p className="text-[10px] text-slate-400 mt-1 font-mono">
                   Target Account: {moneyInMethod === "Cash" ? "acc-cash" : moneyInMethod === "UPI" ? "acc-upi" : "acc-bank"}
                 </p>
               </div>
@@ -1480,7 +1805,7 @@ export default function FinancePage() {
                   type="date"
                   value={moneyInDate}
                   onChange={(e) => setMoneyInDate(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
                   required
                 />
               </div>
@@ -1494,7 +1819,7 @@ export default function FinancePage() {
                   placeholder="e.g. TXN-99481 or Cheque #1234"
                   value={moneyInRefId}
                   onChange={(e) => setMoneyInRefId(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900 text-xs"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-navy-900 text-xs min-h-[44px]"
                 />
               </div>
 
@@ -1515,14 +1840,14 @@ export default function FinancePage() {
                 <button
                   type="button"
                   onClick={() => setIsMoneyInModalOpen(false)}
-                  className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                  className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer min-h-[44px]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmittingMoneyIn}
-                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50 min-h-[44px]"
                 >
                   {isSubmittingMoneyIn ? (
                     <>
@@ -1544,7 +1869,7 @@ export default function FinancePage() {
 
       {/* ── OPENING FINANCIAL POSITION SETUP / EDIT MODAL ───────────────────────── */}
       {isOpeningModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 print:hidden">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden space-y-0">
             <div className="bg-navy-950 text-white p-5 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -1593,7 +1918,7 @@ export default function FinancePage() {
                   placeholder="0.00"
                   value={openingCashInput}
                   onChange={(e) => setOpeningCashInput(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
                 />
               </div>
 
@@ -1608,7 +1933,7 @@ export default function FinancePage() {
                   placeholder="0.00"
                   value={openingBankInput}
                   onChange={(e) => setOpeningBankInput(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
                 />
               </div>
 
@@ -1623,14 +1948,14 @@ export default function FinancePage() {
                   placeholder="0.00"
                   value={openingUPIInput}
                   onChange={(e) => setOpeningUPIInput(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900"
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-navy-900 min-h-[44px]"
                 />
               </div>
 
               {/* Real-time Preview */}
               <div className="bg-slate-900 text-white p-3.5 rounded-xl flex items-center justify-between">
                 <span className="text-xs text-slate-300 font-bold uppercase">Total Opening Funds Preview</span>
-                <span className="text-base font-black text-yellow-400">
+                <span className="text-base font-black font-mono text-yellow-400">
                   ₹
                   {(
                     (parseFloat(openingCashInput) || 0) +
@@ -1644,14 +1969,14 @@ export default function FinancePage() {
                 <button
                   type="button"
                   onClick={() => setIsOpeningModalOpen(false)}
-                  className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                  className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer min-h-[44px]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmittingOpening}
-                  className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50 min-h-[44px]"
                 >
                   {isSubmittingOpening ? (
                     <>
@@ -1673,7 +1998,7 @@ export default function FinancePage() {
 
       {/* ── EDIT OPENING BALANCES WARNING CONFIRMATION MODAL ────────────────────── */}
       {showOpeningEditWarning && pendingOpeningValues && (
-        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-[60] animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-[60] animate-in fade-in duration-200 print:hidden">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden space-y-0">
             <div className="bg-amber-600 text-white p-5 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -1727,14 +2052,14 @@ export default function FinancePage() {
                     setShowOpeningEditWarning(false);
                     setPendingOpeningValues(null);
                   }}
-                  className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer text-center"
+                  className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer text-center min-h-[44px]"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={() => executeSaveOpening(pendingOpeningValues)}
-                  className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer text-center flex items-center justify-center gap-1.5"
+                  className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer text-center flex items-center justify-center gap-1.5 min-h-[44px]"
                 >
                   <Check size={16} />
                   Yes, Change Balances

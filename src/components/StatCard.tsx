@@ -40,22 +40,22 @@ export default function StatCard({
   return (
     <div
       className={cn(
-        "bg-white rounded-2xl border border-slate-200 p-5 hover:shadow-md transition-shadow",
+        "bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 hover:shadow-md transition-shadow h-full flex flex-col justify-between",
         ACCENT_BORDER[accent]
       )}
     >
-      <div className="flex items-start justify-between">
-        <div>
-          <h3 className="text-slate-500 text-sm">{title}</h3>
-          <p className={cn("text-2xl font-semibold text-navy-900 mt-1", valueClassName)}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-slate-500 text-xs sm:text-sm font-medium truncate" title={title}>{title}</h3>
+          <p className={cn("text-lg sm:text-xl md:text-2xl font-extrabold font-mono tabular-nums tracking-tight text-navy-900 mt-1 truncate", valueClassName)} title={value}>
             {value}
           </p>
           {subtitle && (
-            <p className="text-xs text-slate-400 mt-1">{subtitle}</p>
+            <p className="text-[11px] sm:text-xs text-slate-400 mt-1 font-medium line-clamp-2">{subtitle}</p>
           )}
         </div>
         {Icon && (
-          <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center shrink-0", ACCENT_ICON_BG[accent])}>
+          <div className={cn("w-8.5 h-8.5 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center shrink-0 shadow-xs mt-0.5", ACCENT_ICON_BG[accent])}>
             <Icon size={18} />
           </div>
         )}

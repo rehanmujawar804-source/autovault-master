@@ -314,6 +314,7 @@ export interface SupplierPayment {
   note?: string;
   paidBy: "Owner" | "Staff";
   isUpfront?: boolean;
+  createdAt?: string;
 }
 
 // ── Finance Account (Cash / Bank / UPI ledger) ───

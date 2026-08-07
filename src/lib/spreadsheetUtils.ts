@@ -1,6 +1,6 @@
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
-import type { Product, VehicleFitment, RecentImportReport } from "@/types";
+import type { Product, VehicleFitment, RecentImportReport, FinanceTransaction } from "@/types";
 import {
   serializeFitmentsForCSV,
   parseFitmentsFromCSV,
@@ -897,4 +897,119 @@ export async function generateImportChangeReportXLSX(
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. FINANCE LEDGER SPREADSHEET EXPORTS (XLSX & CSV)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateFinanceXLSXWorkbook(
+  transactions: FinanceTransaction[]
+): Promise<Blob> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "AutoVault ERP";
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet("Finance Ledger", {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
+
+  sheet.columns = [
+    { header: "Date & Time", key: "date", width: 24 },
+    { header: "Type", key: "type", width: 14 },
+    { header: "Category", key: "category", width: 24 },
+    { header: "Description / Notes", key: "notes", width: 35 },
+    { header: "Amount (₹)", key: "amount", width: 18 },
+    { header: "Payment Method", key: "method", width: 16 },
+    { header: "Account ID", key: "accountId", width: 16 },
+    { header: "Reference ID", key: "referenceId", width: 24 },
+    { header: "Created By", key: "createdBy", width: 14 },
+    { header: "Status", key: "status", width: 14 },
+  ];
+
+  const headerRow = sheet.getRow(1);
+  headerRow.height = 24;
+  headerRow.eachCell((cell) => {
+    cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF0F172A" },
+    };
+    cell.alignment = { vertical: "middle", horizontal: "left" };
+  });
+
+  transactions.forEach((tx) => {
+    const isIncome = tx.type === "Income";
+    const row = sheet.addRow({
+      date: tx.date ? new Date(tx.date).toLocaleString("en-IN") : "—",
+      type: tx.type,
+      category: tx.category,
+      notes: tx.notes || "—",
+      amount: isIncome ? tx.amount : -tx.amount,
+      method: tx.method,
+      accountId: tx.accountId,
+      referenceId: tx.referenceId || tx.id,
+      createdBy: "Owner",
+      status: "Completed",
+    });
+    row.height = 20;
+
+    const typeCell = row.getCell("type");
+    if (isIncome) {
+      typeCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF047857" } };
+    } else {
+      typeCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFDC2626" } };
+    }
+
+    const amountCell = row.getCell("amount");
+    amountCell.numFmt = "₹#,##0.00;[Red]-₹#,##0.00";
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
+export function generateFinanceCSVText(transactions: FinanceTransaction[]): string {
+  const headers = [
+    "Date & Time",
+    "Type",
+    "Category",
+    "Description",
+    "Amount (₹)",
+    "Payment Method",
+    "Account ID",
+    "Reference ID",
+    "Created By",
+    "Status",
+  ];
+
+  const escapeCSV = (str: string | number | undefined) => {
+    if (str === undefined || str === null) return '""';
+    const s = String(str).replace(/"/g, '""');
+    return `"${s}"`;
+  };
+
+  const rows = transactions.map((tx) => {
+    const isIncome = tx.type === "Income";
+    const formattedDate = tx.date ? new Date(tx.date).toLocaleString("en-IN") : "";
+    const amountVal = isIncome ? tx.amount : -tx.amount;
+    return [
+      escapeCSV(formattedDate),
+      escapeCSV(tx.type),
+      escapeCSV(tx.category),
+      escapeCSV(tx.notes || ""),
+      escapeCSV(amountVal),
+      escapeCSV(tx.method),
+      escapeCSV(tx.accountId),
+      escapeCSV(tx.referenceId || tx.id),
+      escapeCSV("Owner"),
+      escapeCSV("Completed"),
+    ].join(",");
+  });
+
+  return [headers.join(","), ...rows].join("\r\n");
+}
+
 

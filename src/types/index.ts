@@ -26,6 +26,7 @@ export interface Product {
   status?: "Active" | "Inactive" | "Discontinued";
   fitments?: VehicleFitment[];
   isUniversalFit?: boolean;
+  displayGroup?: string;
   // Optional extended fields
   preferredSupplierId?: string;
   supplier?: string;

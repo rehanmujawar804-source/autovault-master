@@ -32,8 +32,9 @@ import {
   ChevronRight,
   TrendingDown,
   Sparkles,
+  Plus,
 } from "lucide-react";
-import type { Invoice, InvoiceItem } from "@/types";
+import type { Invoice, InvoiceItem, Product } from "@/types";
 import { ProductFormModal, AdjustStockModal } from "../components/ProductModals";
 import { calculateRevenue } from "@/lib/revenueUtils";
 import { toLocalDateStr, formatStockMovementDate } from "@/lib/dateUtils";
@@ -53,6 +54,8 @@ function formatDisplayDate(dateStr?: string) {
     return dateStr;
   }
 }
+
+
 
 export default function ProductDetailsPage({
   params,
@@ -238,7 +241,19 @@ export default function ProductDetailsPage({
     return sortPurchasesDescending((state.purchases || []).filter((p) => p.productId === id));
   }, [state.purchases, id]);
 
-  // Safe early return ONLY AFTER all 18 hooks have executed unconditionally
+  // Local Notes session state
+  const [localNotes, setLocalNotes] = useState("");
+
+  // Variant options calculation (Hook MUST execute unconditionally before any early return)
+  const isVariant = Boolean(product?.displayGroup && product.displayGroup.trim() !== "");
+  const activeVariantOptions = useMemo(() => {
+    if (!product?.variantValues) return [];
+    return Object.entries(product.variantValues)
+      .filter(([key, val]) => Boolean(key && key.trim() && val && val.trim()))
+      .map(([key, val]) => `${key.trim()}: ${val.trim()}`);
+  }, [product?.variantValues]);
+
+  // Safe early return ONLY AFTER all hooks have executed unconditionally
   if (!product) {
     return (
       <div className="py-20 flex flex-col items-center gap-4">
@@ -265,10 +280,10 @@ export default function ProductDetailsPage({
   const currentStock = product.stock;
   const reservedStock = 0;
   const availableStock = currentStock - reservedStock;
-  const currentCost = product.currentCost;
-  const sellPrice = product.sellPrice;
+  const currentCost = Number(product.currentCost) || 0;
+  const sellPrice = Number(product.sellPrice) || 0;
   const unitProfit = sellPrice - currentCost;
-  const marginPct = sellPrice > 0 ? ((sellPrice - currentCost) / sellPrice) * 100 : 0;
+  const marginPct = sellPrice > 0 ? ((sellPrice - currentCost) / sellPrice) * 100 : null;
   const inventoryValue = currentStock * currentCost;
   const capitalInvested = currentStock * currentCost;
   const retailValue = currentStock * sellPrice;
@@ -324,13 +339,26 @@ export default function ProductDetailsPage({
       {/* ── Header Toolbar ── */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div className="space-y-1">
-          <Link
-            href="/inventory"
-            className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-navy-950 font-semibold transition-colors"
-          >
-            <ArrowLeft size={13} />
-            Back to Inventory
-          </Link>
+          <div className="flex items-center gap-3 flex-wrap">
+            <Link
+              href="/inventory"
+              className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-navy-950 font-semibold transition-colors"
+            >
+              <ArrowLeft size={13} />
+              Back to Inventory
+            </Link>
+            {isVariant && product.displayGroup && (
+              <Link
+                href={`/inventory/group/${encodeURIComponent(product.displayGroup.trim())}?variant=${product.id}`}
+                className="inline-flex items-center gap-1 text-xs text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-2.5 py-1 rounded-lg font-bold transition-colors"
+                title={`Navigate to Product Family: ${product.displayGroup.trim()}`}
+                aria-label={`Navigate to Product Family: ${product.displayGroup.trim()}`}
+              >
+                <Layers size={12} className="text-purple-600" />
+                ← Back to {product.displayGroup.trim()}
+              </Link>
+            )}
+          </div>
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-2xl font-black text-navy-950 tracking-tight">
               {product.name}
@@ -372,6 +400,21 @@ export default function ProductDetailsPage({
               </span>
             )}
           </div>
+
+          {/* Variant Identity Section */}
+          {isVariant && (
+            <div className="flex items-center gap-2 flex-wrap text-xs pt-0.5">
+              <span className="inline-flex items-center gap-1.5 font-semibold px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 text-xs">
+                <Layers size={12} className="text-purple-600" />
+                Variant · {product.displayGroup?.trim()}
+              </span>
+              {activeVariantOptions.length > 0 && (
+                <span className="text-xs font-medium text-slate-600 bg-slate-50 border border-slate-200 px-2.5 py-0.5 rounded-full">
+                  {activeVariantOptions.join(" · ")}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Quick action buttons */}
@@ -502,9 +545,15 @@ export default function ProductDetailsPage({
           <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Margin</span>
             <div className="flex items-baseline gap-0.5">
-              <span className={`text-xl font-bold tabular-nums ${marginPct > 0 ? "text-green-700" : marginPct === 0 ? "text-slate-600" : "text-red-600"}`}>
-                {Math.round(marginPct)}%
-              </span>
+              {marginPct !== null ? (
+                <span className={`text-xl font-bold tabular-nums ${marginPct > 0 ? "text-green-700" : marginPct === 0 ? "text-slate-600" : "text-red-600"}`}>
+                  {Math.round(marginPct)}%
+                </span>
+              ) : (
+                <span className="text-xl font-bold text-slate-500 tabular-nums">
+                  N/A
+                </span>
+              )}
             </div>
           </div>
         ) : (
@@ -535,6 +584,8 @@ export default function ProductDetailsPage({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Side (Col Span 9) */}
         <div className="lg:col-span-9 space-y-6">
+
+
           {/* Tabs bar */}
           <div className="border-b border-slate-200 flex gap-1 overflow-x-auto text-sm scrollbar-hide py-0.5">
             {[
@@ -579,7 +630,7 @@ export default function ProductDetailsPage({
                       </p>
                     </div>
                     <div>
-                      <span className="text-slate-400 text-xs">Average Sale Price</span>
+                      <span className="text-slate-400 text-xs font-medium">Avg. Realized Revenue / Unit</span>
                       <p className="text-xl font-extrabold text-slate-800 mt-1">
                         ₹{salesStats.avgSellingPrice.toLocaleString()}
                       </p>
@@ -641,7 +692,7 @@ export default function ProductDetailsPage({
                           </p>
                         </div>
                         <span className="text-[10px] text-slate-400 mt-3 block">
-                          {profitabilityStatus === "Profitable"
+                          {profitabilityStatus === "Profitable" && marginPct !== null
                             ? `Margin is ${Math.round(marginPct)}%`
                             : profitabilityStatus === "Break Even"
                             ? "Selling at cost price (₹0 profit)"
@@ -1090,7 +1141,9 @@ export default function ProductDetailsPage({
                 <MapPin size={13} className="text-slate-400" />
                 <span className="text-[10px] font-black uppercase tracking-wider">Warehouse Location</span>
               </div>
-              <p className="text-xs font-bold text-slate-650 pl-5">Not Assigned</p>
+              <p className="text-xs font-bold text-slate-650 pl-5">
+                Not Assigned <span className="text-[10px] font-normal text-slate-400 italic">(Tracking unavailable)</span>
+              </p>
             </div>
 
             {/* Notes Disclaimer (Local Only) */}
@@ -1099,6 +1152,8 @@ export default function ProductDetailsPage({
                 Local Notes
               </span>
               <textarea
+                value={localNotes}
+                onChange={(e) => setLocalNotes(e.target.value)}
                 placeholder="Write local memos or stock flags for reference..."
                 className="w-full min-h-[90px] border border-slate-200 rounded-lg p-3 text-xs bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-navy-600/30 focus:border-navy-600 transition-all placeholder:text-slate-400 resize-y"
               />
@@ -1108,7 +1163,7 @@ export default function ProductDetailsPage({
                   <path d="M6 4v3M6 8.5v.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
                 <p className="text-[10px] text-amber-700 font-medium leading-snug">
-                  Not saved. Notes are session-only and lost on navigation.
+                  Not saved to database. Notes persist during active session.
                 </p>
               </div>
             </div>

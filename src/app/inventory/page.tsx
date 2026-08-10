@@ -5,6 +5,8 @@ import { useStore } from "@/lib/store";
 import { useRole } from "@/hooks/useRole";
 import type { Product, VehicleFitment } from "@/types";
 import { ProductFormModal, AdjustStockModal } from "./components/ProductModals";
+import { EditBaseProductModal } from "./components/EditBaseProductModal";
+import { AddProductWithVariantModal } from "./components/AddProductWithVariantModal";
 import { BulkFitmentModal } from "./components/BulkFitmentModals";
 import { CSVImportPreviewModal, type CSVImportRowResult } from "./components/CSVImportPreviewModal";
 import { SpreadsheetImportUploadModal } from "./components/SpreadsheetImportUploadModal";
@@ -129,8 +131,14 @@ export default function InventoryPage() {
   // ── Expandable Product Row State ──────────────────────────────────────────
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
 
-  // ── Display Group Expansion State (Phase 2 Step 1) ──────────────────────
+  // ── Display Group Expansion & Editing State (Phase 2 Step 2 & 3) ────────────
   const [expandedGroupNames, setExpandedGroupNames] = useState<Set<string>>(new Set());
+  const [editingBaseGroup, setEditingBaseGroup] = useState<string | null>(null);
+  const [targetGroupForNewVariant, setTargetGroupForNewVariant] = useState<string | null>(null);
+  const [showAddWithVariantModal, setShowAddWithVariantModal] = useState(false);
+  const [showAddMenu, setShowAddMenu] = useState(false);
+  const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
+  const [showBulkRemoveModal, setShowBulkRemoveModal] = useState(false);
 
   function toggleGroupExpand(groupName: string) {
     setExpandedGroupNames((prev) => {
@@ -145,7 +153,7 @@ export default function InventoryPage() {
   }
 
   function handleEditBaseGroup(groupName: string) {
-    showToast(`Base Display Group editing for "${groupName}" will be available in Phase 2 Step 2`, "info");
+    setEditingBaseGroup(groupName);
   }
 
   // ── Hydration safe mount state ──────────────────────────────────────────
@@ -154,7 +162,7 @@ export default function InventoryPage() {
     setIsMounted(true);
   }, []);
 
-  // ── Keyboard shortcuts: Ctrl+F focuses search, Esc resets all filters ────
+  // ── Keyboard shortcuts: Ctrl+F focuses search, Esc resets all filters if no modal open ────
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key === "f") {
@@ -162,18 +170,38 @@ export default function InventoryPage() {
         searchRef.current?.focus();
       }
       if (e.key === "Escape") {
-        setSearch("");
-        setCategoryFilter("All");
-        setBrandFilter("All");
-        setStatusFilter("All");
-        setStockFilter("All");
-        setSortBy("name-asc");
+        const isAnyModalOpen =
+          showModal ||
+          Boolean(stockModal) ||
+          showAddWithVariantModal ||
+          Boolean(editingBaseGroup) ||
+          showBulkAssignModal ||
+          showBulkRemoveModal ||
+          isImportUploadOpen ||
+          csvPreviewOpen;
+
+        if (!isAnyModalOpen) {
+          setSearch("");
+          setCategoryFilter("All");
+          setBrandFilter("All");
+          setStatusFilter("All");
+          setStockFilter("All");
+          setSortBy("name-asc");
+        }
       }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [
+    showModal,
+    stockModal,
+    showAddWithVariantModal,
+    editingBaseGroup,
+    showBulkAssignModal,
+    showBulkRemoveModal,
+    isImportUploadOpen,
+    csvPreviewOpen,
+  ]);
 
   // ── Click-to-copy SKU state ───────────────────────────────────────────────
   const [copiedSkuId, setCopiedSkuId] = useState<string | null>(null);
@@ -376,7 +404,11 @@ export default function InventoryPage() {
           p.name.toLowerCase().includes(q) ||
           p.sku.toLowerCase().includes(q) ||
           p.brand.toLowerCase().includes(q) ||
-          (p.displayGroup && p.displayGroup.toLowerCase().includes(q))
+          (p.displayGroup && p.displayGroup.toLowerCase().includes(q)) ||
+          (p.variantValues &&
+            Object.values(p.variantValues).some(
+              (v) => typeof v === "string" && v.toLowerCase().includes(q)
+            ))
       );
     }
     // Stable sort
@@ -476,9 +508,12 @@ export default function InventoryPage() {
   function renderProductRow(product: Product, isVariant: boolean, rowIndex: number) {
     const outOfStock = product.stock === 0;
     const lowStock = !outOfStock && product.stock <= product.lowStockThreshold;
-    const margin = isOwner && product.sellPrice > 0
-      ? Math.round(((product.sellPrice - product.currentCost) / product.sellPrice) * 100)
-      : 0;
+    const sellNum = Number(product.sellPrice);
+    const costNum = Number(product.currentCost);
+    const hasValidSellPrice = !isNaN(sellNum) && sellNum > 0;
+    const margin = isOwner && hasValidSellPrice && !isNaN(costNum)
+      ? Math.round(((sellNum - costNum) / sellNum) * 100)
+      : null;
     const isExpanded = expandedProductId === product.id;
     const isCopied = copiedSkuId === product.id;
 
@@ -556,7 +591,14 @@ export default function InventoryPage() {
                 <p className="font-medium text-slate-800 group-hover:text-navy-700 transition-colors text-[13px] leading-tight">
                   {product.name}
                 </p>
-                <p className="font-mono text-[10px] text-slate-400 mt-0.5 tracking-wide">{product.sku}</p>
+                <div className="font-mono text-[10px] text-slate-400 mt-0.5 tracking-wide flex items-center gap-1.5 flex-wrap">
+                  <span>{product.sku}</span>
+                  {product.displayGroup && product.displayGroup.trim() !== "" && (
+                    <span className="text-[10px] text-purple-700 font-bold bg-purple-50 border border-purple-200 px-1.5 py-0.2 rounded inline-block">
+                      Part of: {product.displayGroup.trim()}
+                    </span>
+                  )}
+                </div>
               </button>
             )}
           </td>
@@ -632,17 +674,23 @@ export default function InventoryPage() {
           {/* Margin – owner only */}
           {isOwner && (
             <td className="px-4 py-3.5 text-right hidden md:table-cell">
-              <span className={`inline-block text-[11px] font-bold tabular-nums px-2 py-0.5 rounded border ${
-                margin > 0
-                  ? margin >= 30
-                    ? 'bg-green-50 text-green-700 border-green-200'
-                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : margin === 0
-                  ? 'bg-slate-100 text-slate-700 border-slate-200'
-                  : 'bg-red-50 text-red-700 border-red-200'
-              }`}>
-                {margin}%
-              </span>
+              {margin !== null ? (
+                <span className={`inline-block text-[11px] font-bold tabular-nums px-2 py-0.5 rounded border ${
+                  margin > 0
+                    ? margin >= 30
+                      ? 'bg-green-50 text-green-700 border-green-200'
+                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : margin === 0
+                    ? 'bg-slate-100 text-slate-700 border-slate-200'
+                    : 'bg-red-50 text-red-700 border-red-200'
+                }`}>
+                  {margin}%
+                </span>
+              ) : (
+                <span className="inline-block text-[11px] font-medium text-slate-400 px-2 py-0.5 rounded border border-slate-200 bg-slate-50">
+                  N/A
+                </span>
+              )}
             </td>
           )}
 
@@ -691,7 +739,7 @@ export default function InventoryPage() {
         {/* ── Expanded details pane ── */}
         {isExpanded && (
           <tr className={`border-l-4 ${accentColor} bg-slate-50/40`}>
-            <td colSpan={isOwner ? 11 : 9} className="px-6 py-5 border-t border-b border-slate-200/60">
+            <td colSpan={isOwner ? (isSelectionMode ? 12 : 11) : 9} className="px-6 py-5 border-t border-b border-slate-200/60">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
 
                 {/* Col 1: Vehicle Compatibility */}
@@ -791,8 +839,6 @@ export default function InventoryPage() {
   // ── Multi-select state & logic (Phase 2C Owner-Only) ──────────────────────
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
-  const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
-  const [showBulkRemoveModal, setShowBulkRemoveModal] = useState(false);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
 
   function toggleSelectionMode() {
@@ -1075,14 +1121,56 @@ export default function InventoryPage() {
               Import Spreadsheet
             </button>
 
-            {/* Add Product Button */}
-            <button
-              onClick={() => { setEditingProduct(null); setShowModal(true); }}
-              className="flex items-center gap-1.5 h-9 px-4 rounded-lg text-xs font-bold text-navy-950 bg-yellow-400 hover:bg-yellow-300 border border-yellow-300 transition-colors cursor-pointer shadow-sm"
-            >
-              <Plus size={14} />
-              Add Product
-            </button>
+            {/* Add Product Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setShowAddMenu(!showAddMenu)}
+                className="flex items-center gap-1.5 h-9 px-4 rounded-lg text-xs font-bold text-navy-950 bg-yellow-400 hover:bg-yellow-300 border border-yellow-300 transition-colors cursor-pointer shadow-sm"
+              >
+                <Plus size={14} />
+                Add Product
+                <ChevronDown size={13} className={`transition-transform ${showAddMenu ? "rotate-180" : ""}`} />
+              </button>
+
+              {showAddMenu && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowAddMenu(false)}
+                  />
+                  <div className="absolute right-0 top-full mt-1.5 w-56 bg-white border border-slate-200 rounded-xl shadow-xl z-50 py-1.5 overflow-hidden animate-fadeIn">
+                    <button
+                      onClick={() => {
+                        setEditingProduct(null);
+                        setShowModal(true);
+                        setShowAddMenu(false);
+                      }}
+                      className="w-full text-left px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-navy-900 flex items-center gap-2 transition-colors cursor-pointer"
+                    >
+                      <Package size={14} className="text-slate-400" />
+                      <div>
+                        <div className="font-bold">Add Standard Product</div>
+                        <div className="text-[10px] text-slate-400 font-normal">Single SKU item without options</div>
+                      </div>
+                    </button>
+                    <div className="border-t border-slate-100 my-1" />
+                    <button
+                      onClick={() => {
+                        setShowAddWithVariantModal(true);
+                        setShowAddMenu(false);
+                      }}
+                      className="w-full text-left px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-navy-900 flex items-center gap-2 transition-colors cursor-pointer"
+                    >
+                      <Layers size={14} className="text-amber-500" />
+                      <div>
+                        <div className="font-bold">Add Product with Variant</div>
+                        <div className="text-[10px] text-slate-400 font-normal">Create base group &amp; option family</div>
+                      </div>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -1681,6 +1769,14 @@ export default function InventoryPage() {
                         {/* Actions */}
                         <td className="px-4 py-3.5">
                           <div className="flex items-center justify-center gap-1">
+                            <Link
+                              href={`/inventory/group/${encodeURIComponent(item.groupName)}`}
+                              title="Open Display Group"
+                              className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:text-navy-950 hover:bg-white border border-transparent hover:border-slate-200 transition-all cursor-pointer"
+                            >
+                              <Eye size={15} />
+                            </Link>
+
                             <button
                               onClick={() => toggleGroupExpand(item.groupName)}
                               aria-expanded={isGroupExpanded}
@@ -1698,6 +1794,20 @@ export default function InventoryPage() {
                                 className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:text-navy-700 hover:bg-white border border-transparent hover:border-slate-200 transition-all cursor-pointer"
                               >
                                 <Pencil size={14} />
+                              </button>
+                            )}
+
+                            {isOwner && isGroupExpanded && (
+                              <button
+                                onClick={() => {
+                                  setTargetGroupForNewVariant(item.groupName);
+                                  setShowAddWithVariantModal(true);
+                                }}
+                                title={`Add new variant to ${item.groupName}`}
+                                className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg bg-navy-950 hover:bg-navy-900 text-white cursor-pointer transition-colors shadow-xs ml-1"
+                              >
+                                <Plus size={13} />
+                                <span>+ Add Variant</span>
                               </button>
                             )}
                           </div>
@@ -1765,6 +1875,19 @@ export default function InventoryPage() {
         isOpen={!!stockModal}
         onClose={() => setStockModal(null)}
         product={stockModal}
+      />
+      <EditBaseProductModal
+        isOpen={!!editingBaseGroup}
+        groupName={editingBaseGroup}
+        onClose={() => setEditingBaseGroup(null)}
+      />
+      <AddProductWithVariantModal
+        isOpen={showAddWithVariantModal}
+        initialGroup={targetGroupForNewVariant}
+        onClose={() => {
+          setShowAddWithVariantModal(false);
+          setTargetGroupForNewVariant(null);
+        }}
       />
 
       {/* ── Sticky Owner Bulk Action Toolbar (Phase 2C) ───────────────────── */}

@@ -364,7 +364,7 @@ export function InventoryIntelligenceDashboard({
       {!isExpanded && (
         <div className="p-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 bg-slate-900/40">
           <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-3">
-            <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Total Products</p>
+            <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Total SKUs (incl. variants)</p>
             <p className="text-lg font-black text-white mt-1">{metrics.totalProducts}</p>
             <div className="flex gap-1.5 mt-1 text-[10px]">
               <span className="text-emerald-400 font-semibold">{metrics.activeCount} Act</span>

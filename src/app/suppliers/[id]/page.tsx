@@ -336,7 +336,7 @@ const SupplierInvoiceRowItem = memo(({
               </p>
               {marginAbs !== null && marginPct !== null && (
                 <p className={`text-[9px] font-extrabold leading-tight ${marginAbs >= 0 ? "text-emerald-600" : "text-rose-500"}`}>
-                  Margin: {marginAbs >= 0 ? "▲" : "▼"} ₹{Math.abs(marginAbs).toLocaleString()} ({marginPct.toFixed(1)}%)
+                  Markup: {marginAbs >= 0 ? "▲" : "▼"} ₹{Math.abs(marginAbs).toLocaleString()} ({marginPct.toFixed(1)}%)
                 </p>
               )}
             </div>

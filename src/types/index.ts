@@ -11,6 +11,13 @@ export interface VehicleFitment {
   yearTo?: string;
 }
 
+// ── Variant Option Definition ─────────────────
+
+export interface VariantOptionDefinition {
+  name: string;      // e.g. "Size", "Color"
+  values: string[];  // e.g. ["195/65 R15", "205/55 R16"]
+}
+
 // ── Product ──────────────────────────────────
 
 export interface Product {
@@ -27,6 +34,8 @@ export interface Product {
   fitments?: VehicleFitment[];
   isUniversalFit?: boolean;
   displayGroup?: string;
+  variantOptions?: VariantOptionDefinition[];
+  variantValues?: Record<string, string>; // Map of option name -> value for this specific variant SKU
   // Optional extended fields
   preferredSupplierId?: string;
   supplier?: string;

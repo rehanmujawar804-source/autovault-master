@@ -43,7 +43,7 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function getMatchingSuggestions(
+export function getMatchingSuggestions(
   query: string,
   candidates: string[],
   currentSelfName?: string
@@ -53,6 +53,7 @@ function getMatchingSuggestions(
 
   const selfLower = currentSelfName ? currentSelfName.trim().toLowerCase() : null;
 
+  const exactMatches: string[] = [];
   const startsWithMatches: string[] = [];
   const includesMatches: string[] = [];
 
@@ -64,19 +65,21 @@ function getMatchingSuggestions(
       continue;
     }
 
-    if (itemLower.startsWith(trimmed)) {
+    if (itemLower === trimmed) {
+      exactMatches.push(item);
+    } else if (itemLower.startsWith(trimmed)) {
       startsWithMatches.push(item);
     } else if (itemLower.includes(trimmed)) {
       includesMatches.push(item);
     }
   }
 
-  const combined = [...startsWithMatches, ...includesMatches];
+  const combined = [...exactMatches, ...startsWithMatches, ...includesMatches];
   return combined.slice(0, 8);
 }
 
-interface SuggestionInputProps {
-  label: React.ReactNode;
+export interface SuggestionInputProps {
+  label?: React.ReactNode;
   value: string;
   onChange: (val: string) => void;
   suggestions: string[];
@@ -84,9 +87,10 @@ interface SuggestionInputProps {
   className?: string;
   readOnly?: boolean;
   id?: string;
+  maxLength?: number;
 }
 
-function SuggestionInput({
+export function SuggestionInput({
   label,
   value,
   onChange,
@@ -95,6 +99,7 @@ function SuggestionInput({
   className,
   readOnly = false,
   id,
+  maxLength,
 }: SuggestionInputProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -133,6 +138,7 @@ function SuggestionInput({
             setIsOpen(false);
           }
         }}
+        maxLength={maxLength}
         placeholder={placeholder}
         className={className}
         readOnly={readOnly}
@@ -184,6 +190,19 @@ export function ProductFormModal({
   const [newFitModel, setNewFitModel] = useState("");
   const [newFitYear, setNewFitYear] = useState("");
   const [newFitYearTo, setNewFitYearTo] = useState("");
+
+  // Variant configuration state for display group variants
+  const isVariant = Boolean(editingProduct && editingProduct.displayGroup);
+
+  const activeGroupOptions = useMemo(() => {
+    if (!isVariant || !editingProduct?.displayGroup) return [];
+    const groupMembers = state.products.filter(
+      (p) => p.displayGroup?.trim().toLowerCase() === editingProduct.displayGroup!.trim().toLowerCase()
+    );
+    return groupMembers.find((m) => m.variantOptions && m.variantOptions.length > 0)?.variantOptions || [];
+  }, [isVariant, editingProduct?.displayGroup, state.products]);
+
+  const [variantValues, setVariantValues] = useState<Record<string, string>>({});
 
   // Derived canonical brands map: lowercase -> canonical stored string
   const canonicalBrands = useMemo(() => {
@@ -242,6 +261,55 @@ export function ProductFormModal({
     );
   }, [form.name, existingProductNames, editingProduct]);
 
+  // Deduplicated list of product SKUs
+  const existingSkus = useMemo(() => {
+    const skuMap = new Map<string, string>();
+    if (!state?.products) return [];
+    for (const p of state.products) {
+      if (!p.sku) continue;
+      const trimmed = p.sku.trim();
+      if (!trimmed) continue;
+      const lower = trimmed.toLowerCase();
+      if (!skuMap.has(lower)) {
+        skuMap.set(lower, trimmed);
+      }
+    }
+    return Array.from(skuMap.values());
+  }, [state?.products]);
+
+  // Dynamic suggestions for SKU
+  const skuSuggestions = useMemo(() => {
+    return getMatchingSuggestions(
+      form.sku,
+      existingSkus,
+      editingProduct?.sku
+    );
+  }, [form.sku, existingSkus, editingProduct]);
+
+  // Non-blocking duplicate product name warning
+  const nameWarning = useMemo(() => {
+    const trimmed = form.name.trim();
+    if (!trimmed) return "";
+    const exists = state.products.some(
+      (p) =>
+        p.name.trim().toLowerCase() === trimmed.toLowerCase() &&
+        (!editingProduct || p.id !== editingProduct.id)
+    );
+    return exists ? `⚠️ Product name already exists: ${trimmed}` : "";
+  }, [form.name, state.products, editingProduct]);
+
+  // Non-blocking existing SKU warning
+  const skuWarning = useMemo(() => {
+    const trimmed = form.sku.trim();
+    if (!trimmed) return "";
+    const exists = state.products.some(
+      (p) =>
+        p.sku.trim().toLowerCase() === trimmed.toLowerCase() &&
+        (!editingProduct || p.id !== editingProduct.id)
+    );
+    return exists ? `⚠️ Existing SKU: ${trimmed}` : "";
+  }, [form.sku, state.products, editingProduct]);
+
   // Dynamic suggestions for Brand
   const brandSuggestions = useMemo(() => {
     const brandList = Array.from(canonicalBrands.values());
@@ -269,8 +337,10 @@ export function ProductFormModal({
         fitments: editingProduct.fitments || [],
         isUniversalFit: editingProduct.isUniversalFit ?? false,
       });
+      setVariantValues(editingProduct.variantValues ? { ...editingProduct.variantValues } : {});
     } else {
       setForm(EMPTY_FORM);
+      setVariantValues({});
     }
     setFormError("");
     setFormWarning("");
@@ -361,6 +431,41 @@ export function ProductFormModal({
         return;
       }
 
+      if (isVariant) {
+        for (const opt of activeGroupOptions) {
+          const val = variantValues[opt.name];
+          if (!val || !val.trim()) {
+            setFormError(`Variant must have a value for "${opt.name}".`);
+            return;
+          }
+        }
+
+        // Duplicate variant combination check across sibling variants in same display group
+        if (editingProduct?.displayGroup && activeGroupOptions.length > 0) {
+          const currentGroupLower = editingProduct.displayGroup.trim().toLowerCase();
+          const targetComboKey = activeGroupOptions
+            .map((opt) => (variantValues[opt.name] || "").trim().toLowerCase())
+            .join(" || ");
+
+          const conflictingSibling = state.products.find((p) => {
+            if (p.id === editingProduct.id) return false;
+            if (!p.displayGroup || p.displayGroup.trim().toLowerCase() !== currentGroupLower) return false;
+            const siblingVals = p.variantValues || {};
+            const siblingComboKey = activeGroupOptions
+              .map((opt) => (siblingVals[opt.name] || "").trim().toLowerCase())
+              .join(" || ");
+            return siblingComboKey === targetComboKey;
+          });
+
+          if (conflictingSibling) {
+            setFormError(
+              `❌ Duplicate variant combination detected: Variant "${conflictingSibling.name}" already uses this option combination.`
+            );
+            return;
+          }
+        }
+      }
+
       if (form.currentCost === "" || form.currentCost === null || form.currentCost === undefined || isNaN(Number(form.currentCost))) {
         setFormError("Current cost is required.");
         return;
@@ -401,16 +506,11 @@ export function ProductFormModal({
         );
       }
 
-      // Current Cost currently supports manual administrative correction.
-      // Future versions may derive this automatically from:
-      // - Purchase Receipts
-      // - Weighted Average Cost
-      // - FIFO/LIFO inventory costing
       const updatedProductObj: Product = {
         ...editingProduct,
         ...form,
         name: trimmedName,
-        sku: editingProduct.sku,
+        sku: trimmedSku,
         brand: finalBrand,
         category: finalCategory,
         status: form.status,
@@ -418,6 +518,9 @@ export function ProductFormModal({
         sellPrice: editSellPrice,
         stock: editingProduct.stock,
         lowStockThreshold: editLowStock,
+        ...(isVariant
+          ? { variantValues: { ...(editingProduct.variantValues || {}), ...variantValues } }
+          : {}),
       };
 
       if (editCost !== editingProduct.currentCost) {
@@ -458,7 +561,7 @@ export function ProductFormModal({
         return;
       }
 
-      // CHANGE 1 — Opening Cost is required when Initial Stock > 0
+      // Opening Cost is required when Initial Stock > 0
       if (stockNum > 0) {
         if (form.currentCost === "" || form.currentCost === null || form.currentCost === undefined || isNaN(Number(form.currentCost))) {
           setFormError("Opening Cost is required when Initial Stock is greater than 0.");
@@ -524,7 +627,7 @@ export function ProductFormModal({
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-5 border-b border-slate-200">
           <h2 className="font-bold text-slate-800 text-base">
-            {editingProduct ? "Edit Product" : "Add New Product"}
+            {editingProduct ? (isVariant ? `Edit Variant — ${editingProduct.name}` : "Edit Product") : "Add New Product"}
           </h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-700 cursor-pointer">
             <X size={18} />
@@ -546,6 +649,58 @@ export function ProductFormModal({
           )}
 
           <div className="grid grid-cols-2 gap-4">
+            {isVariant && (
+              <div className="col-span-2 bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Variant Configuration ({editingProduct?.displayGroup})
+                  </h3>
+                  <span className="text-[10px] font-bold text-navy-800 bg-navy-100 border border-navy-200 px-2.5 py-0.5 rounded-full">
+                    Display Group Variant
+                  </span>
+                </div>
+
+                {activeGroupOptions.length === 0 ? (
+                  <p className="text-xs text-slate-500 italic">No active variant options defined for this display group.</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {activeGroupOptions.map((opt) => {
+                      const currentVal = variantValues[opt.name] || "";
+                      const isRetiredVal = Boolean(currentVal && !opt.values.includes(currentVal));
+
+                      return (
+                        <div key={opt.name}>
+                          <label className="block text-xs font-bold text-slate-600 mb-1 uppercase tracking-wider">
+                            {opt.name} <span className="text-red-500">*</span>
+                          </label>
+                          <select
+                            value={currentVal}
+                            onChange={(e) => {
+                              setVariantValues((prev) => ({ ...prev, [opt.name]: e.target.value }));
+                              setFormError("");
+                            }}
+                            className={INPUT}
+                          >
+                            <option value="">-- Select {opt.name} --</option>
+                            {opt.values.map((v) => (
+                              <option key={v} value={v}>
+                                {v}
+                              </option>
+                            ))}
+                            {isRetiredVal && (
+                              <option value={currentVal}>
+                                {currentVal} (Retired)
+                              </option>
+                            )}
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="col-span-2">
               <SuggestionInput
                 label="Product Name *"
@@ -555,19 +710,30 @@ export function ProductFormModal({
                 placeholder="e.g. LED Headlight H7"
                 className={INPUT}
               />
+              {nameWarning && (
+                <p className="text-[10px] text-amber-700 font-semibold mt-1 flex items-center gap-1">
+                  <AlertTriangle size={12} className="shrink-0 text-amber-600" />
+                  <span>{nameWarning}</span>
+                </p>
+              )}
             </div>
 
             <div>
-              <FieldLabel>SKU *{editingProduct && <span className="ml-1 text-slate-400 normal-case font-normal">(read-only)</span>}</FieldLabel>
-              <input
-                type="text"
+              <SuggestionInput
+                label="SKU *"
                 value={form.sku}
-                onChange={(e) => !editingProduct && setField("sku", e.target.value.toUpperCase())}
-                readOnly={!!editingProduct}
+                onChange={(val) => setField("sku", val.toUpperCase())}
+                suggestions={skuSuggestions}
                 maxLength={40}
                 placeholder="e.g. LED-001 (3–40 chars, alphanumeric, - or _)"
-                className={`${INPUT} ${editingProduct ? "bg-slate-100 text-slate-500 cursor-not-allowed select-all" : "font-mono"}`}
+                className={`${INPUT} font-mono`}
               />
+              {skuWarning && (
+                <p className="text-[10px] text-amber-700 font-semibold mt-1 flex items-center gap-1">
+                  <AlertTriangle size={12} className="shrink-0 text-amber-600" />
+                  <span>{skuWarning}</span>
+                </p>
+              )}
             </div>
 
             <div>
@@ -1140,8 +1306,11 @@ export function AdjustStockModal({
                   onChange={(e) => setRecordExpense(e.target.checked)}
                   className="w-4 h-4 rounded border-slate-300 text-navy-950 focus:ring-navy-600 cursor-pointer accent-navy-950"
                 />
-                <span>Record Financial Loss (Write-off Expense)</span>
+                <span>Record Financial Loss on Removal (Write-off Expense)</span>
               </label>
+              <p className="text-[10px] text-slate-400 pl-6 font-medium">
+                Applies only when removing stock.
+              </p>
               {recordExpense && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2 text-xs">
                   <p className="text-amber-800 font-medium">
@@ -1170,6 +1339,8 @@ export function AdjustStockModal({
             type="button"
             onClick={() => handleStockAdjust("remove")}
             disabled={!stockDelta || Number(stockDelta) <= 0 || !reasonNote.trim()}
+            title="Remove stock quantity from current inventory"
+            aria-label="Remove stock"
             className="flex-1 bg-red-500 hover:bg-red-600 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
           >
             &minus; Remove
@@ -1177,7 +1348,14 @@ export function AdjustStockModal({
           <button
             type="button"
             onClick={() => handleStockAdjust("add")}
-            disabled={!stockDelta || Number(stockDelta) <= 0 || !reasonNote.trim()}
+            disabled={
+              !stockDelta ||
+              Number(stockDelta) <= 0 ||
+              !reasonNote.trim() ||
+              (product.currentCost === 0 && (!openingCostInput.trim() || isNaN(Number(openingCostInput)) || Number(openingCostInput) < 0))
+            }
+            title="Add stock quantity to current inventory"
+            aria-label="Add stock"
             className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-slate-200 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
           >
             + Add

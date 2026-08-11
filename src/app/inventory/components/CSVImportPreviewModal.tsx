@@ -63,9 +63,19 @@ export function CSVImportPreviewModal({
   useEffect(() => {
     setCostChangeConfirmationRows(null);
     const seenSkusInFile = new Map<string, number>();
+
+    const productsBySku = new Map<string, Product>();
+    if (state?.products) {
+      for (const p of state.products) {
+        if (p.sku?.trim()) {
+          productsBySku.set(p.sku.trim().toLowerCase(), p);
+        }
+      }
+    }
+
     const validated = parsedRows.map((r) => {
       const lowerSku = (r.sku || "").trim().toLowerCase();
-      const skuMatch = state?.products?.find((p) => p.sku?.trim().toLowerCase() === lowerSku);
+      const skuMatch = lowerSku ? productsBySku.get(lowerSku) : undefined;
 
       const fieldErrors = { ...(r.fieldErrors || {}) };
       const errors = [...(r.errors || [])];

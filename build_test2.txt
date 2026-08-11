@@ -1,0 +1,9 @@
+▲ Next.js 16.2.11 (Turbopack)
+
+  Creating an optimized production build ...
+
+> Build error occurred
+Error: Initiated Worker with invalid NODE_OPTIONS env variable: --stack-size= is not allowed in NODE_OPTIONS
+    at ignore-listed frames {
+  code: 'ERR_WORKER_INVALID_EXEC_ARGV'
+}

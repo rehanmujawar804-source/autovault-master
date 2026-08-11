@@ -39,10 +39,12 @@ export function SpreadsheetImportUploadModal({
 
   useEffect(() => {
     if (isOpen) {
-      setRecentReports(getRecentImportReports());
-      setSelectedFile(null);
-      setErrorMessage(null);
-      setIsDragging(false);
+      queueMicrotask(() => {
+        setRecentReports(getRecentImportReports());
+        setSelectedFile(null);
+        setErrorMessage(null);
+        setIsDragging(false);
+      });
     }
   }, [isOpen]);
 
@@ -363,7 +365,7 @@ export function SpreadsheetImportUploadModal({
             </div>
             <ul className="space-y-1 text-[11px] list-disc list-inside text-slate-600 leading-relaxed font-medium">
               <li>
-                <strong className="text-slate-800">New Products (New SKU):</strong> The <code className="bg-slate-200/70 px-1 py-0.5 rounded font-mono text-[10px] text-slate-800">Stock</code> value sets the product's <em>Initial Stock</em> (recorded as Opening Stock).
+                <strong className="text-slate-800">New Products (New SKU):</strong> The <code className="bg-slate-200/70 px-1 py-0.5 rounded font-mono text-[10px] text-slate-800">Stock</code> value sets the product&apos;s <em>Initial Stock</em> (recorded as Opening Stock).
               </li>
               <li>
                 <strong className="text-slate-800">Existing Products (Matching SKU):</strong> The <code className="bg-slate-200/70 px-1 py-0.5 rounded font-mono text-[10px] text-slate-800">Stock</code> value sets the desired <em>Current Stock</em>. Only the difference (+/-) is logged as an Import stock movement.

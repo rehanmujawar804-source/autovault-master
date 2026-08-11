@@ -3561,7 +3561,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               STORAGE_KEY,
               JSON.stringify({ ...migratedState, __v: STORE_VERSION })
             );
-            setQuotaExceeded(false);
+            queueMicrotask(() => setQuotaExceeded(false));
           } catch (err: any) {
             isLocalWriteRef.current = false;
             handleStorageError(err);
@@ -3609,7 +3609,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         STORAGE_KEY,
         JSON.stringify({ ...state, __v: STORE_VERSION })
       );
-      setQuotaExceeded(false);
+      queueMicrotask(() => setQuotaExceeded(false));
     } catch (err: any) {
       isLocalWriteRef.current = false;
       handleStorageError(err);

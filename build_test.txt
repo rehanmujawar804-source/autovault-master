@@ -1,0 +1,2 @@
+C:\Program Files\nodejs\\node.exe: --stack-size= is not allowed in NODE_OPTIONS
+C:\Program Files\nodejs\\node.exe: --stack-size= is not allowed in NODE_OPTIONS

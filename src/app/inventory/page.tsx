@@ -569,9 +569,9 @@ export default function InventoryPage() {
           </td>
 
           {/* Product */}
-          <td className="px-4 py-3.5 min-w-[180px]">
+          <td className="px-4 py-3.5 min-w-[120px] sm:min-w-[180px]">
             {isVariant ? (
-              <div className="flex items-start gap-2 pl-3">
+              <div className="flex items-start gap-2 pl-2 sm:pl-3">
                 <CornerDownRight size={14} className="text-navy-500 shrink-0 mt-0.5" />
                 <button
                   className="text-left w-full cursor-pointer"
@@ -594,7 +594,7 @@ export default function InventoryPage() {
                 <div className="font-mono text-[10px] text-slate-400 mt-0.5 tracking-wide flex items-center gap-1.5 flex-wrap">
                   <span>{product.sku}</span>
                   {product.displayGroup && product.displayGroup.trim() !== "" && (
-                    <span className="text-[10px] text-purple-700 font-bold bg-purple-50 border border-purple-200 px-1.5 py-0.2 rounded inline-block">
+                    <span className="text-[10px] text-purple-700 font-bold bg-purple-50 border border-purple-200 px-1.5 py-0.5 rounded inline-block">
                       Part of: {product.displayGroup.trim()}
                     </span>
                   )}
@@ -1067,7 +1067,7 @@ export default function InventoryPage() {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h1 className="text-2xl font-bold text-navy-950">Inventory</h1>
         {isOwner && (
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
             {/* Export Dropdown Menu (Primary: XLSX, Secondary: CSV) */}
             <div className="relative">
               <button
@@ -1372,7 +1372,7 @@ export default function InventoryPage() {
           {/* Filters group */}
           <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
             {/* Search */}
-            <div className="relative min-w-0">
+            <div className="relative min-w-0 w-full sm:w-auto flex-1 sm:flex-none">
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
               <input
                 id="inv-search"
@@ -1381,7 +1381,7 @@ export default function InventoryPage() {
                 placeholder="Search products…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="border border-slate-200 rounded-lg pl-8 pr-3 h-8 text-xs w-44 sm:w-52 focus:outline-none focus:ring-2 focus:ring-amber-400/50 focus:border-amber-400 bg-slate-50/80 focus:bg-white transition-all placeholder:text-slate-400"
+                className="border border-slate-200 rounded-lg pl-8 pr-3 h-8 text-xs w-full sm:w-44 md:w-52 focus:outline-none focus:ring-2 focus:ring-amber-400/50 focus:border-amber-400 bg-slate-50/80 focus:bg-white transition-all placeholder:text-slate-400"
               />
             </div>
 
@@ -1389,7 +1389,7 @@ export default function InventoryPage() {
             <select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
-              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 max-w-[130px] transition-colors"
+              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 w-full sm:w-auto max-w-full sm:max-w-[130px] transition-colors"
             >
               {categories.map((c) => (
                 <option key={c} value={c}>{c === "All" ? "All Categories" : c}</option>
@@ -1400,7 +1400,7 @@ export default function InventoryPage() {
             <select
               value={brandFilter}
               onChange={(e) => setBrandFilter(e.target.value)}
-              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 max-w-[130px] transition-colors"
+              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 w-full sm:w-auto max-w-full sm:max-w-[130px] transition-colors"
             >
               {brands.map((b) => (
                 <option key={b} value={b}>{b === "All" ? "All Brands" : b}</option>
@@ -1411,7 +1411,7 @@ export default function InventoryPage() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 transition-colors"
+              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 w-full sm:w-auto transition-colors"
             >
               <option value="All">All Status</option>
               <option value="Active">Active</option>
@@ -1423,7 +1423,7 @@ export default function InventoryPage() {
             <select
               value={stockFilter}
               onChange={(e) => setStockFilter(e.target.value as StockFilter)}
-              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 transition-colors"
+              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 w-full sm:w-auto transition-colors"
             >
               <option value="All">All Stock</option>
               <option value="Healthy">Healthy</option>
@@ -1435,7 +1435,7 @@ export default function InventoryPage() {
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
-              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 max-w-[160px] transition-colors"
+              className="h-8 border border-slate-200 rounded-lg px-2.5 text-xs font-medium text-slate-600 bg-slate-50/80 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 cursor-pointer shrink-0 w-full sm:w-auto max-w-full sm:max-w-[160px] transition-colors"
             >
               {SORT_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -1457,7 +1457,7 @@ export default function InventoryPage() {
                 <CheckSquare size={13} className={isSelectionMode ? "text-yellow-400" : "text-slate-500"} />
                 <span>{isSelectionMode ? "Exit Selection" : "Select"}</span>
                 {isSelectionMode && selectedProductIds.length > 0 && (
-                  <span className="bg-yellow-400 text-navy-950 text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                  <span className="bg-yellow-400 text-navy-950 text-[10px] font-black px-1.5 py-0.5 rounded-full">
                     {selectedProductIds.length}
                   </span>
                 )}
@@ -1495,7 +1495,7 @@ export default function InventoryPage() {
             <button
               key={chip.key}
               onClick={() => { setStockFilter(chip.stock); setStatusFilter(chip.status); }}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all duration-150 cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 px-3 py-2.5 rounded-full text-xs font-semibold border transition-all duration-150 cursor-pointer ${
                 isActive
                   ? "bg-navy-950 text-white border-navy-950 shadow-sm"
                   : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
@@ -1682,7 +1682,7 @@ export default function InventoryPage() {
                         </td>
 
                         {/* Product / Group Base Name */}
-                        <td className="px-4 py-3.5 min-w-[180px]">
+                        <td className="px-4 py-3.5 min-w-[120px] sm:min-w-[180px]">
                           <button
                             className="text-left w-full cursor-pointer focus:outline-none"
                             onClick={() => toggleGroupExpand(item.groupName)}

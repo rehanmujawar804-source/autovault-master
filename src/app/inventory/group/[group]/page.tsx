@@ -232,7 +232,7 @@ export default function GroupDetailsPage({
       {/* ── Header Toolbar & Group Identity Summary ── */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-4">
         {/* Navigation & Actions Top Bar */}
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
           <Link
             href="/inventory"
             className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-navy-950 font-semibold transition-colors"
@@ -321,7 +321,7 @@ export default function GroupDetailsPage({
       </div>
 
       {/* ── KPI Summary Cards ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {/* Card 1: Total Stock & Variant Health */}
         <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between space-y-2">
           <div className="flex items-center justify-between">

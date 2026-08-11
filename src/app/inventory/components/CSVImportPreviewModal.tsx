@@ -467,205 +467,207 @@ export function CSVImportPreviewModal({
             </div>
           ) : (
             <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
-                  <tr>
-                    <th className="py-3 px-3">Row #</th>
-                    <th className="py-3 px-3">Action</th>
-                    <th className="py-3 px-3">SKU *</th>
-                    <th className="py-3 px-3">Product Name *</th>
-                    <th className="py-3 px-3">Brand</th>
-                    <th className="py-3 px-3">Category *</th>
-                    <th className="py-3 px-3">Stock *</th>
-                    <th className="py-3 px-3 text-right">Opening Cost (₹)</th>
-                    <th className="py-3 px-3 text-right">Sell (₹) *</th>
-                    <th className="py-3 px-3">Status *</th>
-                    <th className="py-3 px-3">Universal Fit</th>
-                    <th className="py-3 px-3">Details / Errors</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-150">
-                  {filteredRows.map((r) => {
-                    const isNew = r.type === "NEW";
-                    const isUpdate = r.type === "UPDATE";
-                    const isError = r.type === "ERROR";
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
+                    <tr>
+                      <th className="py-3 px-3">Row #</th>
+                      <th className="py-3 px-3">Action</th>
+                      <th className="py-3 px-3">SKU *</th>
+                      <th className="py-3 px-3">Product Name *</th>
+                      <th className="py-3 px-3">Brand</th>
+                      <th className="py-3 px-3">Category *</th>
+                      <th className="py-3 px-3">Stock *</th>
+                      <th className="py-3 px-3 text-right">Opening Cost (₹)</th>
+                      <th className="py-3 px-3 text-right">Sell (₹) *</th>
+                      <th className="py-3 px-3">Status *</th>
+                      <th className="py-3 px-3">Universal Fit</th>
+                      <th className="py-3 px-3">Details / Errors</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-150">
+                    {filteredRows.map((r) => {
+                      const isNew = r.type === "NEW";
+                      const isUpdate = r.type === "UPDATE";
+                      const isError = r.type === "ERROR";
 
-                    const currentStockNum = typeof r.stock === "number" ? r.stock : 0;
-                    const stockDelta = r.existingProduct ? currentStockNum - r.existingProduct.stock : 0;
+                      const currentStockNum = typeof r.stock === "number" ? r.stock : 0;
+                      const stockDelta = r.existingProduct ? currentStockNum - r.existingProduct.stock : 0;
 
-                    return (
-                      <tr
-                        key={r.rowNumber}
-                        className={`transition-colors ${
-                          isError
-                            ? "bg-red-50/70 hover:bg-red-50"
-                            : isUpdate
-                            ? "bg-blue-50/30 hover:bg-blue-50/50"
-                            : "bg-emerald-50/20 hover:bg-emerald-50/40"
-                        }`}
-                      >
-                        <td className="py-2.5 px-3 font-mono font-bold text-slate-500">#{r.rowNumber}</td>
-                        <td className="py-2.5 px-3">
-                          {isNew && (
-                            <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-extrabold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
-                              <PlusCircle size={10} /> NEW
-                            </span>
-                          )}
-                          {isUpdate && (
-                            <span className="bg-blue-100 text-blue-800 border border-blue-300 text-[10px] font-extrabold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
-                              <RefreshCw size={10} /> UPDATE
-                            </span>
-                          )}
-                          {isError && (
-                            <span className="bg-red-100 text-red-800 border border-red-300 text-[10px] font-extrabold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
-                              <AlertCircle size={10} /> ERROR
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
-                          <div>{r.sku || "—"}</div>
-                          {r.fieldErrors?.sku && (
-                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
-                              ❌ {r.fieldErrors.sku}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 font-semibold text-slate-900 min-w-[160px]">
-                          <div>{r.name || "—"}</div>
-                          {r.nameWarning && (
-                            <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded inline-block mt-0.5">
-                              {r.nameWarning}
-                            </span>
-                          )}
-                          {r.fieldErrors?.name && (
-                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
-                              ❌ {r.fieldErrors.name}
-                            </span>
-                          )}
-                        </td>
-                        {/* Brand Column with Convenience Autocomplete */}
-                        <td className="py-2.5 px-3 min-w-[130px]">
-                          <input
-                            type="text"
-                            list="existing-brands-datalist"
-                            value={r.brand}
-                            onChange={(e) => updateRowField(r.rowNumber, "brand", e.target.value)}
-                            placeholder="Brand (optional)"
-                            className="w-full border border-slate-200 rounded px-2 py-1 text-xs bg-white hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-navy-600"
-                          />
-                        </td>
-                        {/* Category Column with Convenience Autocomplete */}
-                        <td className="py-2.5 px-3 min-w-[140px]">
-                          <input
-                            type="text"
-                            list="existing-categories-datalist"
-                            value={r.category}
-                            onChange={(e) => updateRowField(r.rowNumber, "category", e.target.value)}
-                            placeholder="Category *"
-                            className={`w-full border rounded px-2 py-1 text-xs bg-white hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 ${
-                              r.fieldErrors?.category ? "border-red-300 focus:ring-red-500 bg-red-50/50" : "border-slate-200 focus:ring-navy-600"
-                            }`}
-                          />
-                          {r.fieldErrors?.category && (
-                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
-                              ❌ {r.fieldErrors.category}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 font-mono font-bold">
-                          {isUpdate && stockDelta !== 0 ? (
-                            <span className="flex items-center gap-1">
-                              <span className="text-slate-500 line-through">{r.existingProduct?.stock}</span>
-                              <span className="text-slate-800">{r.stock}</span>
-                              <span className={`text-[10px] font-extrabold px-1 rounded ${stockDelta > 0 ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>
-                                {stockDelta > 0 ? `+${stockDelta}` : stockDelta}
+                      return (
+                        <tr
+                          key={r.rowNumber}
+                          className={`transition-colors ${
+                            isError
+                              ? "bg-red-50/70 hover:bg-red-50"
+                              : isUpdate
+                              ? "bg-blue-50/30 hover:bg-blue-50/50"
+                              : "bg-emerald-50/20 hover:bg-emerald-50/40"
+                          }`}
+                        >
+                          <td className="py-2.5 px-3 font-mono font-bold text-slate-500">#{r.rowNumber}</td>
+                          <td className="py-2.5 px-3">
+                            {isNew && (
+                              <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-extrabold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                                <PlusCircle size={10} /> NEW
                               </span>
-                            </span>
-                          ) : (
-                            <span className="text-slate-800">{r.stock === "" ? "—" : r.stock}</span>
-                          )}
-                          {r.fieldErrors?.stock && (
-                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
-                              ❌ {r.fieldErrors.stock}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 font-mono text-right text-slate-700">
-                          {isUpdate && r.existingProduct && typeof r.buyPrice === "number" && r.buyPrice !== r.existingProduct.currentCost ? (
-                            <div>
-                              <div className="flex items-center justify-end gap-1">
-                                <span className="text-slate-400 line-through text-[11px]">₹{r.existingProduct.currentCost.toLocaleString()}</span>
-                                →
-                                <span className="font-bold text-amber-700">₹{r.buyPrice.toLocaleString()}</span>
+                            )}
+                            {isUpdate && (
+                              <span className="bg-blue-100 text-blue-800 border border-blue-300 text-[10px] font-extrabold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                                <RefreshCw size={10} /> UPDATE
+                              </span>
+                            )}
+                            {isError && (
+                              <span className="bg-red-100 text-red-800 border border-red-300 text-[10px] font-extrabold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                                <AlertCircle size={10} /> ERROR
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
+                            <div>{r.sku || "—"}</div>
+                            {r.fieldErrors?.sku && (
+                              <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
+                                ❌ {r.fieldErrors.sku}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 font-semibold text-slate-900 min-w-[160px]">
+                            <div>{r.name || "—"}</div>
+                            {r.nameWarning && (
+                              <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded inline-block mt-0.5">
+                                {r.nameWarning}
+                              </span>
+                            )}
+                            {r.fieldErrors?.name && (
+                              <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
+                                ❌ {r.fieldErrors.name}
+                              </span>
+                            )}
+                          </td>
+                          {/* Brand Column with Convenience Autocomplete */}
+                          <td className="py-2.5 px-3 min-w-[130px]">
+                            <input
+                              type="text"
+                              list="existing-brands-datalist"
+                              value={r.brand}
+                              onChange={(e) => updateRowField(r.rowNumber, "brand", e.target.value)}
+                              placeholder="Brand (optional)"
+                              className="w-full border border-slate-200 rounded px-2 py-1 text-xs bg-white hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-navy-600"
+                            />
+                          </td>
+                          {/* Category Column with Convenience Autocomplete */}
+                          <td className="py-2.5 px-3 min-w-[140px]">
+                            <input
+                              type="text"
+                              list="existing-categories-datalist"
+                              value={r.category}
+                              onChange={(e) => updateRowField(r.rowNumber, "category", e.target.value)}
+                              placeholder="Category *"
+                              className={`w-full border rounded px-2 py-1 text-xs bg-white hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 ${
+                                r.fieldErrors?.category ? "border-red-300 focus:ring-red-500 bg-red-50/50" : "border-slate-200 focus:ring-navy-600"
+                              }`}
+                            />
+                            {r.fieldErrors?.category && (
+                              <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
+                                ❌ {r.fieldErrors.category}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono font-bold">
+                            {isUpdate && stockDelta !== 0 ? (
+                              <span className="flex items-center gap-1">
+                                <span className="text-slate-500 line-through">{r.existingProduct?.stock}</span>
+                                <span className="text-slate-800">{r.stock}</span>
+                                <span className={`text-[10px] font-extrabold px-1 rounded ${stockDelta > 0 ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>
+                                  {stockDelta > 0 ? `+${stockDelta}` : stockDelta}
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="text-slate-800">{r.stock === "" ? "—" : r.stock}</span>
+                            )}
+                            {r.fieldErrors?.stock && (
+                              <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
+                                ❌ {r.fieldErrors.stock}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono text-right text-slate-700">
+                            {isUpdate && r.existingProduct && typeof r.buyPrice === "number" && r.buyPrice !== r.existingProduct.currentCost ? (
+                              <div>
+                                <div className="flex items-center justify-end gap-1">
+                                  <span className="text-slate-400 line-through text-[11px]">₹{r.existingProduct.currentCost.toLocaleString()}</span>
+                                  →
+                                  <span className="font-bold text-amber-700">₹{r.buyPrice.toLocaleString()}</span>
+                                </div>
+                                <span className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded inline-block mt-0.5 whitespace-nowrap">
+                                  ⚠ Cost Will Change
+                                </span>
                               </div>
-                              <span className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded inline-block mt-0.5 whitespace-nowrap">
-                                ⚠ Cost Will Change
+                            ) : (
+                              <span>{r.buyPrice === "" ? "—" : `₹${Number(r.buyPrice).toLocaleString()}`}</span>
+                            )}
+                            {r.fieldErrors?.buyPrice && (
+                              <span className="text-[10px] text-red-600 font-semibold block mt-0.5 text-left">
+                                ❌ {r.fieldErrors.buyPrice}
                               </span>
-                            </div>
-                          ) : (
-                            <span>{r.buyPrice === "" ? "—" : `₹${Number(r.buyPrice).toLocaleString()}`}</span>
-                          )}
-                          {r.fieldErrors?.buyPrice && (
-                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5 text-left">
-                              ❌ {r.fieldErrors.buyPrice}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 font-mono font-bold text-right text-slate-900">
-                          {r.sellPrice === "" ? "—" : `₹${Number(r.sellPrice).toLocaleString()}`}
-                          {r.fieldErrors?.sellPrice && (
-                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5 text-left">
-                              ❌ {r.fieldErrors.sellPrice}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <select
-                            value={r.status}
-                            onChange={(e) => updateRowField(r.rowNumber, "status", e.target.value)}
-                            className="border border-slate-200 rounded px-1.5 py-1 text-[11px] bg-white hover:bg-slate-50 focus:outline-none"
-                          >
-                            <option value="Active">Active</option>
-                            <option value="Inactive">Inactive</option>
-                            <option value="Discontinued">Discontinued</option>
-                          </select>
-                          {r.fieldErrors?.status && (
-                            <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
-                              ❌ {r.fieldErrors.status}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          {r.isUniversalFit ? (
-                            <span className="bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                              Universal
-                            </span>
-                          ) : (
-                            <span className="text-slate-400 text-[11px]">Specific</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 max-w-[220px]">
-                          {isError ? (
-                            <ul className="text-[11px] text-red-700 space-y-0.5 list-disc list-inside font-medium">
-                              {r.errors.map((err, idx) => (
-                                <li key={idx}>{err}</li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <span className="text-[11px] text-slate-500 font-medium truncate block">
-                              {r.fitments.length > 0
-                                ? r.fitments.map(formatFitmentDisplay).join(", ")
-                                : r.isUniversalFit
-                                ? "Fits all vehicles"
-                                : "No vehicles attached"}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono font-bold text-right text-slate-900">
+                            {r.sellPrice === "" ? "—" : `₹${Number(r.sellPrice).toLocaleString()}`}
+                            {r.fieldErrors?.sellPrice && (
+                              <span className="text-[10px] text-red-600 font-semibold block mt-0.5 text-left">
+                                ❌ {r.fieldErrors.sellPrice}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <select
+                              value={r.status}
+                              onChange={(e) => updateRowField(r.rowNumber, "status", e.target.value)}
+                              className="border border-slate-200 rounded px-1.5 py-1 text-[11px] bg-white hover:bg-slate-50 focus:outline-none"
+                            >
+                              <option value="Active">Active</option>
+                              <option value="Inactive">Inactive</option>
+                              <option value="Discontinued">Discontinued</option>
+                            </select>
+                            {r.fieldErrors?.status && (
+                              <span className="text-[10px] text-red-600 font-semibold block mt-0.5">
+                                ❌ {r.fieldErrors.status}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            {r.isUniversalFit ? (
+                              <span className="bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                                Universal
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 text-[11px]">Specific</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 max-w-[220px]">
+                            {isError ? (
+                              <ul className="text-[11px] text-red-700 space-y-0.5 list-disc list-inside font-medium">
+                                {r.errors.map((err, idx) => (
+                                  <li key={idx}>{err}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <span className="text-[11px] text-slate-500 font-medium truncate block">
+                                {r.fitments.length > 0
+                                  ? r.fitments.map(formatFitmentDisplay).join(", ")
+                                  : r.isUniversalFit
+                                  ? "Fits all vehicles"
+                                  : "No vehicles attached"}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

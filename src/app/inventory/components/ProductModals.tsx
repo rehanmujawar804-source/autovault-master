@@ -624,8 +624,8 @@ export function ProductFormModal({
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-5 border-b border-slate-200">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 shrink-0">
           <h2 className="font-bold text-slate-800 text-base">
             {editingProduct ? (isVariant ? `Edit Variant — ${editingProduct.name}` : "Edit Product") : "Add New Product"}
           </h2>
@@ -634,7 +634,7 @@ export function ProductFormModal({
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4 flex-1 overflow-y-auto">
           {formError && (
             <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-lg">
               <AlertCircle size={15} className="shrink-0 mt-0.5" />
@@ -648,7 +648,7 @@ export function ProductFormModal({
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {isVariant && (
               <div className="col-span-2 bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between border-b border-slate-200 pb-2">
@@ -895,7 +895,7 @@ export function ProductFormModal({
                     }));
                   }
                 }}
-                className="w-4.5 h-4.5 text-navy-950 rounded border-slate-300 focus:ring-navy-600/30 cursor-pointer accent-navy-950"
+                className="w-5 h-5 text-navy-950 rounded border-slate-300 focus:ring-navy-600/30 cursor-pointer accent-navy-950"
               />
             </div>
           </div>
@@ -955,7 +955,7 @@ export function ProductFormModal({
                   <div>
                     <input
                       type="text"
-                      placeholder="Brand (Honda)"
+                      placeholder="Make"
                       value={newFitBrand}
                       onChange={(e) => setNewFitBrand(e.target.value)}
                       className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
@@ -964,7 +964,7 @@ export function ProductFormModal({
                   <div>
                     <input
                       type="text"
-                      placeholder="Model (City)"
+                      placeholder="Model"
                       value={newFitModel}
                       onChange={(e) => setNewFitModel(e.target.value)}
                       className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
@@ -973,7 +973,7 @@ export function ProductFormModal({
                   <div>
                     <input
                       type="text"
-                      placeholder="Year From (2018)"
+                      placeholder="Year From"
                       value={newFitYear}
                       onChange={(e) => setNewFitYear(e.target.value)}
                       className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
@@ -982,7 +982,7 @@ export function ProductFormModal({
                   <div>
                     <input
                       type="text"
-                      placeholder="Year To (2022)"
+                      placeholder="Year To"
                       value={newFitYearTo}
                       onChange={(e) => setNewFitYearTo(e.target.value)}
                       className="w-full border border-slate-200 bg-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/25 focus:border-navy-600 transition-all"
@@ -1067,10 +1067,10 @@ export function ProductFormModal({
         </div>
         </div>
 
-        <div className="flex gap-3 px-5 pb-5">
+        <div className="flex gap-3 p-5 border-t border-slate-100 bg-slate-50/50 shrink-0">
           <button
             onClick={onClose}
-            className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 transition-colors cursor-pointer"
+            className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 transition-colors cursor-pointer bg-white"
           >
             Cancel
           </button>

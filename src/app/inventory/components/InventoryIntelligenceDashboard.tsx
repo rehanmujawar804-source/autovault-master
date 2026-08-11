@@ -778,52 +778,54 @@ export function InventoryIntelligenceDashboard({
               </div>
 
               <div className="border border-slate-800 rounded-2xl overflow-hidden text-xs">
-                <table className="w-full text-left border-collapse">
-                  <thead className="bg-slate-900 text-slate-400 border-b border-slate-800 font-bold uppercase text-[10px] tracking-wider">
-                    <tr>
-                      <th className="p-3">Category</th>
-                      <th className="p-3 text-right">Products</th>
-                      <th className="p-3 text-right">Stock Units</th>
-                      <th className="p-3 text-right">Cost Value</th>
-                      <th className="p-3 text-right">Retail Value</th>
-                      <th className="p-3 text-right">Potential Margin</th>
-                      <th className="p-3 text-center">Alerts</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60 bg-slate-900/40">
-                    {categoryStats.map((cat) => (
-                      <tr key={cat.name} className="hover:bg-slate-800/50 transition-colors">
-                        <td className="p-3 font-bold text-white flex items-center gap-2">
-                          <span>{cat.name}</span>
-                        </td>
-                        <td className="p-3 text-right font-medium text-slate-300">{cat.count}</td>
-                        <td className="p-3 text-right font-medium text-slate-300">{cat.units.toLocaleString()}</td>
-                        <td className="p-3 text-right font-bold text-indigo-300">₹{cat.costValue.toLocaleString()}</td>
-                        <td className="p-3 text-right font-bold text-emerald-400">₹{cat.sellValue.toLocaleString()}</td>
-                        <td className={`p-3 text-right font-bold ${cat.margin > 0 ? "text-cyan-300" : cat.margin === 0 ? "text-slate-400" : "text-red-400"}`}>
-                          {cat.margin < 0 ? `-₹${Math.abs(cat.margin).toLocaleString()}` : `₹${cat.margin.toLocaleString()}`}
-                        </td>
-                        <td className="p-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            {cat.outOfStock > 0 && (
-                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30">
-                                {cat.outOfStock} Out
-                              </span>
-                            )}
-                            {cat.lowStock > 0 && (
-                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                                {cat.lowStock} Low
-                              </span>
-                            )}
-                            {cat.outOfStock === 0 && cat.lowStock === 0 && (
-                              <span className="text-[10px] font-bold text-emerald-400">Healthy</span>
-                            )}
-                          </div>
-                        </td>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-slate-900 text-slate-400 border-b border-slate-800 font-bold uppercase text-[10px] tracking-wider">
+                      <tr>
+                        <th className="p-3">Category</th>
+                        <th className="p-3 text-right">Products</th>
+                        <th className="p-3 text-right">Stock Units</th>
+                        <th className="p-3 text-right">Cost Value</th>
+                        <th className="p-3 text-right">Retail Value</th>
+                        <th className="p-3 text-right">Potential Margin</th>
+                        <th className="p-3 text-center">Alerts</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 bg-slate-900/40">
+                      {categoryStats.map((cat) => (
+                        <tr key={cat.name} className="hover:bg-slate-800/50 transition-colors">
+                          <td className="p-3 font-bold text-white flex items-center gap-2">
+                            <span>{cat.name}</span>
+                          </td>
+                          <td className="p-3 text-right font-medium text-slate-300">{cat.count}</td>
+                          <td className="p-3 text-right font-medium text-slate-300">{cat.units.toLocaleString()}</td>
+                          <td className="p-3 text-right font-bold text-indigo-300">₹{cat.costValue.toLocaleString()}</td>
+                          <td className="p-3 text-right font-bold text-emerald-400">₹{cat.sellValue.toLocaleString()}</td>
+                          <td className={`p-3 text-right font-bold ${cat.margin > 0 ? "text-cyan-300" : cat.margin === 0 ? "text-slate-400" : "text-red-400"}`}>
+                            {cat.margin < 0 ? `-₹${Math.abs(cat.margin).toLocaleString()}` : `₹${cat.margin.toLocaleString()}`}
+                          </td>
+                          <td className="p-3 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {cat.outOfStock > 0 && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30">
+                                  {cat.outOfStock} Out
+                                </span>
+                              )}
+                              {cat.lowStock > 0 && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                  {cat.lowStock} Low
+                                </span>
+                              )}
+                              {cat.outOfStock === 0 && cat.lowStock === 0 && (
+                                <span className="text-[10px] font-bold text-emerald-400">Healthy</span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}

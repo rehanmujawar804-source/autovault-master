@@ -1103,7 +1103,7 @@ export function AddProductWithVariantModal({
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto space-y-6 flex-1">
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1">
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 text-xs font-semibold px-4 py-3 rounded-xl flex items-center gap-2">
               <AlertCircle size={16} className="shrink-0 text-red-500" />
@@ -1119,10 +1119,13 @@ export function AddProductWithVariantModal({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Display Group Name with Autocomplete */}
               <div className="relative" ref={groupAutocompleteRef}>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1 flex items-center justify-between">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1 flex items-center justify-between gap-2 flex-wrap">
                   <span>Display Group / Base Name <span className="text-red-500">*</span></span>
                   {initialGroup && initialGroup.trim() ? (
-                    <span className="text-[10px] font-bold text-purple-700 bg-purple-100 border border-purple-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <span
+                      className="text-[10px] font-bold text-purple-700 bg-purple-100 border border-purple-200 px-2 py-0.5 rounded-full flex items-center gap-1 max-w-[12rem] sm:max-w-none truncate"
+                      title={`Product Family: ${initialGroup.trim()} (Locked)`}
+                    >
                       🔒 Product Family: {initialGroup.trim()} (Locked)
                     </span>
                   ) : isExistingGroupMode ? (

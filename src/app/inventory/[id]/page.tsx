@@ -363,7 +363,10 @@ export default function ProductDetailsPage({
             <h1 className="text-2xl font-black text-navy-950 tracking-tight">
               {product.name}
             </h1>
-            <span className="font-mono text-xs font-bold text-slate-400 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
+            <span
+              className="font-mono text-xs font-bold text-slate-400 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded max-w-full truncate"
+              title={product.sku}
+            >
               {product.sku}
             </span>
             <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full border bg-slate-50 text-slate-600 border-slate-200">
@@ -418,7 +421,7 @@ export default function ProductDetailsPage({
         </div>
 
         {/* Quick action buttons */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {isOwner && (
             <>
               {isDeletable && (
@@ -452,7 +455,7 @@ export default function ProductDetailsPage({
       {/* ── Main High-Density KPI Grid ── */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {/* Current Stock — primary metric, given stronger treatment */}
-        <div className={`border p-4 rounded-xl flex flex-col justify-between h-24 ${outOfStock ? 'bg-red-50 border-red-200' : lowStock ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'
+        <div className={`border p-4 rounded-xl flex flex-col justify-between min-h-[6rem] ${outOfStock ? 'bg-red-50 border-red-200' : lowStock ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'
           }`}>
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Current Stock</span>
           <div className="flex items-baseline gap-1">
@@ -463,7 +466,7 @@ export default function ProductDetailsPage({
         </div>
 
         {/* Opening Stock */}
-        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
+        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between min-h-[6rem]">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Opening Stock</span>
           <div className="flex items-baseline gap-1">
             <span className="text-xl font-bold text-slate-700 tabular-nums">{openingStock}</span>
@@ -472,7 +475,7 @@ export default function ProductDetailsPage({
         </div>
 
         {/* Available Stock */}
-        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
+        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between min-h-[6rem]">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Available Stock</span>
           <div className="flex items-baseline gap-1">
             <span className="text-xl font-bold text-slate-800 tabular-nums">{availableStock}</span>
@@ -481,7 +484,7 @@ export default function ProductDetailsPage({
         </div>
 
         {/* Inventory Value */}
-        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
+        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between min-h-[6rem]">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Inventory Value</span>
           <div className="flex items-baseline gap-0.5">
             <span className="text-xs font-medium text-slate-400">₹</span>
@@ -491,7 +494,7 @@ export default function ProductDetailsPage({
 
         {/* Buy Price - Owner only */}
         {isOwner ? (
-          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
+          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between min-h-[6rem]">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Current Cost</span>
             <div className="flex items-baseline gap-0.5">
               <span className="text-xs font-medium text-slate-400">₹</span>
@@ -499,14 +502,14 @@ export default function ProductDetailsPage({
             </div>
           </div>
         ) : (
-          <div className="bg-slate-50/30 border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col justify-center items-center h-24 text-slate-350">
+          <div className="bg-slate-50/30 border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col justify-center items-center min-h-[6rem] text-slate-350">
             <ShieldCheck size={16} />
             <span className="text-[9px] font-bold uppercase mt-1">Cost Hidden</span>
           </div>
         )}
 
         {/* Sell Price */}
-        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
+        <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col justify-between min-h-[6rem]">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sell Price</span>
           <div className="flex items-baseline gap-0.5">
             <span className="text-xs font-medium text-slate-400">₹</span>
@@ -516,7 +519,7 @@ export default function ProductDetailsPage({
 
         {/* Unit Profit - Owner only */}
         {isOwner ? (
-          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
+          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between min-h-[6rem]">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Unit Profit</span>
             <div className="flex items-baseline gap-0.5">
               {unitProfit < 0 ? (
@@ -534,7 +537,7 @@ export default function ProductDetailsPage({
             </div>
           </div>
         ) : (
-          <div className="bg-slate-50/30 border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col justify-center items-center h-24 text-slate-350">
+          <div className="bg-slate-50/30 border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col justify-center items-center min-h-[6rem] text-slate-350">
             <ShieldCheck size={16} />
             <span className="text-[9px] font-bold uppercase mt-1">Profit Hidden</span>
           </div>
@@ -542,7 +545,7 @@ export default function ProductDetailsPage({
 
         {/* Margin % - Owner only */}
         {isOwner ? (
-          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
+          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between min-h-[6rem]">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Margin</span>
             <div className="flex items-baseline gap-0.5">
               {marginPct !== null ? (
@@ -557,7 +560,7 @@ export default function ProductDetailsPage({
             </div>
           </div>
         ) : (
-          <div className="bg-slate-50/30 border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col justify-center items-center h-24 text-slate-350">
+          <div className="bg-slate-50/30 border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col justify-center items-center min-h-[6rem] text-slate-350">
             <ShieldCheck size={16} />
             <span className="text-[9px] font-bold uppercase mt-1">Margin Hidden</span>
           </div>
@@ -565,7 +568,7 @@ export default function ProductDetailsPage({
 
         {/* Capital Invested - Owner only */}
         {isOwner ? (
-          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between h-24">
+          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col justify-between min-h-[6rem]">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Capital Invested</span>
             <div className="flex items-baseline gap-0.5">
               <span className="text-xs font-medium text-slate-400">₹</span>
@@ -573,7 +576,7 @@ export default function ProductDetailsPage({
             </div>
           </div>
         ) : (
-          <div className="bg-slate-50/30 border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col justify-center items-center h-24 text-slate-350">
+          <div className="bg-slate-50/30 border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col justify-center items-center min-h-[6rem] text-slate-350">
             <ShieldCheck size={16} />
             <span className="text-[9px] font-bold uppercase mt-1">Cost Hidden</span>
           </div>
@@ -599,7 +602,7 @@ export default function ProductDetailsPage({
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`px-3.5 py-2 border-b-2 text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${activeTab === tab.id
+                className={`px-3.5 py-3 border-b-2 text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${activeTab === tab.id
                     ? "border-navy-950 text-navy-950 font-semibold"
                     : "border-transparent text-slate-450 hover:text-slate-700 hover:border-slate-300"
                   }`}
@@ -803,10 +806,10 @@ export default function ProductDetailsPage({
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider">
                           <th className="px-4 py-3">Invoice No</th>
-                          <th className="px-4 py-3">Date</th>
-                          <th className="px-4 py-3">Customer</th>
+                          <th className="px-4 py-3 hidden sm:table-cell">Date</th>
+                          <th className="px-4 py-3 hidden sm:table-cell">Customer</th>
                           <th className="px-4 py-3 text-center">Qty Sold</th>
-                          <th className="px-4 py-3 text-right">Sold Rate</th>
+                          <th className="px-4 py-3 text-right hidden sm:table-cell">Sold Rate</th>
                           <th className="px-4 py-3 text-right">Total (₹)</th>
                           <th className="px-4 py-3 text-center">Status</th>
                         </tr>
@@ -825,11 +828,15 @@ export default function ProductDetailsPage({
                                   {inv.invoiceNumber}
                                   <ExternalLink size={10} />
                                 </Link>
+                                <div className="sm:hidden text-[10px] text-slate-400 mt-0.5 space-y-0.5 font-normal">
+                                  <p>{inv.customer} · {formatInvoiceDate(inv)}</p>
+                                  <p>Rate: ₹{item.price.toLocaleString()}</p>
+                                </div>
                               </td>
-                              <td className="px-4 py-3 font-medium text-slate-600">{formatInvoiceDate(inv)}</td>
-                              <td className="px-4 py-3 font-semibold">{inv.customer}</td>
+                              <td className="px-4 py-3 font-medium text-slate-600 hidden sm:table-cell">{formatInvoiceDate(inv)}</td>
+                              <td className="px-4 py-3 font-semibold hidden sm:table-cell">{inv.customer}</td>
                               <td className="px-4 py-3 text-center font-bold text-slate-800">{item.quantity}</td>
-                              <td className="px-4 py-3 text-right">₹{item.price.toLocaleString()}</td>
+                              <td className="px-4 py-3 text-right hidden sm:table-cell">₹{item.price.toLocaleString()}</td>
                               <td className="px-4 py-3 text-right font-bold text-slate-900">
                                 ₹{(item.quantity * item.price).toLocaleString()}
                               </td>
@@ -882,12 +889,12 @@ export default function ProductDetailsPage({
                     <table className="w-full text-sm border-collapse">
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-200">
-                          <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Date</th>
+                          <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 hidden sm:table-cell">Date</th>
                           <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Supplier</th>
-                          <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Qty</th>
-                          <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Unit Cost</th>
+                          <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500 hidden sm:table-cell">Qty</th>
+                          <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500 hidden sm:table-cell">Unit Cost</th>
                           <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Total</th>
-                          <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Invoice</th>
+                          <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 hidden md:table-cell">Invoice</th>
                           <th className="px-4 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Status</th>
                         </tr>
                       </thead>
@@ -896,18 +903,22 @@ export default function ProductDetailsPage({
                           const supplier = state.suppliers?.find(s => s.id === pur.supplierId);
                           return (
                             <tr key={pur.id} className="hover:bg-slate-50/70 transition-colors">
-                              <td className="px-4 py-3 text-xs text-slate-600 font-medium">{formatPurchaseDate(pur)}</td>
+                              <td className="px-4 py-3 text-xs text-slate-600 font-medium hidden sm:table-cell">{formatPurchaseDate(pur)}</td>
                               <td className="px-4 py-3 text-xs font-semibold text-slate-700">
                                 {supplier ? (
                                   <Link href={`/suppliers/${supplier.id}`} className="hover:text-navy-700 hover:underline">
                                     {supplier.name}
                                   </Link>
                                 ) : "—"}
+                                <div className="sm:hidden text-[10px] text-slate-400 font-normal mt-0.5 space-y-0.5">
+                                  <p>{formatPurchaseDate(pur)} · {pur.quantity} units @ ₹{pur.buyPrice.toLocaleString()}</p>
+                                  {pur.invoiceNumber && <p className="font-mono">Inv: {pur.invoiceNumber}</p>}
+                                </div>
                               </td>
-                              <td className="px-4 py-3 text-xs text-right font-bold text-slate-700">{pur.quantity}</td>
-                              <td className="px-4 py-3 text-xs text-right text-slate-600">₹{pur.buyPrice.toLocaleString()}</td>
+                              <td className="px-4 py-3 text-xs text-right font-bold text-slate-700 hidden sm:table-cell">{pur.quantity}</td>
+                              <td className="px-4 py-3 text-xs text-right text-slate-600 hidden sm:table-cell">₹{pur.buyPrice.toLocaleString()}</td>
                               <td className="px-4 py-3 text-xs text-right font-bold text-slate-800">₹{(pur.buyPrice * pur.quantity).toLocaleString()}</td>
-                              <td className="px-4 py-3 text-xs font-mono text-slate-500">{pur.invoiceNumber || "—"}</td>
+                              <td className="px-4 py-3 text-xs font-mono text-slate-500 hidden md:table-cell">{pur.invoiceNumber || "—"}</td>
                               <td className="px-4 py-3 text-center">
                                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${pur.paymentStatus === "Paid"
                                     ? "bg-green-50 text-green-700 border-green-200"

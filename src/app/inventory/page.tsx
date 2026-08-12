@@ -12,6 +12,8 @@ import { CSVImportPreviewModal, type CSVImportRowResult } from "./components/CSV
 import { SpreadsheetImportUploadModal } from "./components/SpreadsheetImportUploadModal";
 import { InventoryIntelligenceDashboard } from "./components/InventoryIntelligenceDashboard";
 import { InventoryDesktopTable } from "./components/InventoryDesktopTable";
+import { InventoryTabletView } from "./components/InventoryTabletView";
+import { InventoryMobileCards } from "./components/InventoryMobileCards";
 import { formatFitmentDisplay, serializeFitmentsForCSV, parseFitmentsFromCSV } from "@/lib/fitmentUtils";
 import { generateXLSXWorkbook, generateCSVText, parseSpreadsheetFile, generateBlankXLSXImportTemplate } from "@/lib/spreadsheetUtils";
 import { saveRecentImportReport } from "@/lib/recentImportReports";
@@ -1233,28 +1235,85 @@ export default function InventoryPage() {
             </div>
           )
         ) : (
-          <InventoryDesktopTable
-            groupedDisplayItems={groupedDisplayItems}
-            isOwner={isOwner}
-            isSelectionMode={isSelectionMode}
-            selectedSet={selectedSet}
-            allVisibleSelected={allVisibleSelected}
-            selectAllCheckboxRef={selectAllCheckboxRef}
-            handleToggleSelectAllVisible={handleToggleSelectAllVisible}
-            handleToggleSelectProduct={handleToggleSelectProduct}
-            expandedProductId={expandedProductId}
-            setExpandedProductId={setExpandedProductId}
-            copiedSkuId={copiedSkuId}
-            handleCopySku={handleCopySku}
-            setStockModal={setStockModal}
-            setEditingProduct={setEditingProduct}
-            setShowModal={setShowModal}
-            expandedGroupNames={expandedGroupNames}
-            toggleGroupExpand={toggleGroupExpand}
-            handleEditBaseGroup={handleEditBaseGroup}
-            setTargetGroupForNewVariant={setTargetGroupForNewVariant}
-            setShowAddWithVariantModal={setShowAddWithVariantModal}
-          />
+          <>
+            {/* Mobile Card View (<768px) */}
+            <div className="block md:hidden">
+              <InventoryMobileCards
+                groupedDisplayItems={groupedDisplayItems}
+                isOwner={isOwner}
+                isSelectionMode={isSelectionMode}
+                selectedSet={selectedSet}
+                allVisibleSelected={allVisibleSelected}
+                selectAllCheckboxRef={selectAllCheckboxRef}
+                handleToggleSelectAllVisible={handleToggleSelectAllVisible}
+                handleToggleSelectProduct={handleToggleSelectProduct}
+                expandedProductId={expandedProductId}
+                setExpandedProductId={setExpandedProductId}
+                copiedSkuId={copiedSkuId}
+                handleCopySku={handleCopySku}
+                setStockModal={setStockModal}
+                setEditingProduct={setEditingProduct}
+                setShowModal={setShowModal}
+                expandedGroupNames={expandedGroupNames}
+                toggleGroupExpand={toggleGroupExpand}
+                handleEditBaseGroup={handleEditBaseGroup}
+                setTargetGroupForNewVariant={setTargetGroupForNewVariant}
+                setShowAddWithVariantModal={setShowAddWithVariantModal}
+              />
+            </div>
+
+            {/* Tablet View (768px - 1023px) */}
+            <div className="hidden md:block lg:hidden">
+              <InventoryTabletView
+                groupedDisplayItems={groupedDisplayItems}
+                isOwner={isOwner}
+                isSelectionMode={isSelectionMode}
+                selectedSet={selectedSet}
+                allVisibleSelected={allVisibleSelected}
+                selectAllCheckboxRef={selectAllCheckboxRef}
+                handleToggleSelectAllVisible={handleToggleSelectAllVisible}
+                handleToggleSelectProduct={handleToggleSelectProduct}
+                expandedProductId={expandedProductId}
+                setExpandedProductId={setExpandedProductId}
+                copiedSkuId={copiedSkuId}
+                handleCopySku={handleCopySku}
+                setStockModal={setStockModal}
+                setEditingProduct={setEditingProduct}
+                setShowModal={setShowModal}
+                expandedGroupNames={expandedGroupNames}
+                toggleGroupExpand={toggleGroupExpand}
+                handleEditBaseGroup={handleEditBaseGroup}
+                setTargetGroupForNewVariant={setTargetGroupForNewVariant}
+                setShowAddWithVariantModal={setShowAddWithVariantModal}
+              />
+            </div>
+
+            {/* Desktop View (>=1024px) */}
+            <div className="hidden lg:block">
+              <InventoryDesktopTable
+                groupedDisplayItems={groupedDisplayItems}
+                isOwner={isOwner}
+                isSelectionMode={isSelectionMode}
+                selectedSet={selectedSet}
+                allVisibleSelected={allVisibleSelected}
+                selectAllCheckboxRef={selectAllCheckboxRef}
+                handleToggleSelectAllVisible={handleToggleSelectAllVisible}
+                handleToggleSelectProduct={handleToggleSelectProduct}
+                expandedProductId={expandedProductId}
+                setExpandedProductId={setExpandedProductId}
+                copiedSkuId={copiedSkuId}
+                handleCopySku={handleCopySku}
+                setStockModal={setStockModal}
+                setEditingProduct={setEditingProduct}
+                setShowModal={setShowModal}
+                expandedGroupNames={expandedGroupNames}
+                toggleGroupExpand={toggleGroupExpand}
+                handleEditBaseGroup={handleEditBaseGroup}
+                setTargetGroupForNewVariant={setTargetGroupForNewVariant}
+                setShowAddWithVariantModal={setShowAddWithVariantModal}
+              />
+            </div>
+          </>
         )}
       </div>
 

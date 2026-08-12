@@ -36,6 +36,10 @@
   --font-sans: var(--font-inter), Arial, Helvetica, sans-serif;
 }
 
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   background: #f4f6f9;
   color: #0f172a;

@@ -27,6 +27,7 @@
   },
   "devDependencies": {
     "@next/swc-win32-x64-msvc": "^16.2.10",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4.3.1",
     "@types/node": "^24.3.0",
     "@types/react": "^19.1.12",

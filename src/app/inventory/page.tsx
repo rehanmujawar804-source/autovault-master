@@ -741,7 +741,7 @@ export default function InventoryPage() {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h1 className="text-2xl font-bold text-navy-950">Inventory</h1>
         {isOwner && (
-          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap min-w-0 w-full sm:w-auto">
             {/* Export Dropdown Menu (Primary: XLSX, Secondary: CSV) */}
             <div className="relative">
               <button
@@ -792,7 +792,7 @@ export default function InventoryPage() {
               className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 transition-colors cursor-pointer shadow-xs"
             >
               <Upload size={13} className="text-navy-950" />
-              Import Spreadsheet
+              Import<span className="hidden sm:inline"> Spreadsheet</span>
             </button>
 
             {/* Add Product Dropdown */}
@@ -1382,7 +1382,7 @@ export default function InventoryPage() {
       {/* ── Sticky Owner Bulk Action Toolbar (Phase 2C) ───────────────────── */}
       {isOwner && selectedProductIds.length > 0 && (
         <div className="sticky bottom-6 z-30 bg-navy-950 text-white rounded-2xl p-4 shadow-2xl border border-navy-800 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
             <span className="bg-yellow-400 text-navy-950 font-black text-xs px-3 py-1 rounded-full shadow-xs">
               {selectedProductIds.length} Selected
             </span>

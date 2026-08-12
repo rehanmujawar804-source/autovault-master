@@ -366,7 +366,7 @@ export function InventoryIntelligenceDashboard({
           <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-3">
             <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Total SKUs (incl. variants)</p>
             <p className="text-lg font-black text-white mt-1">{metrics.totalProducts}</p>
-            <div className="flex gap-1.5 mt-1 text-[10px]">
+            <div className="flex flex-wrap gap-1 mt-1 text-[10px]">
               <span className="text-emerald-400 font-semibold">{metrics.activeCount} Act</span>
               <span className="text-slate-500">·</span>
               <span className="text-amber-400 font-semibold">{metrics.inactiveCount} Inact</span>

@@ -121,6 +121,13 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
         return next;
       });
     }
+    if ((key === "phone" || key === "email") && fieldErrors.contactMethod) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next.contactMethod;
+        return next;
+      });
+    }
     if (formError) setFormError("");
   }
 
@@ -144,6 +151,18 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
       err = validateGST(form.gst, suppliers, currentId);
     } else if (fieldName === "notes") {
       err = validateNotes(form.notes);
+    }
+
+    if (fieldName === "phone" || fieldName === "email") {
+      if (form.phone.trim() || form.email.trim()) {
+        if (fieldErrors.contactMethod) {
+          setFieldErrors((prev) => {
+            const next = { ...prev };
+            delete next.contactMethod;
+            return next;
+          });
+        }
+      }
     }
 
     if (err) {
@@ -265,71 +284,91 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Phone</label>
-              <input
-                type="tel"
-                inputMode="numeric"
-                autoComplete="tel"
-                placeholder="98765 43210"
-                value={form.phone}
-                onChange={(e) => setField("phone", e.target.value)}
-                onBlur={() => handleBlur("phone")}
-                maxLength={20}
-                className={`${INPUT} ${fieldErrors.phone ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
-              />
-              {fieldErrors.phone && (
-                <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
-                  <AlertCircle size={12} className="shrink-0" />
-                  {fieldErrors.phone}
-                </p>
-              )}
+          <div className="space-y-3 pt-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                Contact Details
+              </span>
+              <span className="text-[11px] text-slate-400">
+                Phone or Email required
+              </span>
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">WhatsApp</label>
-              <input
-                type="tel"
-                inputMode="numeric"
-                placeholder="98765 43210"
-                value={form.whatsApp}
-                onChange={(e) => setField("whatsApp", e.target.value)}
-                onBlur={() => handleBlur("whatsApp")}
-                maxLength={20}
-                className={`${INPUT} ${fieldErrors.whatsApp ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
-              />
-              {fieldErrors.whatsApp && (
-                <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
-                  <AlertCircle size={12} className="shrink-0" />
-                  {fieldErrors.whatsApp}
-                </p>
-              )}
-            </div>
-          </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Email</label>
-            <input
-              type="email"
-              inputMode="email"
-              autoComplete="email"
-              placeholder="supplier@example.com"
-              value={form.email}
-              onChange={(e) => setField("email", e.target.value)}
-              onBlur={() => handleBlur("email")}
-              maxLength={150}
-              className={`${INPUT} ${fieldErrors.email ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
-            />
-            {fieldErrors.email && (
-              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
-                <AlertCircle size={12} className="shrink-0" />
-                {fieldErrors.email}
-              </p>
+            {fieldErrors.contactMethod && (
+              <div className="flex items-start gap-1.5 text-xs text-red-600 font-medium bg-red-50 border border-red-200 px-3 py-2 rounded-lg">
+                <AlertCircle size={13} className="shrink-0 mt-0.5" />
+                <span>{fieldErrors.contactMethod}</span>
+              </div>
             )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Phone</label>
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  placeholder="98765 43210"
+                  value={form.phone}
+                  onChange={(e) => setField("phone", e.target.value)}
+                  onBlur={() => handleBlur("phone")}
+                  maxLength={20}
+                  className={`${INPUT} ${fieldErrors.phone || fieldErrors.contactMethod ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+                />
+                {fieldErrors.phone && (
+                  <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                    <AlertCircle size={12} className="shrink-0" />
+                    {fieldErrors.phone}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">WhatsApp</label>
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  placeholder="98765 43210"
+                  value={form.whatsApp}
+                  onChange={(e) => setField("whatsApp", e.target.value)}
+                  onBlur={() => handleBlur("whatsApp")}
+                  maxLength={20}
+                  className={`${INPUT} ${fieldErrors.whatsApp ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+                />
+                {fieldErrors.whatsApp && (
+                  <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                    <AlertCircle size={12} className="shrink-0" />
+                    {fieldErrors.whatsApp}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Email</label>
+              <input
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                placeholder="supplier@example.com"
+                value={form.email}
+                onChange={(e) => setField("email", e.target.value)}
+                onBlur={() => handleBlur("email")}
+                maxLength={150}
+                className={`${INPUT} ${fieldErrors.email || fieldErrors.contactMethod ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+              />
+              {fieldErrors.email && (
+                <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                  <AlertCircle size={12} className="shrink-0" />
+                  {fieldErrors.email}
+                </p>
+              )}
+            </div>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Address</label>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+              Address <span className="text-red-500">*</span>
+            </label>
             <textarea
               placeholder="Full business address"
               rows={2}

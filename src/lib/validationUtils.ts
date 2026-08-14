@@ -100,9 +100,9 @@ export function validateSupplierName(
   if (normalized.length > 100) {
     return "Supplier name must not exceed 100 characters.";
   }
-  // Reject names with no letters or numbers (e.g. only punctuation like "!!!", "@@@")
-  if (!/[a-zA-Z0-9\u0900-\u097F]/.test(normalized)) {
-    return "Supplier name must contain letters or numbers.";
+  // Reject names with no letters (e.g. only numbers "123456" or only punctuation like "!!!", "@@@")
+  if (!/[a-zA-Z\u0900-\u097F]/.test(normalized)) {
+    return "Supplier name must contain letters.";
   }
 
   // Duplicate check (case-insensitive & whitespace-normalized)
@@ -140,7 +140,7 @@ export function validatePhone(
   existingSuppliers: Supplier[],
   currentSupplierId?: string
 ): string | null {
-  if (!phone || !phone.trim()) return null; // optional
+  if (!phone || !phone.trim()) return null; // optional if email is provided
 
   const canonical = normalizePhone(phone);
   // Check for dummy repeated digits e.g. 0000000000, 1111111111, 5555555555
@@ -188,7 +188,7 @@ export function validateEmail(
   currentSupplierId?: string
 ): string | null {
   const normalized = normalizeEmail(email);
-  if (!normalized) return null; // optional
+  if (!normalized) return null; // optional if phone is provided
 
   if (normalized.length > 150) {
     return "Email address must not exceed 150 characters.";
@@ -210,7 +210,9 @@ export function validateEmail(
 
 export function validateAddress(address: string): string | null {
   const normalized = normalizeAddress(address);
-  if (!normalized) return null; // optional
+  if (!normalized) {
+    return "Supplier address is required.";
+  }
 
   if (normalized.length > 300) {
     return "Address must be 300 characters or less.";
@@ -297,6 +299,14 @@ export function validateAndNormalizeSupplierForm(
 
   const contactError = validateContactPerson(formData.contactPerson);
   if (contactError) errors.contactPerson = contactError;
+
+  // Conditional Contact Requirement: Phone OR Email must be provided
+  const rawPhoneTrimmed = formData.phone ? formData.phone.trim() : "";
+  const rawEmailTrimmed = formData.email ? formData.email.trim() : "";
+
+  if (!rawPhoneTrimmed && !rawEmailTrimmed) {
+    errors.contactMethod = "At least one contact method (Phone or Email) is required.";
+  }
 
   const phoneError = validatePhone(formData.phone, existingSuppliers, currentSupplierId);
   if (phoneError) errors.phone = phoneError;

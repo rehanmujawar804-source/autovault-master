@@ -37,6 +37,17 @@ import {
   Ban,
 } from "lucide-react";
 import type { Supplier, Product } from "@/types";
+import {
+  validateAndNormalizeSupplierForm,
+  validateSupplierName,
+  validateContactPerson,
+  validatePhone,
+  validateWhatsApp,
+  validateEmail,
+  validateAddress,
+  validateGST,
+  validateNotes,
+} from "@/lib/validationUtils";
 
 // ─────────────────────────────────────────────
 //  HELPERS
@@ -954,36 +965,97 @@ interface EditSupplierModalProps {
 }
 
 function EditSupplierModal({ isOpen, onClose, supplier }: EditSupplierModalProps) {
-  const { updateSupplier, showToast } = useStore();
+  const { state, updateSupplier, showToast } = useStore();
 
   const [form, setForm] = useState({
     name: supplier.name,
-    contactPerson: supplier.contactPerson,
-    phone: supplier.phone,
-    whatsApp: supplier.whatsApp,
-    email: supplier.email,
-    address: supplier.address,
+    contactPerson: supplier.contactPerson || "",
+    phone: supplier.phone || "",
+    whatsApp: supplier.whatsApp || "",
+    email: supplier.email || "",
+    address: supplier.address || "",
     gst: supplier.gst || "",
-    notes: supplier.notes,
+    notes: supplier.notes || "",
     status: supplier.status,
   });
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState("");
+
+  const suppliers = state.suppliers || [];
 
   if (!isOpen) return null;
 
   function setField<K extends keyof typeof form>(key: K, val: (typeof form)[K]) {
     setForm((prev) => ({ ...prev, [key]: val }));
+    if (fieldErrors[key]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+    if (formError) setFormError("");
+  }
+
+  function handleBlur(fieldName: keyof typeof form) {
+    let err: string | null = null;
+    const currentId = supplier.id;
+
+    if (fieldName === "name") {
+      err = validateSupplierName(form.name, suppliers, currentId);
+    } else if (fieldName === "contactPerson") {
+      err = validateContactPerson(form.contactPerson);
+    } else if (fieldName === "phone") {
+      err = validatePhone(form.phone, suppliers, currentId);
+    } else if (fieldName === "whatsApp") {
+      err = validateWhatsApp(form.whatsApp, suppliers, currentId);
+    } else if (fieldName === "email") {
+      err = validateEmail(form.email, suppliers, currentId);
+    } else if (fieldName === "address") {
+      err = validateAddress(form.address);
+    } else if (fieldName === "gst") {
+      err = validateGST(form.gst, suppliers, currentId);
+    } else if (fieldName === "notes") {
+      err = validateNotes(form.notes);
+    }
+
+    if (err) {
+      setFieldErrors((prev) => ({ ...prev, [fieldName]: err! }));
+    } else if (fieldErrors[fieldName]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[fieldName];
+        return next;
+      });
+    }
+  }
+
+  function handleClose() {
+    setFieldErrors({});
     setFormError("");
+    onClose();
   }
 
   function handleSave() {
-    if (!form.name.trim()) { setFormError("Supplier name is required."); return; }
+    const validationResult = validateAndNormalizeSupplierForm(form, suppliers, supplier.id);
+
+    if (!validationResult.isValid) {
+      setFieldErrors(validationResult.errors);
+      setFormError("Please fix the validation errors before saving.");
+      return;
+    }
+
     try {
-      updateSupplier({ ...supplier, ...form, name: form.name.trim() });
-      showToast("Supplier updated.", "success");
-      onClose();
+      const { normalizedData } = validationResult;
+      updateSupplier({
+        ...supplier,
+        ...normalizedData,
+      });
+      showToast(`"${normalizedData.name}" updated successfully.`, "success");
+      handleClose();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to save.");
+      const msg = err instanceof Error ? err.message : "Failed to save supplier.";
+      setFormError(msg);
     }
   }
 
@@ -992,45 +1064,209 @@ function EditSupplierModal({ isOpen, onClose, supplier }: EditSupplierModalProps
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between p-5 border-b border-slate-200 sticky top-0 bg-white z-10 rounded-t-2xl">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-navy-50 flex items-center justify-center"><Truck size={16} className="text-navy-700" /></div>
+            <div className="w-8 h-8 rounded-lg bg-navy-50 flex items-center justify-center">
+              <Truck size={16} className="text-navy-700" />
+            </div>
             <h2 className="font-bold text-slate-800 text-base">Edit Supplier</h2>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors"><X size={18} /></button>
+          <button onClick={handleClose} className="text-slate-400 hover:text-slate-700 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors">
+            <X size={18} />
+          </button>
         </div>
         <div className="p-5 space-y-4">
           {formError && (
             <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl">
-              <AlertCircle size={15} className="shrink-0 mt-0.5" /><span>{formError}</span>
+              <AlertCircle size={15} className="shrink-0 mt-0.5" />
+              <span>{formError}</span>
             </div>
           )}
+
           <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Supplier Name <span className="text-red-500">*</span></label>
-            <input type="text" value={form.name} onChange={(e) => setField("name", e.target.value)} className={INPUT} autoFocus />
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+              Supplier Name <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Minda Industries Ltd."
+              value={form.name}
+              onChange={(e) => setField("name", e.target.value)}
+              onBlur={() => handleBlur("name")}
+              maxLength={100}
+              autoComplete="organization"
+              className={`${INPUT} ${fieldErrors.name ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+              autoFocus
+            />
+            {fieldErrors.name && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.name}
+              </p>
+            )}
           </div>
+
           <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Contact Person</label>
-            <input type="text" value={form.contactPerson} onChange={(e) => setField("contactPerson", e.target.value)} className={INPUT} />
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+              Contact Person
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Rajesh Kumar"
+              value={form.contactPerson}
+              onChange={(e) => setField("contactPerson", e.target.value)}
+              onBlur={() => handleBlur("contactPerson")}
+              maxLength={80}
+              autoComplete="name"
+              className={`${INPUT} ${fieldErrors.contactPerson ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+            />
+            {fieldErrors.contactPerson && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.contactPerson}
+              </p>
+            )}
           </div>
+
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Phone</label><input type="tel" value={form.phone} onChange={(e) => setField("phone", e.target.value)} className={INPUT} /></div>
-            <div><label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">WhatsApp</label><input type="tel" value={form.whatsApp} onChange={(e) => setField("whatsApp", e.target.value)} className={INPUT} /></div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Phone</label>
+              <input
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel"
+                placeholder="98765 43210"
+                value={form.phone}
+                onChange={(e) => setField("phone", e.target.value)}
+                onBlur={() => handleBlur("phone")}
+                maxLength={20}
+                className={`${INPUT} ${fieldErrors.phone ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+              />
+              {fieldErrors.phone && (
+                <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                  <AlertCircle size={12} className="shrink-0" />
+                  {fieldErrors.phone}
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">WhatsApp</label>
+              <input
+                type="tel"
+                inputMode="numeric"
+                placeholder="98765 43210"
+                value={form.whatsApp}
+                onChange={(e) => setField("whatsApp", e.target.value)}
+                onBlur={() => handleBlur("whatsApp")}
+                maxLength={20}
+                className={`${INPUT} ${fieldErrors.whatsApp ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+              />
+              {fieldErrors.whatsApp && (
+                <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                  <AlertCircle size={12} className="shrink-0" />
+                  {fieldErrors.whatsApp}
+                </p>
+              )}
+            </div>
           </div>
-          <div><label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Email</label><input type="email" value={form.email} onChange={(e) => setField("email", e.target.value)} className={INPUT} /></div>
-          <div><label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Address</label><textarea rows={2} value={form.address} onChange={(e) => setField("address", e.target.value)} className={INPUT + " resize-none"} /></div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Email</label>
+            <input
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              placeholder="supplier@example.com"
+              value={form.email}
+              onChange={(e) => setField("email", e.target.value)}
+              onBlur={() => handleBlur("email")}
+              maxLength={150}
+              className={`${INPUT} ${fieldErrors.email ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+            />
+            {fieldErrors.email && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.email}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Address</label>
+            <textarea
+              placeholder="Full business address"
+              rows={2}
+              value={form.address}
+              onChange={(e) => setField("address", e.target.value)}
+              onBlur={() => handleBlur("address")}
+              maxLength={300}
+              autoComplete="street-address"
+              className={`${INPUT} resize-none ${fieldErrors.address ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+            />
+            {fieldErrors.address && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.address}
+              </p>
+            )}
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">GST <span className="text-slate-400 font-normal">(optional)</span></label><input type="text" value={form.gst} onChange={(e) => setField("gst", e.target.value)} className={INPUT} /></div>
-            <div><label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Status</label>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+                GST Number <span className="text-slate-400 font-normal">(optional)</span>
+              </label>
+              <input
+                type="text"
+                inputMode="text"
+                autoCapitalize="characters"
+                placeholder="29ABCDE1234F1Z5"
+                value={form.gst}
+                onChange={(e) => setField("gst", e.target.value.toUpperCase())}
+                onBlur={() => handleBlur("gst")}
+                maxLength={18}
+                className={`${INPUT} uppercase ${fieldErrors.gst ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+              />
+              {fieldErrors.gst && (
+                <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                  <AlertCircle size={12} className="shrink-0" />
+                  {fieldErrors.gst}
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Status</label>
               <select value={form.status} onChange={(e) => setField("status", e.target.value as "Active" | "Inactive")} className={INPUT}>
                 <option value="Active">Active</option>
                 <option value="Inactive">Inactive</option>
               </select>
             </div>
           </div>
-          <div><label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Notes</label><textarea rows={3} value={form.notes} onChange={(e) => setField("notes", e.target.value)} className={INPUT + " resize-none"} /></div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Notes</label>
+            <textarea
+              placeholder="Any notes about this supplier…"
+              rows={3}
+              value={form.notes}
+              onChange={(e) => setField("notes", e.target.value)}
+              onBlur={() => handleBlur("notes")}
+              maxLength={500}
+              className={`${INPUT} resize-none ${fieldErrors.notes ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+            />
+            {fieldErrors.notes && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.notes}
+              </p>
+            )}
+          </div>
         </div>
         <div className="flex gap-3 px-5 py-4 border-t border-slate-200 bg-slate-50/50 rounded-b-2xl sticky bottom-0">
-          <button onClick={onClose} className="flex-1 px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer">Cancel</button>
-          <button onClick={handleSave} className="flex-1 px-4 py-2.5 text-sm font-bold text-navy-950 bg-yellow-400 rounded-xl hover:bg-yellow-300 transition-colors cursor-pointer">Save Changes</button>
+          <button onClick={handleClose} className="flex-1 px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer">
+            Cancel
+          </button>
+          <button onClick={handleSave} className="flex-1 px-4 py-2.5 text-sm font-bold text-navy-950 bg-yellow-400 rounded-xl hover:bg-yellow-300 transition-colors cursor-pointer">
+            Save Changes
+          </button>
         </div>
       </div>
     </div>

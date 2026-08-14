@@ -41,6 +41,18 @@ function formatDate(dateStr?: string | null) {
 const INPUT =
   "w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-400";
 
+import {
+  validateAndNormalizeSupplierForm,
+  validateSupplierName,
+  validateContactPerson,
+  validatePhone,
+  validateWhatsApp,
+  validateEmail,
+  validateAddress,
+  validateGST,
+  validateNotes,
+} from "@/lib/validationUtils";
+
 // ─────────────────────────────────────────────
 //  SUPPLIER FORM MODAL
 // ─────────────────────────────────────────────
@@ -52,7 +64,7 @@ interface SupplierFormModalProps {
 }
 
 function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormModalProps) {
-  const { addSupplier, updateSupplier, showToast } = useStore();
+  const { state, addSupplier, updateSupplier, showToast } = useStore();
 
   const blankForm = {
     name: "",
@@ -67,8 +79,11 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
   };
 
   const [form, setForm] = useState(blankForm);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState("");
   const [initialized, setInitialized] = useState<string | null>(null);
+
+  const suppliers = state.suppliers || [];
 
   // Initialize form when the modal becomes visible
   if (isOpen) {
@@ -78,18 +93,19 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
       if (editingSupplier) {
         setForm({
           name: editingSupplier.name,
-          contactPerson: editingSupplier.contactPerson,
-          phone: editingSupplier.phone,
-          whatsApp: editingSupplier.whatsApp,
-          email: editingSupplier.email,
-          address: editingSupplier.address,
+          contactPerson: editingSupplier.contactPerson || "",
+          phone: editingSupplier.phone || "",
+          whatsApp: editingSupplier.whatsApp || "",
+          email: editingSupplier.email || "",
+          address: editingSupplier.address || "",
           gst: editingSupplier.gst || "",
-          notes: editingSupplier.notes,
+          notes: editingSupplier.notes || "",
           status: editingSupplier.status,
         });
       } else {
         setForm(blankForm);
       }
+      setFieldErrors({});
       setFormError("");
     }
   }
@@ -98,30 +114,79 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
 
   function setField<K extends keyof typeof form>(key: K, val: (typeof form)[K]) {
     setForm((prev) => ({ ...prev, [key]: val }));
-    setFormError("");
+    if (fieldErrors[key]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+    if (formError) setFormError("");
+  }
+
+  function handleBlur(fieldName: keyof typeof form) {
+    let err: string | null = null;
+    const currentId = editingSupplier?.id;
+
+    if (fieldName === "name") {
+      err = validateSupplierName(form.name, suppliers, currentId);
+    } else if (fieldName === "contactPerson") {
+      err = validateContactPerson(form.contactPerson);
+    } else if (fieldName === "phone") {
+      err = validatePhone(form.phone, suppliers, currentId);
+    } else if (fieldName === "whatsApp") {
+      err = validateWhatsApp(form.whatsApp, suppliers, currentId);
+    } else if (fieldName === "email") {
+      err = validateEmail(form.email, suppliers, currentId);
+    } else if (fieldName === "address") {
+      err = validateAddress(form.address);
+    } else if (fieldName === "gst") {
+      err = validateGST(form.gst, suppliers, currentId);
+    } else if (fieldName === "notes") {
+      err = validateNotes(form.notes);
+    }
+
+    if (err) {
+      setFieldErrors((prev) => ({ ...prev, [fieldName]: err! }));
+    } else if (fieldErrors[fieldName]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[fieldName];
+        return next;
+      });
+    }
   }
 
   function handleClose() {
     setInitialized(null);
+    setFieldErrors({});
+    setFormError("");
     onClose();
   }
 
   function handleSave() {
-    const trimmedName = form.name.trim();
-    if (!trimmedName) {
-      setFormError("Supplier name is required.");
+    const currentId = editingSupplier?.id;
+    const validationResult = validateAndNormalizeSupplierForm(form, suppliers, currentId);
+
+    if (!validationResult.isValid) {
+      setFieldErrors(validationResult.errors);
+      setFormError("Please fix the validation errors before saving.");
       return;
     }
+
     try {
+      const { normalizedData } = validationResult;
       if (editingSupplier) {
-        updateSupplier({ ...editingSupplier, ...form, name: trimmedName });
-        showToast(`"${trimmedName}" updated successfully.`, "success");
+        updateSupplier({
+          ...editingSupplier,
+          ...normalizedData,
+        });
+        showToast(`"${normalizedData.name}" updated successfully.`, "success");
       } else {
-        addSupplier({ ...form, name: trimmedName });
-        showToast(`"${trimmedName}" added successfully.`, "success");
+        addSupplier(normalizedData);
+        showToast(`"${normalizedData.name}" added successfully.`, "success");
       }
-      setInitialized(null);
-      onClose();
+      handleClose();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to save supplier.";
       setFormError(msg);
@@ -164,9 +229,18 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
               placeholder="e.g. Minda Industries Ltd."
               value={form.name}
               onChange={(e) => setField("name", e.target.value)}
-              className={INPUT}
+              onBlur={() => handleBlur("name")}
+              maxLength={100}
+              autoComplete="organization"
+              className={`${INPUT} ${fieldErrors.name ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
               autoFocus
             />
+            {fieldErrors.name && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.name}
+              </p>
+            )}
           </div>
 
           <div>
@@ -178,29 +252,100 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
               placeholder="e.g. Rajesh Kumar"
               value={form.contactPerson}
               onChange={(e) => setField("contactPerson", e.target.value)}
-              className={INPUT}
+              onBlur={() => handleBlur("contactPerson")}
+              maxLength={80}
+              autoComplete="name"
+              className={`${INPUT} ${fieldErrors.contactPerson ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
             />
+            {fieldErrors.contactPerson && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.contactPerson}
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Phone</label>
-              <input type="tel" placeholder="98765 43210" value={form.phone} onChange={(e) => setField("phone", e.target.value)} className={INPUT} />
+              <input
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel"
+                placeholder="98765 43210"
+                value={form.phone}
+                onChange={(e) => setField("phone", e.target.value)}
+                onBlur={() => handleBlur("phone")}
+                maxLength={20}
+                className={`${INPUT} ${fieldErrors.phone ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+              />
+              {fieldErrors.phone && (
+                <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                  <AlertCircle size={12} className="shrink-0" />
+                  {fieldErrors.phone}
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">WhatsApp</label>
-              <input type="tel" placeholder="98765 43210" value={form.whatsApp} onChange={(e) => setField("whatsApp", e.target.value)} className={INPUT} />
+              <input
+                type="tel"
+                inputMode="numeric"
+                placeholder="98765 43210"
+                value={form.whatsApp}
+                onChange={(e) => setField("whatsApp", e.target.value)}
+                onBlur={() => handleBlur("whatsApp")}
+                maxLength={20}
+                className={`${INPUT} ${fieldErrors.whatsApp ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+              />
+              {fieldErrors.whatsApp && (
+                <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                  <AlertCircle size={12} className="shrink-0" />
+                  {fieldErrors.whatsApp}
+                </p>
+              )}
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Email</label>
-            <input type="email" placeholder="supplier@example.com" value={form.email} onChange={(e) => setField("email", e.target.value)} className={INPUT} />
+            <input
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              placeholder="supplier@example.com"
+              value={form.email}
+              onChange={(e) => setField("email", e.target.value)}
+              onBlur={() => handleBlur("email")}
+              maxLength={150}
+              className={`${INPUT} ${fieldErrors.email ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+            />
+            {fieldErrors.email && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.email}
+              </p>
+            )}
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Address</label>
-            <textarea placeholder="Full business address" rows={2} value={form.address} onChange={(e) => setField("address", e.target.value)} className={INPUT + " resize-none"} />
+            <textarea
+              placeholder="Full business address"
+              rows={2}
+              value={form.address}
+              onChange={(e) => setField("address", e.target.value)}
+              onBlur={() => handleBlur("address")}
+              maxLength={300}
+              autoComplete="street-address"
+              className={`${INPUT} resize-none ${fieldErrors.address ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+            />
+            {fieldErrors.address && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.address}
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -208,7 +353,23 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
               <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
                 GST Number <span className="text-slate-400 font-normal">(optional)</span>
               </label>
-              <input type="text" placeholder="29ABCDE1234F1Z5" value={form.gst} onChange={(e) => setField("gst", e.target.value)} className={INPUT} />
+              <input
+                type="text"
+                inputMode="text"
+                autoCapitalize="characters"
+                placeholder="29ABCDE1234F1Z5"
+                value={form.gst}
+                onChange={(e) => setField("gst", e.target.value.toUpperCase())}
+                onBlur={() => handleBlur("gst")}
+                maxLength={18}
+                className={`${INPUT} uppercase ${fieldErrors.gst ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+              />
+              {fieldErrors.gst && (
+                <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                  <AlertCircle size={12} className="shrink-0" />
+                  {fieldErrors.gst}
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Status</label>
@@ -221,7 +382,21 @@ function SupplierFormModal({ isOpen, onClose, editingSupplier }: SupplierFormMod
 
           <div>
             <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Notes</label>
-            <textarea placeholder="Any notes about this supplier…" rows={3} value={form.notes} onChange={(e) => setField("notes", e.target.value)} className={INPUT + " resize-none"} />
+            <textarea
+              placeholder="Any notes about this supplier…"
+              rows={3}
+              value={form.notes}
+              onChange={(e) => setField("notes", e.target.value)}
+              onBlur={() => handleBlur("notes")}
+              maxLength={500}
+              className={`${INPUT} resize-none ${fieldErrors.notes ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+            />
+            {fieldErrors.notes && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.notes}
+              </p>
+            )}
           </div>
         </div>
 

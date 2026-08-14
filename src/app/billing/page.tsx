@@ -435,10 +435,13 @@ export default function BillingPage() {
   // ── Cart helpers ──────────────────────────────────────────────────────────
   function addToCart(productId: string) {
     const product = state.products.find((p) => p.id === productId);
-    if (!product || !isSellableInPOS(product)) return;
+    if (!product || !isSellableInPOS(product) || product.stock <= 0) return;
     setCart((prev) => {
       const existing = prev.find((i) => i.product.id === productId);
       if (existing) {
+        if (existing.quantity >= product.stock) {
+          return prev;
+        }
         return prev.map((i) =>
           i.product.id === productId ? { ...i, quantity: i.quantity + 1 } : i
         );
@@ -455,7 +458,8 @@ export default function BillingPage() {
     const product = state.products.find((p) => p.id === productId);
     if (!product) return;
     if (qty <= 0) { removeFromCart(productId); return; }
-    setCart((prev) => prev.map((i) => (i.product.id === productId ? { ...i, quantity: qty } : i)));
+    const cappedQty = Math.min(qty, product.stock);
+    setCart((prev) => prev.map((i) => (i.product.id === productId ? { ...i, quantity: cappedQty } : i)));
   }
 
   // ── Generate Invoice ──────────────────────────────────────────────────────
@@ -946,24 +950,30 @@ export default function BillingPage() {
                 {filteredProducts.map((product) => {
                   const inCart = cart.find((i) => i.product.id === product.id);
                   const outOfStock = product.stock === 0;
-                  const lowStock = !outOfStock && product.stock <= product.lowStockThreshold;
+                  const isMaxInCart = Boolean(inCart && inCart.quantity >= product.stock);
+                  const lowStock = !outOfStock && !isMaxInCart && product.stock <= product.lowStockThreshold;
                   const compatStatus = getPosProductCompatibility(product);
                   const isVehicleFilterActive = Boolean(posVehicleBrand && posVehicleModel && posVehicleYear);
 
                   return (
                     <div
                       key={product.id}
-                      onClick={() => !outOfStock && addToCart(product.id)}
+                      onClick={() => !outOfStock && !isMaxInCart && addToCart(product.id)}
                       className={`relative bg-white rounded-xl border p-4 flex flex-col justify-between cursor-pointer select-none transition-all duration-150 group ${outOfStock
                         ? "border-slate-150 opacity-55 cursor-not-allowed"
-                        : inCart
-                          ? "border-amber-400 shadow-md ring-2 ring-amber-300/40 bg-amber-50/20"
-                          : "border-slate-200 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5"
+                        : isMaxInCart
+                          ? "border-amber-300 bg-amber-50/15 cursor-default shadow-xs"
+                          : inCart
+                            ? "border-amber-400 shadow-md ring-2 ring-amber-300/40 bg-amber-50/20"
+                            : "border-slate-200 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5"
                         }`}
                     >
                       {/* Qty badge */}
                       {inCart && (
-                        <span className="absolute -top-2 -right-2 bg-amber-500 text-white font-extrabold rounded-full w-6 h-6 flex items-center justify-center text-xs shadow border-2 border-white z-10">
+                        <span className={`absolute -top-2 -right-2 font-extrabold rounded-full flex items-center justify-center text-xs shadow border-2 border-white z-10 ${isMaxInCart
+                          ? "bg-amber-600 text-white min-w-6 h-6 px-1.5 text-[10px]"
+                          : "bg-amber-500 text-white w-6 h-6"
+                          }`}>
                           {inCart.quantity}
                         </span>
                       )}
@@ -1020,9 +1030,9 @@ export default function BillingPage() {
                       {/* Bottom: stock + price */}
                       <div className="flex items-center justify-between pt-2.5 mt-2.5 border-t border-slate-100">
                         <div className="flex items-center gap-1.5">
-                          <span className={`w-1.5 h-1.5 rounded-full ${outOfStock ? "bg-red-500" : lowStock ? "bg-orange-400 animate-pulse" : "bg-green-500"}`} />
+                          <span className={`w-1.5 h-1.5 rounded-full ${outOfStock ? "bg-red-500" : isMaxInCart ? "bg-amber-500" : lowStock ? "bg-orange-400 animate-pulse" : "bg-green-500"}`} />
                           <span className="text-[10px] text-slate-500 font-medium">
-                            {outOfStock ? "Out of stock" : lowStock ? `${product.stock} left` : `${product.stock} in stock`}
+                            {outOfStock ? "Out of stock" : isMaxInCart ? `Max in cart (${product.stock})` : lowStock ? `${product.stock} left` : `${product.stock} in stock`}
                           </span>
                         </div>
                         <span className="font-extrabold text-navy-950 text-base">₹{product.sellPrice.toLocaleString()}</span>

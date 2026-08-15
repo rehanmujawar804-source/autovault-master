@@ -35,6 +35,18 @@ import {
   Printer,
   Copy,
   Ban,
+  Check,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  AlertTriangle,
+  Search,
+  Star,
+  SlidersHorizontal,
+  ArrowUpDown,
+  Clock,
+  Receipt,
+  RotateCcw,
 } from "lucide-react";
 import type { Supplier, Product } from "@/types";
 import {
@@ -61,6 +73,26 @@ function formatDate(dateStr?: string | null) {
     return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   } catch {
     return "—";
+  }
+}
+
+function formatActivityTimestamp(dateStr?: string | null) {
+  if (!dateStr) return "—";
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    const now = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday = d.toDateString() === yesterday.toDateString();
+
+    const time = d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+    if (isToday) return `Today · ${time}`;
+    if (isYesterday) return `Yesterday · ${time}`;
+    return `${d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })} · ${time}`;
+  } catch {
+    return dateStr;
   }
 }
 
@@ -1817,6 +1849,24 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
   const [editPurchase, setEditPurchase] = useState<Purchase | null>(null);
   const [returnPurchase, setReturnPurchase] = useState<Purchase | null>(null);
 
+  // Copy Feedback State
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const handleCopy = useCallback((text: string, fieldName: string) => {
+    if (!text) return;
+    try {
+      navigator.clipboard.writeText(text);
+      setCopiedField(fieldName);
+      setTimeout(() => setCopiedField(null), 1500);
+    } catch {
+      // Fallback
+    }
+  }, []);
+
+  // Purchase History Search, Filters & Sorting State
+  const [purchaseSearchQuery, setPurchaseSearchQuery] = useState("");
+  const [purchaseStatusFilter, setPurchaseStatusFilter] = useState<"All" | "Paid" | "Partial" | "Credit">("All");
+  const [purchaseSort, setPurchaseSort] = useState<"newest" | "oldest" | "highest_amount" | "highest_due">("newest");
+
   // Lump-Sum FIFO Payment Modal State
   const [showLumpSumModal, setShowLumpSumModal] = useState(false);
   const [lumpSumAmountInput, setLumpSumAmountInput] = useState("");
@@ -1863,6 +1913,117 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
     const productIds = new Set(purchases.map((p) => p.productId));
     return products.filter((p) => productIds.has(p.id));
   }, [purchases, products]);
+
+  // Product Procurement Intelligence (Calculated per product supplied)
+  const productsIntelligence = useMemo(() => {
+    return suppliedProducts.map((prod) => {
+      const prodPurchases = purchases.filter((p) => p.productId === prod.id && p.supplierId === id);
+      const lastP = prodPurchases[0];
+      const prevP = prodPurchases[1] || null;
+      const lastBuyPrice = lastP ? lastP.buyPrice : (prod.currentCost || 0);
+      const prevBuyPrice = prevP ? prevP.buyPrice : null;
+
+      const minBuyPrice = prodPurchases.length > 0 ? Math.min(...prodPurchases.map((p) => p.buyPrice)) : lastBuyPrice;
+      const maxBuyPrice = prodPurchases.length > 0 ? Math.max(...prodPurchases.map((p) => p.buyPrice)) : lastBuyPrice;
+
+      const totalPurchasedQty = prodPurchases.reduce((sum, p) => sum + p.quantity, 0);
+      const totalSpend = prodPurchases.reduce((sum, p) => sum + p.quantity * p.buyPrice, 0);
+      const weightedAvgBuyPrice = totalPurchasedQty > 0 ? totalSpend / totalPurchasedQty : lastBuyPrice;
+
+      const lastPurchaseDate = lastP ? lastP.date : null;
+      const purchaseCount = prodPurchases.length;
+
+      let priceVariancePct: number | null = null;
+      if (prevBuyPrice !== null && prevBuyPrice > 0) {
+        priceVariancePct = ((lastBuyPrice - prevBuyPrice) / prevBuyPrice) * 100;
+      }
+
+      const isPreferred = prod.preferredSupplierId === id;
+
+      return {
+        product: prod,
+        lastBuyPrice,
+        prevBuyPrice,
+        minBuyPrice,
+        maxBuyPrice,
+        weightedAvgBuyPrice,
+        lastPurchaseDate,
+        purchaseCount,
+        totalPurchasedQty,
+        priceVariancePct,
+        isPreferred,
+      };
+    });
+  }, [suppliedProducts, purchases, id]);
+
+  // Purchase Financial Details Helper (Return-Aware)
+  const getPurchaseFinancials = useCallback((pur: Purchase) => {
+    const total = pur.totalAmount ?? (pur.buyPrice * pur.quantity);
+    const returns = getPurchaseReturnsBySupplier(id).filter((r) => r.purchaseId === pur.id);
+    const returnedValue = returns.reduce((s, r) => s + r.totalAmount, 0);
+    const returnedQty = returns.reduce((s, r) => s + r.quantity, 0);
+    const payments = getSupplierPaymentsBySupplier(id).filter((sp) => sp.purchaseId === pur.id);
+    const paid = payments.reduce((s, pay) => s + pay.amount, 0);
+    const effectiveDue = Math.max(0, total - returnedValue - paid);
+    const status: "Paid" | "Partial" | "Credit" = effectiveDue <= 0 ? "Paid" : (paid > 0 ? "Partial" : "Credit");
+    return { total, paid, returnedValue, returnedQty, effectiveDue, status };
+  }, [id, getPurchaseReturnsBySupplier, getSupplierPaymentsBySupplier]);
+
+  // Purchase History Filter Counts
+  const purchaseFilterCounts = useMemo(() => {
+    let paid = 0;
+    let partial = 0;
+    let credit = 0;
+    purchases.forEach((pur) => {
+      const fin = getPurchaseFinancials(pur);
+      if (fin.status === "Paid") paid++;
+      else if (fin.status === "Partial") partial++;
+      else if (fin.status === "Credit") credit++;
+    });
+    return { all: purchases.length, paid, partial, credit };
+  }, [purchases, getPurchaseFinancials]);
+
+  // Filtered & Sorted Purchases
+  const filteredPurchases = useMemo(() => {
+    return purchases
+      .filter((pur) => {
+        // 1. Status Filter
+        if (purchaseStatusFilter !== "All") {
+          const fin = getPurchaseFinancials(pur);
+          if (fin.status !== purchaseStatusFilter) return false;
+        }
+        // 2. Search Query Filter
+        if (purchaseSearchQuery.trim() !== "") {
+          const q = purchaseSearchQuery.trim().toLowerCase();
+          const product = products.find((pr) => pr.id === pur.productId);
+          const invMatch = (pur.invoiceNumber || "").toLowerCase().includes(q);
+          const nameMatch = (product?.name || "").toLowerCase().includes(q);
+          const skuMatch = (product?.sku || "").toLowerCase().includes(q);
+          const notesMatch = (pur.notes || "").toLowerCase().includes(q);
+          if (!invMatch && !nameMatch && !skuMatch && !notesMatch) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        if (purchaseSort === "newest") {
+          return new Date(b.date).getTime() - new Date(a.date).getTime();
+        }
+        if (purchaseSort === "oldest") {
+          return new Date(a.date).getTime() - new Date(b.date).getTime();
+        }
+        if (purchaseSort === "highest_amount") {
+          const amtA = a.totalAmount ?? a.buyPrice * a.quantity;
+          const amtB = b.totalAmount ?? b.buyPrice * b.quantity;
+          return amtB - amtA;
+        }
+        if (purchaseSort === "highest_due") {
+          const dueA = getPurchaseFinancials(a).effectiveDue;
+          const dueB = getPurchaseFinancials(b).effectiveDue;
+          return dueB - dueA;
+        }
+        return 0;
+      });
+  }, [purchases, purchaseStatusFilter, purchaseSearchQuery, purchaseSort, getPurchaseFinancials, products]);
 
   // Summary KPIs for this supplier
   const kpis = useMemo(() => {
@@ -1995,20 +2156,136 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
     closeLumpSumModal();
   }
 
-  // Activity feed: all purchases as events
-  const activityFeed = useMemo(() => {
-    return purchases.map((p) => {
-      const product = products.find((pr) => pr.id === p.productId);
-      return {
-        id: p.id,
-        date: p.date,
-        title: `Purchase: ${product?.name ?? "Unknown Product"}`,
-        detail: `${p.quantity} units × ₹${p.buyPrice.toLocaleString()} = ₹${(p.buyPrice * p.quantity).toLocaleString()} • ${p.paymentStatus}`,
-        invoice: p.invoiceNumber,
-        type: "purchase" as const,
-      };
-    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [purchases, products]);
+  // Unified Supplier Activity Feed (Aggregates Purchases, Payments, Returns, POs)
+  const unifiedActivityStream = useMemo(() => {
+    const events: {
+      id: string;
+      type: "purchase" | "payment" | "return" | "po";
+      date: string;
+      timestamp: number;
+      title: string;
+      detail: string;
+      subDetail?: string;
+      amount?: number;
+      badge: string;
+      badgeColor: string;
+      refNumber?: string;
+      icon: any;
+    }[] = [];
+
+    // 1. Purchases
+    purchases.forEach((p) => {
+      const prod = products.find((pr) => pr.id === p.productId);
+      const amount = p.totalAmount ?? (p.buyPrice * p.quantity);
+      const dateStr = p.createdAt || (p.date ? `${p.date}T12:00:00.000Z` : new Date().toISOString());
+      events.push({
+        id: `act-pur-${p.id}`,
+        type: "purchase",
+        date: dateStr,
+        timestamp: new Date(dateStr).getTime() || 0,
+        title: `Purchase Invoice ${p.invoiceNumber ? `#${p.invoiceNumber}` : ""}`,
+        detail: `${prod?.name || "Product"} · ${p.quantity} units @ ₹${p.buyPrice.toLocaleString()}`,
+        subDetail: `Invoice Total: ₹${amount.toLocaleString()} · Status: ${p.paymentStatus}`,
+        amount,
+        badge: "Invoice",
+        badgeColor: "bg-blue-50 text-blue-700 border-blue-200",
+        refNumber: p.invoiceNumber,
+        icon: ShoppingBag,
+      });
+    });
+
+    // 2. Supplier Payments
+    const supplierPayments = getSupplierPaymentsBySupplier(id);
+    supplierPayments.forEach((sp) => {
+      const dateStr = sp.date || sp.createdAt || new Date().toISOString();
+      events.push({
+        id: `act-pay-${sp.id}`,
+        type: "payment",
+        date: dateStr,
+        timestamp: new Date(dateStr).getTime() || 0,
+        title: `Payment Recorded (${sp.method})`,
+        detail: `Paid ₹${sp.amount.toLocaleString()} ${sp.isUpfront ? "· Upfront deposit" : "· Repayment"}${sp.note ? ` · "${sp.note}"` : ""}`,
+        subDetail: `Recorded by ${sp.paidBy || "Owner"}`,
+        amount: sp.amount,
+        badge: `Payment · ${sp.method}`,
+        badgeColor: "bg-emerald-50 text-emerald-700 border-emerald-200",
+        icon: Coins,
+      });
+    });
+
+    // 3. Purchase Returns
+    const purchaseReturns = getPurchaseReturnsBySupplier(id);
+    purchaseReturns.forEach((pr) => {
+      const prod = products.find((p) => p.id === pr.productId);
+      const dateStr = pr.createdAt || new Date().toISOString();
+      events.push({
+        id: `act-ret-${pr.id}`,
+        type: "return",
+        date: dateStr,
+        timestamp: new Date(dateStr).getTime() || 0,
+        title: "Purchase Stock Return",
+        detail: `Returned ${pr.quantity} units of ${prod?.name || "Product"} (Value: ₹${pr.totalAmount.toLocaleString()})`,
+        subDetail: `${pr.refundAmount > 0 ? `Cash Refund: ₹${pr.refundAmount.toLocaleString()}` : "Balance Adjustment"}${pr.reason ? ` · Reason: "${pr.reason}"` : ""}`,
+        amount: pr.totalAmount,
+        badge: "Return",
+        badgeColor: "bg-rose-50 text-rose-700 border-rose-200",
+        icon: CornerDownLeft,
+      });
+    });
+
+    // 4. Purchase Orders
+    const supplierPOs = (state.purchaseOrders || []).filter((po) => po.supplierId === id);
+    supplierPOs.forEach((po) => {
+      const poTotalValue = po.items.reduce((s, it) => s + ((it.expectedBuyPrice || 0) * (it.quantity || 0)), 0);
+      if (po.activityLog && po.activityLog.length > 0) {
+        po.activityLog.forEach((log, logIdx) => {
+          const dateStr = log.date || po.createdAt || new Date().toISOString();
+          const totalUnits = po.items.reduce((s, it) => s + it.quantity, 0);
+          events.push({
+            id: `act-po-${po.id}-${logIdx}`,
+            type: "po",
+            date: dateStr,
+            timestamp: new Date(dateStr).getTime() || 0,
+            title: `Purchase Order ${po.poNumber} — ${log.type}`,
+            detail: `${log.notes || `PO status set to ${log.type}`} · ${po.items.length} product(s) (${totalUnits} units)`,
+            subDetail: `PO Status: ${po.status} · Estimated Value: ₹${poTotalValue.toLocaleString()}`,
+            amount: poTotalValue,
+            badge: `PO ${log.type}`,
+            badgeColor:
+              log.type === "Completed"
+                ? "bg-green-50 text-green-700 border-green-200"
+                : log.type === "Cancelled"
+                  ? "bg-red-50 text-red-700 border-red-200"
+                  : "bg-purple-50 text-purple-700 border-purple-200",
+            refNumber: po.poNumber,
+            icon: FileText,
+          });
+        });
+      } else {
+        const dateStr = po.createdAt || new Date().toISOString();
+        events.push({
+          id: `act-po-${po.id}-created`,
+          type: "po",
+          date: dateStr,
+          timestamp: new Date(dateStr).getTime() || 0,
+          title: `Purchase Order Created (${po.poNumber})`,
+          detail: `${po.items.length} product(s) · Estimated: ₹${poTotalValue.toLocaleString()}`,
+          subDetail: `Status: ${po.status}`,
+          amount: poTotalValue,
+          badge: `PO ${po.status}`,
+          badgeColor: "bg-purple-50 text-purple-700 border-purple-200",
+          refNumber: po.poNumber,
+          icon: FileText,
+        });
+      }
+    });
+
+    // Sort newest first with deterministic tie-breaker
+    return events.sort((a, b) => {
+      if (b.timestamp !== a.timestamp) return b.timestamp - a.timestamp;
+      return b.id.localeCompare(a.id);
+    });
+  }, [purchases, products, id, getSupplierPaymentsBySupplier, getPurchaseReturnsBySupplier, state.purchaseOrders]);
 
   // Owner guard early return — placed after all hooks to satisfy Rules of Hooks
   if (loading || !isOwner) return null;
@@ -2033,42 +2310,133 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-slate-200 pb-5">
-        <div className="space-y-1.5">
-          <Link href="/suppliers" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-navy-950 font-semibold transition-colors">
-            <ArrowLeft size={13} />
-            Back to Suppliers
-          </Link>
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-black text-navy-950 tracking-tight">{supplier.name}</h1>
-            <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full border ${supplier.status === "Active" ? "bg-green-50 text-green-700 border-green-200" : "bg-slate-100 text-slate-500 border-slate-200"}`}>
-              {supplier.status === "Active" ? <CheckCircle size={9} /> : <XCircle size={9} />}
-              {supplier.status}
-            </span>
+      {/* Supplier Command Header */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* Left: Identity & Metadata */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Link href="/suppliers" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-navy-950 font-semibold transition-colors">
+                <ArrowLeft size={13} />
+                Back to Suppliers
+              </Link>
+            </div>
+
+            <div className="flex items-center gap-3 flex-wrap">
+              <h1 className="text-2xl sm:text-3xl font-black text-navy-950 tracking-tight">{supplier.name}</h1>
+
+              {/* Supplier ID with 1-click Copy */}
+              <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-slate-700 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg">
+                <span className="text-[10px] text-slate-400 font-sans uppercase">ID:</span>
+                {supplier.id}
+                <button
+                  onClick={() => handleCopy(supplier.id, "id")}
+                  title="Copy Supplier ID"
+                  className="text-slate-400 hover:text-slate-700 ml-0.5 cursor-pointer transition-colors"
+                >
+                  {copiedField === "id" ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
+                </button>
+              </span>
+
+              {/* Status Badge */}
+              <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full border ${supplier.status === "Active" ? "bg-green-50 text-green-700 border-green-200" : "bg-slate-100 text-slate-500 border-slate-200"}`}>
+                {supplier.status === "Active" ? <CheckCircle size={11} /> : <XCircle size={11} />}
+                {supplier.status}
+              </span>
+
+              {/* GSTIN with 1-click Copy */}
+              {supplier.gst && (
+                <span className="inline-flex items-center gap-1.5 text-xs font-mono font-medium text-slate-700 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg">
+                  <span className="text-[10px] font-bold uppercase text-slate-400 font-sans">GSTIN:</span>
+                  {supplier.gst}
+                  <button
+                    onClick={() => handleCopy(supplier.gst!, "gst")}
+                    title="Copy GSTIN"
+                    className="text-slate-400 hover:text-slate-700 ml-0.5 cursor-pointer transition-colors"
+                  >
+                    {copiedField === "gst" ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
+                  </button>
+                </span>
+              )}
+            </div>
+
+            {/* Contact Person & Direct Communication Links */}
+            <div className="flex items-center gap-3 flex-wrap text-xs text-slate-600 pt-0.5">
+              {supplier.contactPerson && (
+                <span className="font-semibold text-slate-700">{supplier.contactPerson}</span>
+              )}
+
+              {supplier.phone && (
+                <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/80 px-2.5 py-1 rounded-md">
+                  <a href={`tel:${supplier.phone}`} className="inline-flex items-center gap-1 font-semibold text-slate-700 hover:text-navy-900 hover:underline">
+                    <Phone size={12} className="text-slate-400" />
+                    {supplier.phone}
+                  </a>
+                  <button
+                    onClick={() => handleCopy(supplier.phone!, "phone")}
+                    title="Copy Phone"
+                    className="text-slate-400 hover:text-slate-600 ml-0.5 cursor-pointer transition-colors"
+                  >
+                    {copiedField === "phone" ? <Check size={11} className="text-green-600" /> : <Copy size={11} />}
+                  </button>
+                </div>
+              )}
+
+              {(supplier.whatsApp || supplier.phone) && (
+                <a
+                  href={`https://wa.me/91${(supplier.whatsApp || supplier.phone || "").replace(/[^0-9]/g, "")}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 font-semibold px-2.5 py-1 rounded-md transition-colors"
+                >
+                  <MessageSquare size={12} />
+                  WhatsApp
+                </a>
+              )}
+
+              {supplier.email && (
+                <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/80 px-2.5 py-1 rounded-md">
+                  <a href={`mailto:${supplier.email}`} className="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-navy-900 hover:underline">
+                    <Mail size={12} className="text-slate-400" />
+                    {supplier.email}
+                  </a>
+                  <button
+                    onClick={() => handleCopy(supplier.email!, "email")}
+                    title="Copy Email"
+                    className="text-slate-400 hover:text-slate-600 ml-0.5 cursor-pointer transition-colors"
+                  >
+                    {copiedField === "email" ? <Check size={11} className="text-green-600" /> : <Copy size={11} />}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-          <p className="text-sm text-slate-500">
-            {supplier.contactPerson || "No contact person specified"}
-            {supplier.phone ? ` • ${supplier.phone}` : ""}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {isOwner && kpis.outstanding > 0 && (
-            <button onClick={openLumpSumModal} className="inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-sm font-bold px-4 py-2.5 rounded-xl transition-all shadow-sm hover:shadow cursor-pointer">
-              <Coins size={16} />
-              Record Lump-Sum Payment
+
+          {/* Right: Command Actions */}
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            {isOwner && kpis.outstanding > 0 && (
+              <button onClick={openLumpSumModal} className="inline-flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-xs sm:text-sm font-bold px-3.5 py-2.5 rounded-xl transition-all shadow-xs hover:shadow cursor-pointer">
+                <Coins size={15} />
+                Record Lump-Sum Payment
+              </button>
+            )}
+            {isOwner && (
+              <button onClick={() => setShowAddPO(true)} className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 text-xs sm:text-sm font-semibold px-3.5 py-2.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer">
+                <FileText size={14} />
+                Create PO
+              </button>
+            )}
+            <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-1.5 bg-yellow-400 hover:bg-yellow-300 text-navy-950 text-xs sm:text-sm font-bold px-3.5 py-2.5 rounded-xl transition-all shadow-xs hover:shadow cursor-pointer">
+              <Plus size={15} />
+              Record Invoice
             </button>
-          )}
-          {isOwner && (
-            <button onClick={() => setShowEditSupplier(true)} className="inline-flex items-center gap-2 bg-white border border-slate-200 text-slate-700 text-sm font-semibold px-4 py-2.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer">
-              <Pencil size={14} />
-              Edit
-            </button>
-          )}
-          <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-2 bg-yellow-400 hover:bg-yellow-300 text-navy-950 text-sm font-bold px-4 py-2.5 rounded-xl transition-all shadow-sm hover:shadow cursor-pointer">
-            <Plus size={16} />
-            Record Invoice
-          </button>
+            {isOwner && (
+              <button onClick={() => setShowEditSupplier(true)} className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 text-xs sm:text-sm font-semibold px-3.5 py-2.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer">
+                <Pencil size={13} />
+                Edit
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -2182,70 +2550,216 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
           </div>
         )}
 
-        {/* ── PRODUCTS SUPPLIED TAB ── */}
+        {/* ── PRODUCTS SUPPLIED TAB (PROCUREMENT INTELLIGENCE) ── */}
         {activeTab === "products" && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-black text-slate-800">Products Supplied</h3>
-              <span className="text-[10px] font-bold text-slate-500 uppercase border border-slate-200 rounded-md px-2 py-0.5">
-                {suppliedProducts.length} Product{suppliedProducts.length !== 1 ? "s" : ""}
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h3 className="text-base font-black text-slate-850">Products Supplied & Procurement Intelligence</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Historical buy prices, price trends, and quantity-weighted average procurement costs.</p>
+              </div>
+              <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-md px-2.5 py-1">
+                {productsIntelligence.length} Product{productsIntelligence.length !== 1 ? "s" : ""}
               </span>
             </div>
 
-            {suppliedProducts.length === 0 ? (
+            {productsIntelligence.length === 0 ? (
               <div className="py-16 flex flex-col items-center justify-center gap-3 text-center">
                 <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center"><Package size={20} className="text-slate-300" /></div>
                 <div>
-                  <p className="text-sm font-bold text-slate-700">No Products Yet</p>
-                  <p className="text-xs text-slate-400 mt-0.5 max-w-xs leading-relaxed">Products will appear here after the first purchase is recorded from this supplier.</p>
+                  <p className="text-sm font-bold text-slate-700">No Products Sourced Yet</p>
+                  <p className="text-xs text-slate-400 mt-0.5 max-w-xs leading-relaxed">Products and pricing statistics will appear here after the first purchase invoice is recorded from this supplier.</p>
                 </div>
-                <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-2 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-xl hover:bg-emerald-100 transition-colors cursor-pointer">
+                <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3.5 py-2 rounded-xl hover:bg-emerald-100 transition-colors cursor-pointer">
                   <Plus size={13} />
-                  Add First Purchase
+                  Record First Purchase
                 </button>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200">
-                      <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Product</th>
-                      <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 hidden md:table-cell">Category</th>
-                      <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Current Cost</th>
-                      <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Stock</th>
-                      <th className="px-4 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Details</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {suppliedProducts.map((product) => {
-                      const productPurchases = purchases.filter((p) => p.productId === product.id);
-                      const totalPurchasedQty = productPurchases.reduce((sum, p) => sum + p.quantity, 0);
-                      return (
-                        <tr key={product.id} className="hover:bg-slate-50/70 transition-colors">
-                          <td className="px-4 py-3">
-                            <Link href={`/inventory/${product.id}`} className="font-bold text-slate-800 hover:text-navy-800 hover:underline text-sm">{product.name}</Link>
-                            <p className="text-xs text-slate-400 mt-0.5">{totalPurchasedQty} units purchased total</p>
-                          </td>
-                          <td className="px-4 py-3 text-xs text-slate-500 hidden md:table-cell">{product.category || "—"}</td>
-                          <td className="px-4 py-3 text-right text-xs font-bold text-slate-700">
-                            {isOwner ? `₹${(product.currentCost || 0).toLocaleString()}` : "—"}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <span className={`text-xs font-bold ${product.stock <= product.lowStockThreshold ? "text-red-600" : "text-slate-700"}`}>
-                              {product.stock}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <Link href={`/inventory/${product.id}`} className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-400 hover:bg-navy-50 hover:text-navy-700 transition-colors">
-                              <ChevronRight size={14} />
+              <>
+                {/* Desktop Table View (Hidden on mobile) */}
+                <div className="hidden md:block overflow-x-auto border border-slate-200 rounded-xl">
+                  <table className="w-full text-sm border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200">
+                        <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Product & SKU</th>
+                        <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Last Buy Price</th>
+                        <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Price Trend</th>
+                        <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Min · Max · Wtd Avg</th>
+                        <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Sourcing History</th>
+                        <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Stock</th>
+                        <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {productsIntelligence.map((item) => {
+                        const { product, lastBuyPrice, prevBuyPrice, minBuyPrice, maxBuyPrice, weightedAvgBuyPrice, lastPurchaseDate, purchaseCount, totalPurchasedQty, priceVariancePct, isPreferred } = item;
+                        return (
+                          <tr key={product.id} className="hover:bg-slate-50/70 transition-colors">
+                            {/* Product & SKU */}
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <Link href={`/inventory/${product.id}`} className="font-bold text-slate-850 hover:text-navy-800 hover:underline text-sm">
+                                  {product.name}
+                                </Link>
+                                {isPreferred && (
+                                  <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                                    <Star size={9} className="fill-amber-500 text-amber-500" />
+                                    Preferred
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono mt-0.5">
+                                <span>SKU: {product.sku || "—"}</span>
+                                {product.category && <span className="text-slate-300">·</span>}
+                                {product.category && <span className="font-sans text-slate-500">{product.category}</span>}
+                              </div>
+                            </td>
+
+                            {/* Last Buy Price */}
+                            <td className="px-4 py-3 text-right">
+                              <span className="font-black text-slate-850 text-sm tabular-nums">
+                                ₹{lastBuyPrice.toLocaleString()}
+                              </span>
+                              {prevBuyPrice !== null ? (
+                                <p className="text-[10px] text-slate-400 tabular-nums font-medium">Prev: ₹{prevBuyPrice.toLocaleString()}</p>
+                              ) : (
+                                <p className="text-[10px] text-slate-400 font-normal">1st order</p>
+                              )}
+                            </td>
+
+                            {/* Price Trend */}
+                            <td className="px-4 py-3 text-center">
+                              {priceVariancePct === null ? (
+                                <span className="text-xs text-slate-400 font-medium">—</span>
+                              ) : priceVariancePct > 0 ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md tabular-nums">
+                                  <AlertTriangle size={11} className="text-amber-600" />
+                                  +{priceVariancePct.toFixed(1)}%
+                                </span>
+                              ) : priceVariancePct < 0 ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md tabular-nums">
+                                  <TrendingDown size={11} className="text-emerald-600" />
+                                  {priceVariancePct.toFixed(1)}%
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
+                                  No change
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Min / Max / Weighted Avg */}
+                            <td className="px-4 py-3 text-right">
+                              <div className="text-xs text-slate-600 tabular-nums">
+                                <span className="text-[10px] text-slate-400 font-semibold uppercase">Avg: </span>
+                                <span className="font-bold text-slate-800">₹{Math.round(weightedAvgBuyPrice).toLocaleString()}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-400 tabular-nums mt-0.5">
+                                Min ₹{minBuyPrice.toLocaleString()} · Max ₹{maxBuyPrice.toLocaleString()}
+                              </div>
+                            </td>
+
+                            {/* Sourcing History */}
+                            <td className="px-4 py-3 text-left text-xs">
+                              <p className="font-semibold text-slate-700">{totalPurchasedQty} units <span className="text-slate-400 font-normal">({purchaseCount} order{purchaseCount !== 1 ? "s" : ""})</span></p>
+                              <p className="text-[10px] text-slate-400 mt-0.5">Last: {formatDate(lastPurchaseDate)}</p>
+                            </td>
+
+                            {/* Stock */}
+                            <td className="px-4 py-3 text-right">
+                              <span className={`text-xs font-bold tabular-nums ${product.stock <= product.lowStockThreshold ? "text-red-600 font-black" : "text-slate-700"}`}>
+                                {product.stock} units
+                              </span>
+                            </td>
+
+                            {/* Details Link */}
+                            <td className="px-4 py-3 text-center">
+                              <Link href={`/inventory/${product.id}`} title="View in Inventory" className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-400 hover:bg-navy-50 hover:text-navy-700 transition-colors">
+                                <ChevronRight size={14} />
+                              </Link>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile Card View (Visible on mobile screens) */}
+                <div className="md:hidden space-y-3">
+                  {productsIntelligence.map((item) => {
+                    const { product, lastBuyPrice, prevBuyPrice, minBuyPrice, maxBuyPrice, weightedAvgBuyPrice, lastPurchaseDate, purchaseCount, totalPurchasedQty, priceVariancePct, isPreferred } = item;
+                    return (
+                      <div key={product.id} className="bg-white border border-slate-200 rounded-xl p-4 space-y-3 shadow-2xs">
+                        {/* Header */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <Link href={`/inventory/${product.id}`} className="font-bold text-slate-850 hover:text-navy-800 text-sm break-words">
+                              {product.name}
                             </Link>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                            <div className="flex items-center gap-1.5 text-[11px] text-slate-400 font-mono mt-0.5">
+                              <span>SKU: {product.sku || "—"}</span>
+                              {isPreferred && (
+                                <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 py-0.2 rounded font-sans">
+                                  <Star size={8} className="fill-amber-500 text-amber-500" />
+                                  Preferred
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <Link href={`/inventory/${product.id}`} className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-400 bg-slate-50 border border-slate-200 shrink-0">
+                            <ChevronRight size={13} />
+                          </Link>
+                        </div>
+
+                        {/* Price & Trend Grid */}
+                        <div className="grid grid-cols-2 gap-2 bg-slate-50 rounded-lg p-2.5 border border-slate-100 text-xs">
+                          <div>
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Last Buy Price</span>
+                            <span className="text-sm font-black text-slate-850 tabular-nums">₹{lastBuyPrice.toLocaleString()}</span>
+                            {prevBuyPrice !== null && (
+                              <p className="text-[10px] text-slate-400 tabular-nums">Prev: ₹{prevBuyPrice.toLocaleString()}</p>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Price Movement</span>
+                            <div className="mt-0.5">
+                              {priceVariancePct === null ? (
+                                <span className="text-xs text-slate-400">—</span>
+                              ) : priceVariancePct > 0 ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded">
+                                  <AlertTriangle size={10} /> +{priceVariancePct.toFixed(1)}%
+                                </span>
+                              ) : priceVariancePct < 0 ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded">
+                                  <TrendingDown size={10} /> {priceVariancePct.toFixed(1)}%
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-medium text-slate-600 bg-slate-200 px-1.5 py-0.5 rounded">No change</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Stats Footer */}
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-100">
+                          <div>
+                            <span>Avg: </span>
+                            <span className="font-bold text-slate-700 tabular-nums">₹{Math.round(weightedAvgBuyPrice).toLocaleString()}</span>
+                            <span className="text-slate-300 mx-1">·</span>
+                            <span>Stock: </span>
+                            <span className={`font-bold tabular-nums ${product.stock <= product.lowStockThreshold ? "text-red-600" : "text-slate-700"}`}>{product.stock}</span>
+                          </div>
+                          <span className="text-slate-400 text-[10px]">
+                            {totalPurchasedQty} units ({purchaseCount} orders)
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
             )}
           </div>
         )}
@@ -2253,11 +2767,14 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
         {/* ── PURCHASE HISTORY TAB ── */}
         {activeTab === "purchases" && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-black text-slate-800">Purchase History</h3>
-              <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl hover:bg-emerald-100 transition-colors cursor-pointer">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <h3 className="text-base font-black text-slate-850">Purchase History</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Filter by payment status, search invoices, and track outstanding supplier liabilities.</p>
+              </div>
+              <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3.5 py-2 rounded-xl hover:bg-emerald-100 transition-colors cursor-pointer">
                 <Plus size={13} />
-                Add Purchase
+                Record Purchase
               </button>
             </div>
 
@@ -2265,114 +2782,233 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
               <div className="py-16 flex flex-col items-center justify-center gap-3 text-center">
                 <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center"><ShoppingBag size={20} className="text-slate-300" /></div>
                 <div>
-                  <p className="text-sm font-bold text-slate-700">No Purchases Yet</p>
-                  <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">Record the first purchase from {supplier.name} to get started.</p>
+                  <p className="text-sm font-bold text-slate-700">No Purchases Recorded Yet</p>
+                  <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">Record the first purchase invoice from {supplier.name} to start tracking inventory and liabilities.</p>
                 </div>
-                <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-2 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-xl hover:bg-emerald-100 transition-colors cursor-pointer">
+                <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3.5 py-2 rounded-xl hover:bg-emerald-100 transition-colors cursor-pointer">
                   <Plus size={13} />
                   Record First Purchase
                 </button>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200">
-                      <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Invoice</th>
-                      <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Date</th>
-                      <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Product</th>
-                      <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Qty</th>
-                      {isOwner && <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Rate</th>}
-                      {isOwner && <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Total</th>}
-                      {isOwner && <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Paid</th>}
-                      {isOwner && <th className="px-4 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Due</th>}
-                      <th className="px-4 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Status</th>
-                      <th className="px-4 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {purchases.map((pur) => {
-                      const product = products.find((p) => p.id === pur.productId);
-                      const total = pur.totalAmount ?? (pur.buyPrice * pur.quantity);
+              <>
+                {/* Search, Filter Pills & Sort Toolbar */}
+                <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-slate-50/70 border border-slate-200/80 p-3 rounded-xl">
+                  {/* Search Input */}
+                  <div className="relative flex-1 min-w-[220px]">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={purchaseSearchQuery}
+                      onChange={(e) => setPurchaseSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setPurchaseSearchQuery("");
+                      }}
+                      placeholder="Search invoice #, product, SKU... (Esc to clear)"
+                      className="w-full pl-9 pr-8 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-400"
+                    />
+                    {purchaseSearchQuery && (
+                      <button
+                        onClick={() => setPurchaseSearchQuery("")}
+                        title="Clear search"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
 
-                      // Derive paid, due and status dynamically from actual payments and returns
-                      const paymentsForP = getSupplierPaymentsBySupplier(id).filter(sp => sp.purchaseId === pur.id);
-                      const paid = paymentsForP.reduce((s, pay) => s + pay.amount, 0);
-                      const returnsForP = getPurchaseReturnsBySupplier(id).filter(r => r.purchaseId === pur.id);
-                      const returnedValue = returnsForP.reduce((s, r) => s + r.totalAmount, 0);
-                      const due = Math.max(0, total - returnedValue - paid);
-                      const computedStatus = due <= 0 ? "Paid" : (paid > 0 ? "Partial" : "Credit");
+                  {/* Filter Pills & Sort Selector */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Payment Status Pills */}
+                    <div className="inline-flex items-center bg-white border border-slate-200 rounded-lg p-0.5 text-xs">
+                      {[
+                        { id: "All" as const, label: "All", count: purchaseFilterCounts.all },
+                        { id: "Paid" as const, label: "Paid", count: purchaseFilterCounts.paid },
+                        { id: "Partial" as const, label: "Partial", count: purchaseFilterCounts.partial },
+                        { id: "Credit" as const, label: "Credit", count: purchaseFilterCounts.credit },
+                      ].map((pill) => (
+                        <button
+                          key={pill.id}
+                          onClick={() => setPurchaseStatusFilter(pill.id)}
+                          className={`px-2.5 py-1 rounded-md font-semibold text-xs transition-all cursor-pointer ${
+                            purchaseStatusFilter === pill.id
+                              ? "bg-navy-950 text-white shadow-2xs"
+                              : "text-slate-600 hover:text-navy-950 hover:bg-slate-50"
+                          }`}
+                        >
+                          {pill.label} <span className={`text-[10px] font-normal ${purchaseStatusFilter === pill.id ? "text-slate-300" : "text-slate-400"}`}>({pill.count})</span>
+                        </button>
+                      ))}
+                    </div>
 
-                      const statusColors = computedStatus === "Paid"
-                        ? "bg-green-100 text-green-800 border-green-200"
-                        : computedStatus === "Partial"
-                          ? "bg-amber-100 text-amber-800 border-amber-200"
-                          : "bg-red-100 text-red-800 border-red-200";
-                      return (
-                        <tr key={pur.id} className="hover:bg-slate-50/70 transition-colors">
-                          <td className="px-4 py-3 text-xs font-mono text-slate-400">{pur.invoiceNumber || "—"}</td>
-                          <td className="px-4 py-3 text-xs text-slate-600 font-medium whitespace-nowrap">{formatPurchaseDate(pur)}</td>
-                          <td className="px-4 py-3 text-xs font-semibold text-slate-700">
-                            {product ? (
-                              <Link href={`/inventory/${product.id}`} className="hover:text-navy-700 hover:underline">{product.name}</Link>
-                            ) : "—"}
-                          </td>
-                          <td className="px-4 py-3 text-xs text-right font-bold text-slate-700">{pur.quantity}</td>
-                          {isOwner && <td className="px-4 py-3 text-xs text-right text-slate-600">₹{pur.buyPrice.toLocaleString()}</td>}
-                          {isOwner && <td className="px-4 py-3 text-xs text-right font-bold text-slate-800">₹{total.toLocaleString()}</td>}
-                          {isOwner && <td className="px-4 py-3 text-xs text-right text-green-700 font-semibold">₹{paid.toLocaleString()}</td>}
-                          {isOwner && (
-                            <td className="px-4 py-3 text-xs text-right font-bold">
-                              <span className={due > 0 ? "text-red-600" : "text-slate-400"}>
-                                ₹{due.toLocaleString()}
-                              </span>
-                            </td>
-                          )}
-                          <td className="px-4 py-3 text-center">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${statusColors}`}>
-                              {computedStatus}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              <Link href={`/inventory/${product?.id ?? ""}`} title="View Product" className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-400 hover:bg-navy-50 hover:text-navy-700 transition-colors">
-                                <ChevronRight size={13} />
-                              </Link>
-                              {isOwner && (
-                                <button
-                                  onClick={() => setEditPurchase(pur)}
-                                  title="Edit Purchase"
-                                  className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors cursor-pointer"
-                                >
-                                  <Pencil size={13} />
-                                </button>
-                              )}
-                              {isOwner && due > 0 && (
-                                <button
-                                  onClick={() => setPayPurchase(pur)}
-                                  title="Record Payment"
-                                  className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-amber-500 hover:bg-amber-50 hover:text-amber-700 transition-colors cursor-pointer"
-                                >
-                                  <Coins size={13} />
-                                </button>
-                              )}
-                              {isOwner && (pur.quantity - (pur.returnedQuantity ?? 0)) > 0 && (
-                                <button
-                                  onClick={() => setReturnPurchase(pur)}
-                                  title="Return Stock"
-                                  className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition-colors cursor-pointer"
-                                >
-                                  <CornerDownLeft size={13} />
-                                </button>
-                              )}
-                            </div>
-                          </td>
+                    {/* Sort Dropdown */}
+                    <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-600">
+                      <ArrowUpDown size={12} className="text-slate-400" />
+                      <select
+                        value={purchaseSort}
+                        onChange={(e) => setPurchaseSort(e.target.value as any)}
+                        className="bg-transparent border-none text-xs font-semibold text-slate-700 focus:outline-none cursor-pointer"
+                      >
+                        <option value="newest">Newest Date</option>
+                        <option value="oldest">Oldest Date</option>
+                        <option value="highest_amount">Highest Amount</option>
+                        <option value="highest_due">Highest Due</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Active Filter Bar (If filtered) */}
+                {(purchaseStatusFilter !== "All" || purchaseSearchQuery.trim() !== "") && (
+                  <div className="flex items-center justify-between text-xs bg-slate-100/70 border border-slate-200 px-3 py-1.5 rounded-lg">
+                    <span className="text-slate-600">
+                      Showing <strong className="text-slate-900 font-bold">{filteredPurchases.length}</strong> of {purchases.length} invoices
+                      {purchaseStatusFilter !== "All" && ` · Status: ${purchaseStatusFilter}`}
+                      {purchaseSearchQuery.trim() && ` · Query: "${purchaseSearchQuery.trim()}"`}
+                    </span>
+                    <button
+                      onClick={() => {
+                        setPurchaseStatusFilter("All");
+                        setPurchaseSearchQuery("");
+                      }}
+                      className="text-navy-700 hover:text-navy-900 font-bold hover:underline cursor-pointer"
+                    >
+                      Clear Filters
+                    </button>
+                  </div>
+                )}
+
+                {/* Purchase Table */}
+                {filteredPurchases.length === 0 ? (
+                  <div className="py-12 flex flex-col items-center justify-center text-center gap-2 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                    <p className="text-sm font-bold text-slate-700">No purchases match your current filters.</p>
+                    <p className="text-xs text-slate-400">Try adjusting your search query or payment status filter.</p>
+                    <button
+                      onClick={() => {
+                        setPurchaseStatusFilter("All");
+                        setPurchaseSearchQuery("");
+                      }}
+                      className="mt-1 text-xs font-bold text-navy-700 bg-white border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      Clear All Filters
+                    </button>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200">
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Invoice</th>
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Date</th>
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Product & SKU</th>
+                          <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Qty</th>
+                          {isOwner && <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Rate</th>}
+                          {isOwner && <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Total</th>}
+                          {isOwner && <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Paid</th>}
+                          {isOwner && <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Due</th>}
+                          <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Status</th>
+                          <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Actions</th>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredPurchases.map((pur) => {
+                          const product = products.find((p) => p.id === pur.productId);
+                          const fin = getPurchaseFinancials(pur);
+
+                          const statusColors =
+                            fin.status === "Paid"
+                              ? "bg-green-50 text-green-700 border-green-200"
+                              : fin.status === "Partial"
+                                ? "bg-amber-50 text-amber-700 border-amber-200"
+                                : "bg-red-50 text-red-700 border-red-200";
+                          return (
+                            <tr key={pur.id} className="hover:bg-slate-50/70 transition-colors">
+                              <td className="px-4 py-3 text-xs font-mono text-slate-500 font-bold">
+                                {pur.invoiceNumber || "—"}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-slate-600 font-medium whitespace-nowrap">
+                                {formatPurchaseDate(pur)}
+                              </td>
+                              <td className="px-4 py-3 text-xs font-semibold text-slate-700">
+                                {product ? (
+                                  <div>
+                                    <Link href={`/inventory/${product.id}`} className="hover:text-navy-700 hover:underline">
+                                      {product.name}
+                                    </Link>
+                                    <p className="text-[10px] text-slate-400 font-mono font-normal">
+                                      SKU: {product.sku || "—"}
+                                      {fin.returnedQty > 0 && (
+                                        <span className="text-rose-600 font-semibold ml-1.5">({fin.returnedQty} returned)</span>
+                                      )}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-right font-bold text-slate-700">{pur.quantity}</td>
+                              {isOwner && <td className="px-4 py-3 text-xs text-right text-slate-600">₹{pur.buyPrice.toLocaleString()}</td>}
+                              {isOwner && <td className="px-4 py-3 text-xs text-right font-bold text-slate-800">₹{fin.total.toLocaleString()}</td>}
+                              {isOwner && <td className="px-4 py-3 text-xs text-right text-green-700 font-semibold">₹{fin.paid.toLocaleString()}</td>}
+                              {isOwner && (
+                                <td className="px-4 py-3 text-xs text-right font-bold">
+                                  <span className={fin.effectiveDue > 0 ? "text-red-600 font-black" : "text-slate-400 font-normal"}>
+                                    ₹{fin.effectiveDue.toLocaleString()}
+                                  </span>
+                                </td>
+                              )}
+                              <td className="px-4 py-3 text-center">
+                                <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${statusColors}`}>
+                                  {fin.status}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <Link
+                                    href={`/inventory/${product?.id ?? ""}`}
+                                    title="View Product"
+                                    className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-400 hover:bg-navy-50 hover:text-navy-700 transition-colors"
+                                  >
+                                    <ChevronRight size={13} />
+                                  </Link>
+                                  {isOwner && (
+                                    <button
+                                      onClick={() => setEditPurchase(pur)}
+                                      title="Edit Purchase"
+                                      className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors cursor-pointer"
+                                    >
+                                      <Pencil size={13} />
+                                    </button>
+                                  )}
+                                  {isOwner && fin.effectiveDue > 0 && (
+                                    <button
+                                      onClick={() => setPayPurchase(pur)}
+                                      title="Record Payment"
+                                      className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-amber-500 hover:bg-amber-50 hover:text-amber-700 transition-colors cursor-pointer"
+                                    >
+                                      <Coins size={13} />
+                                    </button>
+                                  )}
+                                  {isOwner && (pur.quantity - (pur.returnedQuantity ?? 0)) > 0 && (
+                                    <button
+                                      onClick={() => setReturnPurchase(pur)}
+                                      title="Return Stock"
+                                      className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition-colors cursor-pointer"
+                                    >
+                                      <CornerDownLeft size={13} />
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -2866,39 +3502,69 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
           );
         })()}
 
-        {/* ── ACTIVITY TAB ── */}
+        {/* ── ACTIVITY TAB (UNIFIED SUPPLIER EVENT STREAM) ── */}
         {activeTab === "activity" && (
           <div className="space-y-4">
-            <h3 className="text-base font-black text-slate-800">Activity Feed</h3>
-            {activityFeed.length === 0 ? (
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h3 className="text-base font-black text-slate-850">Supplier Activity Stream</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Chronological audit feed of purchase invoices, vendor payments, stock returns, and purchase order milestones.</p>
+              </div>
+              <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-md px-2.5 py-1">
+                {unifiedActivityStream.length} Event{unifiedActivityStream.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+
+            {unifiedActivityStream.length === 0 ? (
               <div className="py-16 flex flex-col items-center justify-center gap-3 text-center">
                 <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center"><Activity size={20} className="text-slate-300" /></div>
                 <div>
-                  <p className="text-sm font-bold text-slate-700">No Activity Yet</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Activity will appear here after the first purchase is recorded.</p>
+                  <p className="text-sm font-bold text-slate-700">No Activity Recorded Yet</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Activity events will automatically appear here as purchases, payments, returns, and POs are logged.</p>
                 </div>
               </div>
             ) : (
-              <div className="relative border-l-2 border-slate-100 ml-4 pl-6 space-y-5">
-                {activityFeed.map((event) => (
-                  <div key={event.id} className="relative">
-                    <span className="absolute -left-[31px] top-2 w-4 h-4 rounded-full border-2 border-emerald-500 bg-white flex items-center justify-center">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                    </span>
-                    <div className="bg-slate-50/50 border border-slate-150 rounded-xl p-4 hover:bg-slate-50 transition-colors">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="text-sm font-bold text-slate-800 leading-tight">{event.title}</p>
-                          <p className="text-xs text-slate-500 mt-0.5">{event.detail}</p>
-                          {event.invoice && (
-                            <p className="text-[10px] text-slate-400 font-mono mt-1">Invoice: {event.invoice}</p>
-                          )}
+              <div className="relative border-l-2 border-slate-150 ml-4 pl-6 space-y-4">
+                {unifiedActivityStream.map((event) => {
+                  const EventIcon = event.icon;
+                  return (
+                    <div key={event.id} className="relative">
+                      {/* Node Icon on Timeline */}
+                      <span className="absolute -left-[35px] top-1.5 w-5 h-5 rounded-full bg-white border-2 border-slate-300 flex items-center justify-center text-slate-600 shadow-2xs">
+                        <EventIcon size={10} />
+                      </span>
+
+                      {/* Event Card */}
+                      <div className="bg-slate-50/70 border border-slate-200/80 rounded-xl p-3.5 hover:bg-slate-50 transition-colors">
+                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${event.badgeColor}`}>
+                                {event.badge}
+                              </span>
+                              <p className="text-xs sm:text-sm font-bold text-slate-850">{event.title}</p>
+                            </div>
+                            <p className="text-xs text-slate-600 leading-snug">{event.detail}</p>
+                            {event.subDetail && (
+                              <p className="text-[11px] text-slate-400 font-mono">{event.subDetail}</p>
+                            )}
+                          </div>
+
+                          <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-1 shrink-0 pt-1 sm:pt-0">
+                            {event.amount !== undefined && (
+                              <span className="text-xs font-bold text-slate-800 tabular-nums">
+                                ₹{event.amount.toLocaleString()}
+                              </span>
+                            )}
+                            <span className="text-[10px] text-slate-400 font-medium">
+                              {formatActivityTimestamp(event.date)}
+                            </span>
+                          </div>
                         </div>
-                        <span className="text-[10px] text-slate-400 shrink-0">{formatDate(event.date)}</span>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

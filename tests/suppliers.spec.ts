@@ -344,4 +344,63 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
     expect(staffPage.url()).toContain('/dashboard');
     await staffContext.close();
   });
+
+  test('Sprint 2A: Supplier Detail — Command Header, Products Intelligence, Purchase Search/Filters, and Unified Activity', async ({ page }) => {
+    // 1. Create Supplier
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
+    await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Apex Auto Spares');
+    await page.locator('.fixed input[placeholder*="Rajesh Kumar"]').fill('Vikram Malhotra');
+    await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('123 Auto Hub, Pune');
+    await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9822114455');
+    await page.locator('.fixed input[placeholder="98765 43210"]').nth(1).fill('9822114455');
+    await page.locator('.fixed input[placeholder*="supplier@example.com"]').fill('vikram@apexspares.com');
+    await page.locator('.fixed input[placeholder*="29ABCDE1234F1Z5"]').fill('27AAAAA0000A1Z5');
+    await page.locator('.fixed button:has-text("Add Supplier")').click();
+
+    // 2. Navigate to Supplier Detail
+    await page.locator('tbody tr:has-text("Apex Auto Spares") a:has-text("Apex Auto Spares")').click();
+    await page.waitForURL('**/suppliers/s-*');
+
+    // 3. Verify Command Header
+    await expect(page.locator('h1:has-text("Apex Auto Spares")')).toBeVisible();
+    await expect(page.locator('text=27AAAAA0000A1Z5').first()).toBeVisible();
+    await expect(page.locator('text=Vikram Malhotra').first()).toBeVisible();
+    await expect(page.locator('a[href="tel:9822114455"]').first()).toBeVisible();
+    await expect(page.locator('a[href*="wa.me"]').first()).toBeVisible();
+    await expect(page.locator('a[href="mailto:vikram@apexspares.com"]').first()).toBeVisible();
+
+    // 4. Test Copy button on Supplier ID
+    const copyIdBtn = page.locator('button[title="Copy Supplier ID"]');
+    await expect(copyIdBtn).toBeVisible();
+    await copyIdBtn.click();
+
+    // 5. Test Copy button on GSTIN
+    const copyGstBtn = page.locator('button[title="Copy GSTIN"]');
+    await expect(copyGstBtn).toBeVisible();
+    await copyGstBtn.click();
+
+    // 6. Test Record Invoice from Command Header
+    await page.locator('button:has-text("Record Invoice")').click();
+    await expect(page.locator('h2:has-text("Record Supplier Invoice")')).toBeVisible();
+    await page.locator('button:has-text("Cancel")').first().click();
+
+    // 7. Verify Tabs exist
+    await expect(page.locator('button:has-text("Products Supplied")')).toBeVisible();
+    await expect(page.locator('button:has-text("Purchase History")')).toBeVisible();
+    await expect(page.locator('button:has-text("Activity")')).toBeVisible();
+
+    // 8. Switch to Products Supplied Tab
+    await page.locator('button:has-text("Products Supplied")').click();
+    await expect(page.locator('text=Products Supplied & Procurement Intelligence')).toBeVisible();
+
+    // 9. Switch to Purchase History Tab and verify empty state & CTA
+    await page.locator('button:has-text("Purchase History")').click();
+    await expect(page.locator('text=No Purchases Recorded Yet')).toBeVisible();
+    await expect(page.locator('button:has-text("Record First Purchase")')).toBeVisible();
+
+    // 10. Switch to Activity Tab and verify unified stream header & empty state
+    await page.locator('button:has-text("Activity")').click();
+    await expect(page.locator('text=Supplier Activity Stream')).toBeVisible();
+    await expect(page.locator('text=No Activity Recorded Yet')).toBeVisible();
+  });
 });

@@ -1830,6 +1830,25 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
   const [convertingPO, setConvertingPO] = useState<PurchaseOrder | null>(null);
   const [expandedTimelines, setExpandedTimelines] = useState<Record<string, boolean>>({});
 
+  // Support incoming URL query actions (e.g. ?action=new-invoice or ?action=new-po)
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      const action = sp.get("action");
+      const tab = sp.get("tab");
+      if (tab && (tab === "overview" || tab === "products" || tab === "purchases" || tab === "purchase_orders" || tab === "payments" || tab === "activity")) {
+        setActiveTab(tab as TabId);
+      }
+      if (action === "new-invoice") {
+        setActiveTab("purchases");
+        setShowAddPurchase(true);
+      } else if (action === "new-po") {
+        setActiveTab("purchase_orders");
+        setShowAddPO(true);
+      }
+    }
+  }, []);
+
   const handleConvertPOToInvoice = useCallback((po: PurchaseOrder) => {
     setConvertingPO(po);
     setShowAddPurchase(true);

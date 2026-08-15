@@ -1,17 +1,18 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () => {
-  test.beforeEach(async ({ page, context }) => {
-    await context.addInitScript(() => {
-      localStorage.setItem('role', 'owner');
-    });
+  test.beforeEach(async ({ page }) => {
     await page.goto('http://localhost:3000/suppliers');
-    await page.evaluate(() => localStorage.removeItem('autovault_store'));
+    await page.evaluate(() => {
+      localStorage.setItem('role', 'owner');
+      localStorage.removeItem('autovault_store');
+    });
     await page.reload();
+    await page.locator('button[data-testid="add-supplier-btn"]').waitFor({ state: 'visible', timeout: 20000 });
   });
 
   test('Scenario 1: Name + Address + Phone creates supplier successfully', async ({ page }) => {
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Minda Industries Ltd.');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Thane West');
     await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9876543210');
@@ -21,7 +22,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
   });
 
   test('Scenario 2: Name + Address + Email creates supplier successfully', async ({ page }) => {
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Bosch India');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Bangalore Electronic City');
     await page.locator('.fixed input[placeholder*="supplier@example.com"]').fill('sales@bosch.in');
@@ -31,7 +32,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
   });
 
   test('Scenario 3: Name + Address + Phone + Email creates supplier successfully', async ({ page }) => {
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Lumax Auto Technologies');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Pune MIDC');
     await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9822012345');
@@ -42,7 +43,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
   });
 
   test('Scenario 4: Name + Address without Phone/Email is blocked', async ({ page }) => {
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Uno Minda Ltd.');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Gurgaon Sector 18');
     await page.locator('.fixed button:has-text("Add Supplier")').click();
@@ -50,7 +51,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
   });
 
   test('Scenario 5: Name + Phone without Address is blocked', async ({ page }) => {
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Exide Industries');
     await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9830012345');
     await page.locator('.fixed button:has-text("Add Supplier")').click();
@@ -58,7 +59,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
   });
 
   test('Scenario 6: Name + Email without Address (whitespace-only) is blocked', async ({ page }) => {
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Amaron Batteries');
     await page.locator('.fixed input[placeholder*="supplier@example.com"]').fill('support@amaron.com');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('   ');
@@ -67,7 +68,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
   });
 
   test('Scenario 7: Optional fields empty is accepted', async ({ page }) => {
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('7 Star Accessories');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Mumbai Central');
     await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9820011223');
@@ -76,7 +77,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
   });
 
   test('Scenario 8 & 9: Invalid Phone and Email are blocked', async ({ page }) => {
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Speed Auto');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Delhi');
     await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('12345');
@@ -88,7 +89,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
 
   test('Scenario 10, 11, 12, 13: Duplicate Name, Phone, Email, GST are blocked', async ({ page }) => {
     // Add first supplier
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Minda Industries Ltd.');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Thane');
     await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9876543210');
@@ -97,7 +98,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
     await page.locator('.fixed button:has-text("Add Supplier")').click();
 
     // Try adding duplicate name (case variation)
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('minda industries ltd.');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Pune');
     await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9811122233');
@@ -106,7 +107,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
     await page.locator('.fixed button:has-text("Cancel")').click();
 
     // Try adding duplicate phone
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Unique Name 1');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Pune');
     await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9876543210');
@@ -115,7 +116,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
     await page.locator('.fixed button:has-text("Cancel")').click();
 
     // Try adding duplicate email
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Unique Name 2');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Pune');
     await page.locator('.fixed input[placeholder*="supplier@example.com"]').fill('SALES@MINDA.COM');
@@ -124,7 +125,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
     await page.locator('.fixed button:has-text("Cancel")').click();
 
     // Try adding duplicate GST
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Unique Name 3');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Pune');
     await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9844455566');
@@ -135,7 +136,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
 
   test('Scenario 14, 15, 16: Same Phone+WhatsApp allowed, Edit unchanged allowed, Edit duplicate blocked', async ({ page }) => {
     // Add Supplier A
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Supplier A');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Address A');
     await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9899988877');
@@ -143,7 +144,7 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
     await page.locator('.fixed button:has-text("Add Supplier")').click();
 
     // Add Supplier B
-    await page.locator('button:has-text("Add Supplier")').first().click();
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Supplier B');
     await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Address B');
     await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9811122233');
@@ -159,5 +160,188 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
     await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Supplier B');
     await page.locator('.fixed button:has-text("Save Changes")').click();
     await expect(page.locator('.fixed.inset-0')).toContainText('Supplier with this name already exists.');
+  });
+
+  test('Sprint 1: Actionable KPI Cards Filtering & Clear Filter', async ({ page }) => {
+    // Add Active Supplier
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
+    await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Active Vendor Alpha');
+    await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Alpha Lane 1');
+    await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9811001100');
+    await page.locator('.fixed button:has-text("Add Supplier")').click();
+
+    // Add Inactive Supplier
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
+    await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Inactive Vendor Beta');
+    await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Beta Lane 2');
+    await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9822002200');
+    await page.locator('.fixed select').last().selectOption('Inactive');
+    await page.locator('.fixed button:has-text("Add Supplier")').click();
+
+    // Verify 2 rows present
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+
+    // Click Active Suppliers KPI Card
+    await page.locator('button[data-kpi="active"]').click();
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+    await expect(page.locator('tbody tr')).toContainText('Active Vendor Alpha');
+
+    // Verify Active Filter Banner
+    await expect(page.locator('text=Active Filter:')).toBeVisible();
+
+    // Clear Filter
+    await page.locator('button:has-text("Clear Filter")').click();
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+
+    // Click Total Suppliers KPI Card to reset
+    await page.locator('button[data-kpi="all"]').click();
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+  });
+
+  test('Sprint 1: Advanced Search and Escape to Clear', async ({ page }) => {
+    // Add Supplier
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
+    await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Super Parts Ltd');
+    await page.locator('.fixed input[placeholder*="Rajesh Kumar"]').fill('Suresh Raina');
+    await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Chennai Port Road');
+    await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9844004400');
+    await page.locator('.fixed input[placeholder*="supplier@example.com"]').fill('suresh@superparts.com');
+    await page.locator('.fixed input[placeholder*="29ABCDE1234F1Z5"]').fill('33AAAAA0000A1Z5');
+    await page.locator('.fixed button:has-text("Add Supplier")').click();
+
+    const searchInput = page.locator('input[placeholder*="Search suppliers"]');
+
+    // Search by Name
+    await searchInput.fill('Super Parts');
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+
+    // Search by Contact Person
+    await searchInput.fill('Suresh');
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+
+    // Search by Phone
+    await searchInput.fill('9844004400');
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+
+    // Search by GSTIN
+    await searchInput.fill('33AAAAA0000A1Z5');
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+
+    // Clear search with Escape key
+    await searchInput.press('Escape');
+    await expect(searchInput).toHaveValue('');
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+  });
+
+  test('Sprint 1: Row Quick-Action Menu (...), Copy Actions, and Direct Links', async ({ page }) => {
+    // Add Supplier
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
+    await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Quick Action Supplier');
+    await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Bangalore Peenya');
+    await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9870098700');
+    await page.locator('.fixed input[placeholder*="supplier@example.com"]').fill('quick@supplier.com');
+    await page.locator('.fixed button:has-text("Add Supplier")').click();
+
+    // Verify direct contact links exist
+    await expect(page.locator('a[href="tel:9870098700"]').first()).toBeVisible();
+    await expect(page.locator('a[href="mailto:quick@supplier.com"]').first()).toBeVisible();
+
+    // Open Row Quick Action menu (...)
+    const triggerBtn = page.locator('button[aria-label*="More actions"]').first();
+    await triggerBtn.click();
+    await expect(page.locator('[data-testid="floating-supplier-menu"]')).toBeVisible();
+    await expect(page.locator('text=View Profile')).toBeVisible();
+    await expect(page.locator('text=New Purchase Invoice')).toBeVisible();
+    await expect(page.locator('text=Create Purchase Order')).toBeVisible();
+    await expect(page.locator('text=Copy Supplier ID')).toBeVisible();
+
+    // Trigger Edit from Quick Action Menu
+    await page.locator('button:has-text("Edit Supplier")').click();
+    await expect(page.locator('.fixed.inset-0 h2')).toContainText('Edit Supplier');
+    await page.locator('.fixed button:has-text("Cancel")').click();
+    await expect(page.locator('.fixed.inset-0')).toHaveCount(0);
+  });
+
+  test('Sprint 1: Mobile Touch-Friendly Card View & Responsive Viewports', async ({ page }) => {
+    // Add Supplier
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
+    await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Mobile Responsive Vendor');
+    await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Mumbai Andheri');
+    await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9810098100');
+    await page.locator('.fixed button:has-text("Add Supplier")').click();
+
+    const viewports = [
+      { width: 320, height: 600 },
+      { width: 375, height: 667 },
+      { width: 768, height: 1024 },
+      { width: 1024, height: 768 },
+      { width: 1280, height: 800 },
+    ];
+
+    for (const vp of viewports) {
+      await page.setViewportSize(vp);
+      await page.waitForTimeout(100);
+
+      // Check no horizontal scrollbar on body
+      const isOverflowing = await page.evaluate(() => {
+        return document.documentElement.scrollWidth > document.documentElement.clientWidth;
+      });
+      expect(isOverflowing).toBe(false);
+
+      if (vp.width < 768) {
+        // Mobile cards should be visible
+        await expect(page.locator('.md\\:hidden').first()).toBeVisible();
+        await expect(page.locator('.md\\:hidden')).toContainText('Mobile Responsive Vendor');
+      } else {
+        // Desktop table should be visible
+        await expect(page.locator('.hidden.md\\:block')).toBeVisible();
+      }
+    }
+  });
+
+  test('Sprint 2: Floating Portal Dropdown — Flipping, Non-Clipping, and Dismissal Mechanics', async ({ page }) => {
+    // Add Supplier
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
+    await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Portal Test Vendor');
+    await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Pune Hinjewadi');
+    await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9823001122');
+    await page.locator('.fixed button:has-text("Add Supplier")').click();
+
+    const triggerBtn = page.locator('tbody tr button[aria-label*="More actions"]').first();
+
+    // 1. Open Floating Menu
+    await triggerBtn.click();
+    const floatingMenu = page.locator('[data-testid="floating-supplier-menu"]');
+    await expect(floatingMenu).toBeVisible();
+    await expect(triggerBtn).toHaveAttribute('aria-expanded', 'true');
+
+    // 2. Escape key dismissal
+    await page.keyboard.press('Escape');
+    await expect(floatingMenu).toHaveCount(0);
+    await expect(triggerBtn).toHaveAttribute('aria-expanded', 'false');
+
+    // 3. Reopen & Backdrop click dismissal
+    await triggerBtn.click();
+    await expect(floatingMenu).toBeVisible();
+    await page.locator('[data-testid="floating-menu-backdrop"]').click({ position: { x: 10, y: 10 } });
+    await expect(floatingMenu).toHaveCount(0);
+
+    // 4. Verify no horizontal or vertical table layout overflow from menu
+    const isOverflowing = await page.evaluate(() => {
+      return document.documentElement.scrollWidth > document.documentElement.clientWidth;
+    });
+    expect(isOverflowing).toBe(false);
+  });
+
+  test('Sprint 1: Role-Based Access Guard — Staff redirected away', async ({ page }) => {
+    const staffContext = await page.context().browser()!.newContext();
+    const staffPage = await staffContext.newPage();
+    await staffContext.addInitScript(() => {
+      localStorage.setItem('role', 'staff');
+    });
+    await staffPage.goto('http://localhost:3000/suppliers');
+    await staffPage.waitForURL('**/dashboard');
+    expect(staffPage.url()).toContain('/dashboard');
+    await staffContext.close();
   });
 });

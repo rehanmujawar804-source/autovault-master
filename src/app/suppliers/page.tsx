@@ -723,7 +723,7 @@ function FloatingRowMenu({
 //  SUPPLIERS PAGE (Sprint 1 Upgrades)
 // ─────────────────────────────────────────────
 
-type KpiFilter = null | "all" | "active" | "has_outstanding" | "payment_attention" | "purchased_this_month";
+type KpiFilter = null | "all" | "active" | "has_outstanding" | "payment_attention" | "over_90_days" | "purchased_this_month";
 
 type SortOption =
   | "newest"
@@ -913,6 +913,7 @@ export default function SuppliersPage() {
         outstandingBalance: number;
         oldestUnpaidDays: number;
         hasPaymentAttention: boolean;
+        hasOver90DaysDue: boolean;
         hasPurchasedThisMonth: boolean;
         isRecentlyAdded: boolean;
       }
@@ -939,14 +940,16 @@ export default function SuppliersPage() {
       const openPurchases = sp.filter((p) => getEffectiveDue(p) > 0);
       let oldestUnpaidDays = 0;
       let hasPaymentAttention = false;
+      let hasOver90DaysDue = false;
 
       if (openPurchases.length > 0) {
         const oldestUnpaid = [...openPurchases].sort(
-          (a, b) => new Date(a.createdAt || a.date).getTime() - new Date(b.createdAt || b.date).getTime()
+          (a, b) => new Date(a.date || a.createdAt).getTime() - new Date(b.date || b.createdAt).getTime()
         )[0];
-        const oldestTime = new Date(oldestUnpaid.createdAt || oldestUnpaid.date).getTime();
+        const oldestTime = new Date(oldestUnpaid.date || oldestUnpaid.createdAt).getTime();
         oldestUnpaidDays = Math.max(0, Math.floor((now.getTime() - oldestTime) / (1000 * 60 * 60 * 24)));
         hasPaymentAttention = oldestUnpaidDays >= 30;
+        hasOver90DaysDue = oldestUnpaidDays > 90 && outstanding > 0;
       }
 
       const hasPurchasedThisMonth = sp.some((p) => {
@@ -969,6 +972,7 @@ export default function SuppliersPage() {
         outstandingBalance: outstanding,
         oldestUnpaidDays,
         hasPaymentAttention,
+        hasOver90DaysDue,
         hasPurchasedThisMonth,
         isRecentlyAdded,
       };
@@ -988,6 +992,8 @@ export default function SuppliersPage() {
     let suppliersWithDuesCount = 0;
     let attentionSupplierCount = 0;
     let attentionTotalAmount = 0;
+    let over90SupplierCount = 0;
+    let over90TotalAmount = 0;
 
     for (const s of suppliers) {
       const stats = supplierStats[s.id];
@@ -999,6 +1005,10 @@ export default function SuppliersPage() {
         if (stats.hasPaymentAttention) {
           attentionSupplierCount++;
           attentionTotalAmount += stats.outstandingBalance;
+        }
+        if (stats.hasOver90DaysDue) {
+          over90SupplierCount++;
+          over90TotalAmount += stats.outstandingBalance;
         }
       }
     }
@@ -1023,6 +1033,8 @@ export default function SuppliersPage() {
       suppliersWithDuesCount,
       attentionSupplierCount,
       attentionTotalAmount,
+      over90SupplierCount,
+      over90TotalAmount,
       currentMonthPurchaseAmount,
       currentMonthPurchaseCount: currentMonthPurchases.length,
     };
@@ -1042,6 +1054,7 @@ export default function SuppliersPage() {
         if (kpiFilter === "active" && s.status !== "Active") return false;
         if (kpiFilter === "has_outstanding" && (!stats || stats.outstandingBalance <= 0)) return false;
         if (kpiFilter === "payment_attention" && (!stats || !stats.hasPaymentAttention)) return false;
+        if (kpiFilter === "over_90_days" && (!stats || !stats.hasOver90DaysDue)) return false;
         if (kpiFilter === "purchased_this_month" && (!stats || !stats.hasPurchasedThisMonth)) return false;
 
         // Search query
@@ -1120,6 +1133,7 @@ export default function SuppliersPage() {
     if (kpiFilter === "active") return `Active Suppliers (${kpiData.activeCount})`;
     if (kpiFilter === "has_outstanding") return `Suppliers with Outstanding Dues (${kpiData.suppliersWithDuesCount})`;
     if (kpiFilter === "payment_attention") return `Payment Attention — Unpaid 30d+ (${kpiData.attentionSupplierCount})`;
+    if (kpiFilter === "over_90_days") return `90d+ Attention — Critical Overdue (${kpiData.over90SupplierCount})`;
     if (kpiFilter === "purchased_this_month") return `Purchased This Month (${filtered.length})`;
     return null;
   }, [kpiFilter, kpiData, filtered.length]);
@@ -1373,6 +1387,22 @@ export default function SuppliersPage() {
             })}
           </div>
 
+          {/* Lightweight 90d+ Aging Attention Filter Pill */}
+          {kpiData.over90SupplierCount > 0 && (
+            <button
+              type="button"
+              onClick={() => toggleKpiFilter(kpiFilter === "over_90_days" ? null : "over_90_days")}
+              className={`px-2.5 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                kpiFilter === "over_90_days"
+                  ? "bg-rose-600 text-white border-rose-700 shadow-2xs"
+                  : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+              }`}
+            >
+              <AlertTriangle size={12} className={kpiFilter === "over_90_days" ? "text-white" : "text-rose-600"} />
+              <span>90d+ Attention ({kpiData.over90SupplierCount})</span>
+            </button>
+          )}
+
           {/* Sort Dropdown */}
           <div className="flex items-center gap-1 border border-slate-200 rounded-xl px-2 py-1.5 bg-slate-50 text-xs shrink-0 max-w-full">
             <ArrowUpDown size={12} className="text-slate-400 shrink-0" />
@@ -1586,10 +1616,15 @@ export default function SuppliersPage() {
                               ₹{stats.outstandingBalance.toLocaleString()}
                             </p>
                             {stats.outstandingBalance > 0 ? (
-                              stats.hasPaymentAttention ? (
+                              stats.hasOver90DaysDue ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-800 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-md mt-0.5">
+                                  <AlertTriangle size={10} className="shrink-0 text-rose-600" />
+                                  90d+ Critical ({stats.oldestUnpaidDays}d)
+                                </span>
+                              ) : stats.hasPaymentAttention ? (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md mt-0.5">
                                   <AlertTriangle size={10} className="shrink-0 text-amber-600" />
-                                  30d+ Attention
+                                  30d+ Attention ({stats.oldestUnpaidDays}d)
                                 </span>
                               ) : (
                                 <span className="text-[11px] text-slate-400 block mt-0.5">
@@ -1773,11 +1808,15 @@ export default function SuppliersPage() {
                             <span className={`font-bold truncate ${stats.outstandingBalance > 0 ? "text-red-600" : "text-slate-600"}`}>
                               ₹{stats.outstandingBalance.toLocaleString()}
                             </span>
-                            {stats.hasPaymentAttention && (
+                            {stats.hasOver90DaysDue ? (
+                              <span className="text-[9px] font-bold bg-rose-100 text-rose-800 px-1 py-0.5 rounded shrink-0">
+                                90d+
+                              </span>
+                            ) : stats.hasPaymentAttention ? (
                               <span className="text-[9px] font-bold bg-amber-100 text-amber-800 px-1 py-0.5 rounded shrink-0">
                                 30d+
                               </span>
-                            )}
+                            ) : null}
                           </div>
                         ) : (
                           <span className="text-slate-400 italic">Protected</span>

@@ -403,4 +403,158 @@ test.describe('AutoVault Suppliers Module — Enterprise Validation Suite', () =
     await expect(page.locator('text=Supplier Activity Stream')).toBeVisible();
     await expect(page.locator('text=No Activity Recorded Yet')).toBeVisible();
   });
+
+  test('Sprint 2B: Financial Aging Intelligence & Due-Bucket Analysis', async ({ page }) => {
+    // 1. Create Supplier with unique name
+    await page.locator('button[data-testid="add-supplier-btn"]').click();
+    await page.locator('.fixed input[placeholder*="Minda Industries"]').fill('Dyno Motors India');
+    await page.locator('.fixed input[placeholder*="Rajesh Kumar"]').fill('Aditya Sharma');
+    await page.locator('.fixed textarea[placeholder*="Full business address"]').fill('Plot 45, Industrial Area, Gurgaon');
+    await page.locator('.fixed input[placeholder="98765 43210"]').first().fill('9811002233');
+    await page.locator('.fixed input[placeholder="98765 43210"]').nth(1).fill('9811002233');
+    await page.locator('.fixed input[placeholder*="supplier@example.com"]').fill('aditya@dynomotors.com');
+    await page.locator('.fixed input[placeholder*="29ABCDE1234F1Z5"]').fill('07AAAAA1111A1Z5');
+    await page.locator('.fixed button:has-text("Add Supplier")').click();
+
+    // 2. Navigate to Supplier Details
+    await page.locator('tbody tr:has-text("Dyno Motors India") a:has-text("Dyno Motors India")').click();
+    await page.waitForURL('**/suppliers/s-*');
+
+    // 3. Verify Aging Analysis Tab exists and shows settled state
+    const agingTabBtn = page.getByRole('button', { name: 'Aging Analysis', exact: true });
+    await expect(agingTabBtn).toBeVisible();
+    await agingTabBtn.click();
+    await expect(page.locator('text=Outstanding Aging Analysis')).toBeVisible();
+    await expect(page.locator('text=No Outstanding Dues')).toBeVisible();
+
+    // 4. Inject purchases with varying ages to test multi-bucket assignment
+    await page.evaluate(() => {
+      const stateStr = localStorage.getItem('autovault_store');
+      if (!stateStr) return;
+      const parsed = JSON.parse(stateStr);
+      const supplier = (parsed.suppliers || []).find((s: any) => s.name === 'Dyno Motors India');
+      if (!supplier) return;
+
+      const product = (parsed.products || [])[0] || {
+        id: 'p-dyno-test',
+        name: 'Brake Disc Rotor',
+        sku: 'BDR-100',
+        buyPrice: 1000,
+        sellPrice: 1500,
+        stock: 50,
+        minStock: 10,
+        category: 'Braking',
+        brand: 'Dyno',
+        unit: 'pcs',
+        description: '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (!parsed.products) parsed.products = [];
+      if (!parsed.products.some((p: any) => p.id === product.id)) {
+        parsed.products.push(product);
+      }
+
+      const now = Date.now();
+      const dayMs = 24 * 60 * 60 * 1000;
+
+      // Purchase 1: 15 days old -> Bucket 0–30d (₹10,000)
+      const p1 = {
+        id: 'pur-dyno-15d',
+        productId: product.id,
+        supplierId: supplier.id,
+        quantity: 10,
+        buyPrice: 1000,
+        totalAmount: 10000,
+        paidAmount: 0,
+        paymentStatus: 'Credit',
+        invoiceNumber: 'INV-DYNO-15D',
+        date: new Date(now - 15 * dayMs).toISOString(),
+        createdAt: new Date(now - 15 * dayMs).toISOString(),
+      };
+
+      // Purchase 2: 45 days old -> Bucket 31–60d (₹20,000)
+      const p2 = {
+        id: 'pur-dyno-45d',
+        productId: product.id,
+        supplierId: supplier.id,
+        quantity: 20,
+        buyPrice: 1000,
+        totalAmount: 20000,
+        paidAmount: 0,
+        paymentStatus: 'Credit',
+        invoiceNumber: 'INV-DYNO-45D',
+        date: new Date(now - 45 * dayMs).toISOString(),
+        createdAt: new Date(now - 45 * dayMs).toISOString(),
+      };
+
+      // Purchase 3: 100 days old -> Bucket 90+d (₹50,000)
+      const p3 = {
+        id: 'pur-dyno-100d',
+        productId: product.id,
+        supplierId: supplier.id,
+        quantity: 50,
+        buyPrice: 1000,
+        totalAmount: 50000,
+        paidAmount: 0,
+        paymentStatus: 'Credit',
+        invoiceNumber: 'INV-DYNO-100D',
+        date: new Date(now - 100 * dayMs).toISOString(),
+        createdAt: new Date(now - 100 * dayMs).toISOString(),
+      };
+
+      if (!parsed.purchases) parsed.purchases = [];
+      parsed.purchases.push(p1, p2, p3);
+      localStorage.setItem('autovault_store', JSON.stringify(parsed));
+    });
+
+    // Reload page to rehydrate injected state
+    await page.reload();
+
+    // 5. Navigate to Aging Analysis tab and verify active aging intelligence
+    await page.getByRole('button', { name: 'Aging Analysis', exact: true }).click();
+    await expect(page.locator('text=Outstanding Aging Analysis')).toBeVisible();
+
+    // Verify Total Outstanding liability is ₹80,000 across 3 open invoices
+    await expect(page.locator('text=₹80,000').first()).toBeVisible();
+    await expect(page.locator('text=3 Open Invoices')).toBeVisible();
+
+    // Verify Oldest Open Invoice highlight (INV-DYNO-100D with age ~100d and ₹50,000 due)
+    await expect(page.locator('text=Oldest Open Invoice')).toBeVisible();
+    await expect(page.locator('text=INV-DYNO-100D').first()).toBeVisible();
+    await expect(page.locator('text=100 Days').first()).toBeVisible();
+
+    // Verify Bucket Cards are present
+    await expect(page.locator('text=0–30 Days').first()).toBeVisible();
+    await expect(page.locator('text=31–60 Days').first()).toBeVisible();
+    await expect(page.locator('text=90+ Days').first()).toBeVisible();
+
+    // 6. Test Drilldown interaction
+    const bucket90Btn = page.locator('button:has-text("90+d (1)")');
+    await expect(bucket90Btn).toBeVisible();
+    await bucket90Btn.click();
+
+    // Drilldown table should show INV-DYNO-100D with ₹50,000
+    await expect(page.locator('table tr:has-text("INV-DYNO-100D")')).toBeVisible();
+
+    // Reset drilldown
+    await page.locator('button:has-text("Reset to All Invoices")').click();
+    await expect(page.locator('table tr:has-text("INV-DYNO-15D")')).toBeVisible();
+
+    // 7. Verify Overview tab quick liability summary card
+    await page.locator('button:has-text("Overview")').click();
+    await expect(page.locator('text=Liability Aging Status')).toBeVisible();
+    await expect(page.locator('text=₹50,000 in 90d+')).toBeVisible();
+
+    // 8. Go back to /suppliers list and verify 90d+ Attention filter pill and table badge
+    await page.goto('http://localhost:3000/suppliers');
+    await expect(page.locator('text=90d+ Attention').first()).toBeVisible();
+    await expect(page.locator('table tr:has-text("Dyno Motors India") text=90d+ Critical')).toBeVisible();
+
+    // Click 90d+ Attention filter pill and verify filtered view
+    await page.locator('button:has-text("90d+ Attention")').first().click();
+    await expect(page.locator('table tr:has-text("Dyno Motors India")')).toBeVisible();
+  });
 });
+

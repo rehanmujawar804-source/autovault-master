@@ -47,8 +47,23 @@ import {
   Clock,
   Receipt,
   RotateCcw,
+  Download,
 } from "lucide-react";
 import type { Supplier, Product } from "@/types";
+import {
+  buildSupplierStatement,
+  getDateRangeForPreset,
+  validateDateRange,
+  formatStatementDate,
+  formatCurrencyINR,
+  normalizeMoney,
+  generateSupplierStatementCSVText,
+  generateSupplierStatementXLSX,
+  type StatementDatePreset,
+  type StatementLedgerEntry,
+  type SupplierStatementSummary,
+} from "@/lib/statementUtils";
+
 import {
   validateAndNormalizeSupplierForm,
   validateSupplierName,
@@ -1806,6 +1821,8 @@ const TABS = [
   { id: "overview", label: "Overview", icon: Truck },
   { id: "products", label: "Products Supplied", icon: Package },
   { id: "purchases", label: "Purchase History", icon: ShoppingBag },
+  { id: "aging", label: "Aging Analysis", icon: Clock },
+  { id: "statement", label: "Statement", icon: Receipt },
   { id: "purchase_orders", label: "Purchase Orders", icon: FileText },
   { id: "payments", label: "Payment History", icon: Coins },
   { id: "activity", label: "Activity", icon: Activity },
@@ -1867,6 +1884,17 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
   const [purchaseStatusFilter, setPurchaseStatusFilter] = useState<"All" | "Paid" | "Partial" | "Credit">("All");
   const [purchaseSort, setPurchaseSort] = useState<"newest" | "oldest" | "highest_amount" | "highest_due">("newest");
 
+  // Sprint 2B: Financial Aging Selected Bucket Filter
+  const [selectedAgingBucket, setSelectedAgingBucket] = useState<"all" | "current" | "days31to60" | "days61to90" | "over90">("all");
+
+  // Sprint 2C: Supplier Statement & Ledger Export State
+  const [statementPreset, setStatementPreset] = useState<StatementDatePreset>("all_time");
+  const [customFromDate, setCustomFromDate] = useState("");
+  const [customToDate, setCustomToDate] = useState("");
+  const [statementSortOrder, setStatementSortOrder] = useState<"asc" | "desc">("desc");
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+
   // Lump-Sum FIFO Payment Modal State
   const [showLumpSumModal, setShowLumpSumModal] = useState(false);
   const [lumpSumAmountInput, setLumpSumAmountInput] = useState("");
@@ -1880,13 +1908,13 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
   const [convertingPO, setConvertingPO] = useState<PurchaseOrder | null>(null);
   const [expandedTimelines, setExpandedTimelines] = useState<Record<string, boolean>>({});
 
-  // Support incoming URL query actions (e.g. ?action=new-invoice or ?action=new-po)
+  // Support incoming URL query actions (e.g. ?action=new-invoice or ?action=new-po or ?tab=aging or ?tab=statement)
   useEffect(() => {
     if (typeof window !== "undefined") {
       const sp = new URLSearchParams(window.location.search);
       const action = sp.get("action");
       const tab = sp.get("tab");
-      if (tab && (tab === "overview" || tab === "products" || tab === "purchases" || tab === "purchase_orders" || tab === "payments" || tab === "activity")) {
+      if (tab && (tab === "overview" || tab === "products" || tab === "purchases" || tab === "aging" || tab === "statement" || tab === "purchase_orders" || tab === "payments" || tab === "activity")) {
         setActiveTab(tab as TabId);
       }
       if (action === "new-invoice") {
@@ -2070,6 +2098,220 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
       totalReturnedValue,
     };
   }, [purchases, id, getSupplierPaymentsBySupplier, getPurchaseReturnsBySupplier]);
+
+  // ── SPRINT 2B: FINANCIAL AGING SELECTOR (DERIVED FROM EXISTING PURCHASES) ──
+  const agingAnalysis = useMemo(() => {
+    const now = new Date();
+    const openInvoices: {
+      purchase: Purchase;
+      product?: Product;
+      invoiceNumber: string;
+      date: string;
+      ageDays: number;
+      originalAmount: number;
+      returnedValue: number;
+      returnedQty: number;
+      paidAmount: number;
+      effectiveDue: number;
+      bucketId: "current" | "days31to60" | "days61to90" | "over90";
+    }[] = [];
+
+    purchases.forEach((pur) => {
+      const fin = getPurchaseFinancials(pur);
+      if (fin.effectiveDue <= 0) return; // Ignore fully settled invoices
+
+      const pDateStr = pur.date || pur.createdAt;
+      const pDate = new Date(pDateStr);
+      const pTime = isNaN(pDate.getTime()) ? now.getTime() : pDate.getTime();
+      const ageDays = Math.max(0, Math.floor((now.getTime() - pTime) / (1000 * 60 * 60 * 24)));
+
+      let bucketId: "current" | "days31to60" | "days61to90" | "over90" = "current";
+      if (ageDays <= 30) {
+        bucketId = "current";
+      } else if (ageDays <= 60) {
+        bucketId = "days31to60";
+      } else if (ageDays <= 90) {
+        bucketId = "days61to90";
+      } else {
+        bucketId = "over90";
+      }
+
+      const product = products.find((pr) => pr.id === pur.productId);
+
+      openInvoices.push({
+        purchase: pur,
+        product,
+        invoiceNumber: pur.invoiceNumber || `PUR-${pur.id.slice(-6).toUpperCase()}`,
+        date: pDateStr,
+        ageDays,
+        originalAmount: fin.total,
+        returnedValue: fin.returnedValue,
+        returnedQty: fin.returnedQty,
+        paidAmount: fin.paid,
+        effectiveDue: fin.effectiveDue,
+        bucketId,
+      });
+    });
+
+    // Sort open invoices by age descending (oldest first)
+    openInvoices.sort((a, b) => b.ageDays - a.ageDays);
+
+    const totalOutstanding = openInvoices.reduce((sum, inv) => sum + inv.effectiveDue, 0);
+    const openInvoicesCount = openInvoices.length;
+    const oldestInvoice = openInvoices[0] || null;
+
+    const createBucket = (
+      id: "current" | "days31to60" | "days61to90" | "over90",
+      label: string,
+      rangeLabel: string,
+      daysRange: string,
+      severity: "neutral" | "warning" | "danger"
+    ) => {
+      const bucketInvoices = openInvoices.filter((inv) => inv.bucketId === id);
+      const amount = bucketInvoices.reduce((sum, inv) => sum + inv.effectiveDue, 0);
+      const count = bucketInvoices.length;
+      const percentage = totalOutstanding > 0 ? (amount / totalOutstanding) * 100 : 0;
+      const oldestAge = bucketInvoices.length > 0 ? Math.max(...bucketInvoices.map((inv) => inv.ageDays)) : 0;
+
+      return {
+        id,
+        label,
+        rangeLabel,
+        daysRange,
+        amount,
+        count,
+        percentage,
+        oldestAge,
+        invoices: bucketInvoices,
+        severity,
+      };
+    };
+
+    const buckets = {
+      current: createBucket("current", "0–30 Days", "Current", "0–30d", "neutral"),
+      days31to60: createBucket("days31to60", "31–60 Days", "Overdue 1–30d", "31–60d", "warning"),
+      days61to90: createBucket("days61to90", "61–90 Days", "Overdue 31–60d", "61–90d", "warning"),
+      over90: createBucket("over90", "90+ Days", "Critical Attention", "> 90d", "danger"),
+    };
+
+    const bucketList = [buckets.current, buckets.days31to60, buckets.days61to90, buckets.over90];
+
+    return {
+      totalOutstanding,
+      openInvoicesCount,
+      oldestInvoice,
+      buckets,
+      bucketList,
+      allInvoices: openInvoices,
+    };
+  }, [purchases, getPurchaseFinancials, products]);
+
+  // ── SPRINT 2C: FINANCIAL STATEMENT SELECTOR & HANDLERS ───────────────────
+  const effectiveDateRange = useMemo(() => {
+    if (statementPreset === "custom") {
+      return { fromDate: customFromDate, toDate: customToDate, label: "Custom Range" };
+    }
+    return getDateRangeForPreset(statementPreset);
+  }, [statementPreset, customFromDate, customToDate]);
+
+  const statementValidation = useMemo(() => {
+    return validateDateRange(effectiveDateRange.fromDate, effectiveDateRange.toDate);
+  }, [effectiveDateRange]);
+
+  const supplierStatement = useMemo(() => {
+    if (!supplier) return null;
+    const allSupplierPayments = getSupplierPaymentsBySupplier(id);
+    const allSupplierReturns = getPurchaseReturnsBySupplier(id);
+
+    return buildSupplierStatement({
+      supplier,
+      purchases,
+      payments: allSupplierPayments,
+      returns: allSupplierReturns,
+      products,
+      fromDate: effectiveDateRange.fromDate,
+      toDate: effectiveDateRange.toDate,
+      preset: statementPreset,
+    });
+  }, [supplier, purchases, id, getSupplierPaymentsBySupplier, getPurchaseReturnsBySupplier, products, effectiveDateRange, statementPreset]);
+
+  // Display-sorted entries (does NOT modify chronological running balance calculation)
+  const displayStatementEntries = useMemo(() => {
+    if (!supplierStatement?.entries) return [];
+    if (statementSortOrder === "asc") {
+      return supplierStatement.entries; // oldest-first
+    }
+    return [...supplierStatement.entries].reverse(); // newest-first
+  }, [supplierStatement, statementSortOrder]);
+
+  const handleExportCSV = useCallback(() => {
+    if (!supplierStatement) return;
+    try {
+      const csvText = generateSupplierStatementCSVText(supplierStatement);
+      const blob = new Blob(["\uFEFF" + csvText], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const cleanName = (supplier?.name || "supplier").replace(/[^a-zA-Z0-9_-]/g, "_");
+      link.download = `statement_${cleanName}_${new Date().toISOString().split("T")[0]}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast("Supplier statement exported as CSV", "success");
+    } catch (err) {
+      console.error("CSV Export failed:", err);
+      showToast("Failed to export statement CSV.", "error");
+    }
+  }, [supplierStatement, supplier, showToast]);
+
+  const handleExportExcel = useCallback(async () => {
+    if (!supplierStatement) return;
+    try {
+      setIsExportingExcel(true);
+      const blob = await generateSupplierStatementXLSX(supplierStatement);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const cleanName = (supplier?.name || "supplier").replace(/[^a-zA-Z0-9_-]/g, "_");
+      link.download = `statement_${cleanName}_${new Date().toISOString().split("T")[0]}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast("Supplier statement exported to Excel (.xlsx)", "success");
+    } catch (err) {
+      console.error("Excel Export failed:", err);
+      showToast("Failed to export Excel workbook.", "error");
+    } finally {
+      setIsExportingExcel(false);
+    }
+  }, [supplierStatement, supplier, showToast]);
+
+  const handleDownloadPDF = useCallback(async () => {
+    if (!supplierStatement) return;
+    try {
+      setIsExportingPDF(true);
+      showToast("Generating PDF statement...", "info");
+      const { exportElementToPdf } = await import("@/lib/pdfUtils");
+      const cleanName = (supplier?.name || "supplier").replace(/[^a-zA-Z0-9_-]/g, "_");
+      await exportElementToPdf("supplier-statement-print", {
+        filename: `statement_${cleanName}_${new Date().toISOString().split("T")[0]}.pdf`,
+        isA5: false,
+      });
+      showToast("Statement PDF downloaded successfully!", "success");
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+      showToast("Failed to generate PDF. You can also use Print Statement.", "error");
+    } finally {
+      setIsExportingPDF(false);
+    }
+  }, [supplierStatement, supplier, showToast]);
+
+  const handlePrintStatement = useCallback(() => {
+    window.print();
+  }, []);
+
 
   function openLumpSumModal() {
     setLumpSumAmountInput(String(kpis.outstanding));
@@ -2472,7 +2714,7 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
       {/* Tab Navigation */}
       <div className="border-b border-slate-200">
         <nav className="flex gap-0 -mb-px overflow-x-auto">
-          {TABS.filter(tab => tab.id !== "payments" || isOwner).map((tab) => (
+          {TABS.filter(tab => (tab.id !== "payments" && tab.id !== "aging" && tab.id !== "statement") || isOwner).map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
@@ -2546,6 +2788,55 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
                   </div>
                 </div>
               </div>
+
+              {/* Sprint 2B: Financial Aging Quick Discovery Banner */}
+              {isOwner && (
+                <div className="bg-slate-50/80 border border-slate-200 rounded-xl p-3.5 space-y-2 mt-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                      <Clock size={11} className="text-slate-400" />
+                      Liability Aging Status
+                    </span>
+                    <button
+                      onClick={() => setActiveTab("aging")}
+                      className="text-xs font-bold text-navy-700 hover:text-navy-950 hover:underline cursor-pointer"
+                    >
+                      View Aging Analysis →
+                    </button>
+                  </div>
+                  {agingAnalysis.totalOutstanding > 0 ? (
+                    <div className="flex items-center justify-between text-xs pt-1">
+                      <div>
+                        <p className="font-black text-slate-850">
+                          ₹{agingAnalysis.totalOutstanding.toLocaleString()} Outstanding
+                        </p>
+                        <p className="text-[10px] text-slate-400">
+                          {agingAnalysis.openInvoicesCount} open invoice{agingAnalysis.openInvoicesCount !== 1 ? "s" : ""}
+                        </p>
+                      </div>
+                      {agingAnalysis.buckets.over90.amount > 0 ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200">
+                          ₹{agingAnalysis.buckets.over90.amount.toLocaleString()} in 90d+
+                        </span>
+                      ) : agingAnalysis.buckets.days61to90.amount > 0 ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-orange-100 text-orange-800 border border-orange-200">
+                          ₹{agingAnalysis.buckets.days61to90.amount.toLocaleString()} in 61–90d
+                        </span>
+                      ) : agingAnalysis.buckets.days31to60.amount > 0 ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                          ₹{agingAnalysis.buckets.days31to60.amount.toLocaleString()} in 31–60d
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          All Current (&lt;30d)
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-xs font-semibold text-emerald-700">✓ All invoices settled (₹0 due)</p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -3012,6 +3303,736 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
             )}
           </div>
         )}
+
+        {/* ── AGING ANALYSIS TAB (SPRINT 2B) ── */}
+        {activeTab === "aging" && isOwner && (
+          <div className="space-y-6">
+            {/* Header with Title and Metrics */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-black text-slate-850">Outstanding Aging Analysis</h3>
+                  <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+                    Derived from Invoice Dates
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Real-time liability aging breakdown grouped into 0–30, 31–60, 61–90, and 90+ day buckets.
+                </p>
+              </div>
+
+              {agingAnalysis.totalOutstanding > 0 && (
+                <div className="flex items-center gap-3 shrink-0">
+                  <button
+                    onClick={openLumpSumModal}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-white bg-navy-950 px-3.5 py-2 rounded-xl hover:bg-navy-900 transition-colors shadow-2xs cursor-pointer"
+                  >
+                    <Coins size={13} />
+                    Settle Dues (FIFO)
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {agingAnalysis.totalOutstanding === 0 ? (
+              <div className="py-16 flex flex-col items-center justify-center gap-3 text-center">
+                <div className="w-14 h-14 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center">
+                  <CheckCircle size={26} className="text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-base font-black text-slate-850">No Outstanding Dues</p>
+                  <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto leading-relaxed">
+                    All supplier invoices are currently settled. There are no aging liabilities or overdue payables for {supplier.name}.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setActiveTab("purchases")}
+                  className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-navy-700 bg-slate-50 border border-slate-200 px-3.5 py-2 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <ShoppingBag size={13} />
+                  View Purchase History
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Outstanding Aging Summary Bar & Oldest Invoice Highlight */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Total Outstanding Card */}
+                  <div className="bg-slate-900 text-white rounded-2xl p-4 flex flex-col justify-between shadow-xs">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Outstanding Liability</span>
+                      <p className="text-2xl font-black mt-1 text-white tracking-tight">
+                        ₹{agingAnalysis.totalOutstanding.toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-slate-300 mt-3 pt-3 border-t border-slate-800">
+                      <span>{agingAnalysis.openInvoicesCount} Open Invoice{agingAnalysis.openInvoicesCount !== 1 ? "s" : ""}</span>
+                      <span className="text-emerald-400 font-semibold">FIFO Eligible</span>
+                    </div>
+                  </div>
+
+                  {/* Oldest Invoice Highlight Card */}
+                  {agingAnalysis.oldestInvoice ? (
+                    <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 flex flex-col justify-between md:col-span-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md bg-amber-200/80 text-amber-900 border border-amber-300">
+                              <AlertTriangle size={11} />
+                              Oldest Open Invoice
+                            </span>
+                            <span className="text-xs font-bold font-mono text-slate-850">
+                              {agingAnalysis.oldestInvoice.invoiceNumber}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600">
+                            Purchased on <strong className="text-slate-800 font-semibold">{formatDate(agingAnalysis.oldestInvoice.date)}</strong>
+                            {agingAnalysis.oldestInvoice.product ? ` (${agingAnalysis.oldestInvoice.product.name})` : ""}
+                          </p>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Remaining Due</span>
+                          <span className="text-base font-black text-rose-600 block">
+                            ₹{agingAnalysis.oldestInvoice.effectiveDue.toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-amber-200/70 text-xs">
+                        <span className="text-amber-900 font-bold">
+                          Age: {agingAnalysis.oldestInvoice.ageDays} Days
+                          {agingAnalysis.oldestInvoice.ageDays > 90 ? " (Critical Overdue)" : agingAnalysis.oldestInvoice.ageDays > 60 ? " (Extended)" : ""}
+                        </span>
+                        <button
+                          onClick={() => setPayPurchase(agingAnalysis.oldestInvoice!.purchase)}
+                          className="inline-flex items-center gap-1 text-xs font-bold text-amber-900 hover:text-amber-950 underline cursor-pointer"
+                        >
+                          <Coins size={12} />
+                          Pay This Invoice
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* Aging Proportional Distribution Bar */}
+                <div className="bg-slate-50/80 border border-slate-200 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-700">Aging Distribution Breakdown</span>
+                    <span className="text-slate-400 font-medium">100% of Open Dues</span>
+                  </div>
+
+                  {/* Horizontal Segmented Bar */}
+                  <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex shadow-inner">
+                    {agingAnalysis.bucketList.map((bucket) => {
+                      if (bucket.percentage <= 0) return null;
+                      const barColors =
+                        bucket.id === "current"
+                          ? "bg-emerald-500 hover:bg-emerald-600"
+                          : bucket.id === "days31to60"
+                            ? "bg-amber-400 hover:bg-amber-500"
+                            : bucket.id === "days61to90"
+                              ? "bg-orange-500 hover:bg-orange-600"
+                              : "bg-rose-500 hover:bg-rose-600";
+                      return (
+                        <div
+                          key={bucket.id}
+                          style={{ width: `${bucket.percentage}%` }}
+                          title={`${bucket.label}: ₹${bucket.amount.toLocaleString()} (${bucket.percentage.toFixed(1)}%)`}
+                          className={`${barColors} transition-all duration-300 relative group cursor-pointer`}
+                          onClick={() => setSelectedAgingBucket(bucket.id)}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {/* Distribution Legend */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                    {agingAnalysis.bucketList.map((bucket) => {
+                      const dotColor =
+                        bucket.id === "current"
+                          ? "bg-emerald-500"
+                          : bucket.id === "days31to60"
+                            ? "bg-amber-400"
+                            : bucket.id === "days61to90"
+                              ? "bg-orange-500"
+                              : "bg-rose-500";
+                      return (
+                        <button
+                          key={bucket.id}
+                          onClick={() => setSelectedAgingBucket(bucket.id === selectedAgingBucket ? "all" : bucket.id)}
+                          className={`text-left p-1.5 rounded-lg transition-colors cursor-pointer ${
+                            selectedAgingBucket === bucket.id ? "bg-white shadow-2xs border border-slate-200" : "hover:bg-slate-100/70"
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full ${dotColor} shrink-0`} />
+                            <span className="text-[11px] font-bold text-slate-700 truncate">{bucket.label}</span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 pl-3.5 mt-0.5">
+                            {bucket.percentage.toFixed(1)}% · ₹{bucket.amount.toLocaleString()}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 4 Interactive Aging Bucket Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {agingAnalysis.bucketList.map((bucket) => {
+                    const isSelected = selectedAgingBucket === bucket.id;
+                    const isOver90 = bucket.id === "over90";
+                    const isDanger = isOver90 && bucket.amount > 0;
+
+                    const cardTheme = isDanger
+                      ? "border-rose-300 bg-rose-50/40 hover:bg-rose-50/80"
+                      : bucket.id === "days61to90" && bucket.amount > 0
+                        ? "border-orange-200 bg-orange-50/30 hover:bg-orange-50/70"
+                        : bucket.id === "days31to60" && bucket.amount > 0
+                          ? "border-amber-200 bg-amber-50/30 hover:bg-amber-50/70"
+                          : "border-slate-200 bg-white hover:bg-slate-50/70";
+
+                    return (
+                      <div
+                        key={bucket.id}
+                        onClick={() => setSelectedAgingBucket(isSelected ? "all" : bucket.id)}
+                        className={`border rounded-2xl p-4 transition-all cursor-pointer relative flex flex-col justify-between ${cardTheme} ${
+                          isSelected ? "ring-2 ring-navy-950 shadow-sm" : ""
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-black text-slate-800">{bucket.label}</span>
+                            {isDanger ? (
+                              <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-200 text-rose-900 border border-rose-300 animate-pulse">
+                                Critical
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                {bucket.daysRange}
+                              </span>
+                            )}
+                          </div>
+
+                          <p className={`text-xl font-black mt-2 tracking-tight ${isDanger ? "text-rose-700" : "text-slate-850"}`}>
+                            ₹{bucket.amount.toLocaleString()}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center justify-between text-xs text-slate-500 mt-4 pt-2.5 border-t border-slate-150">
+                          <span>{bucket.count} Invoice{bucket.count !== 1 ? "s" : ""}</span>
+                          <span className="font-bold text-slate-700">{bucket.percentage.toFixed(1)}%</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Drilldown Section */}
+                <div className="space-y-4 pt-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/70 border border-slate-200 p-3 rounded-xl">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-black text-slate-800">Drilldown View:</span>
+                      <div className="inline-flex items-center bg-white border border-slate-200 rounded-lg p-0.5 text-xs">
+                        {[
+                          { id: "all" as const, label: `All (${agingAnalysis.allInvoices.length})` },
+                          { id: "current" as const, label: `0–30d (${agingAnalysis.buckets.current.count})` },
+                          { id: "days31to60" as const, label: `31–60d (${agingAnalysis.buckets.days31to60.count})` },
+                          { id: "days61to90" as const, label: `61–90d (${agingAnalysis.buckets.days61to90.count})` },
+                          { id: "over90" as const, label: `90+d (${agingAnalysis.buckets.over90.count})` },
+                        ].map((btn) => (
+                          <button
+                            key={btn.id}
+                            onClick={() => setSelectedAgingBucket(btn.id)}
+                            className={`px-2.5 py-1 rounded-md font-semibold text-xs transition-all cursor-pointer ${
+                              selectedAgingBucket === btn.id
+                                ? "bg-navy-950 text-white shadow-2xs"
+                                : "text-slate-600 hover:text-navy-950 hover:bg-slate-50"
+                            }`}
+                          >
+                            {btn.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {selectedAgingBucket !== "all" && (
+                      <button
+                        onClick={() => setSelectedAgingBucket("all")}
+                        className="text-xs font-bold text-navy-700 hover:underline cursor-pointer self-start sm:self-auto"
+                      >
+                        Reset to All Invoices
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Invoices Table */}
+                  {(() => {
+                    const invoicesToRender =
+                      selectedAgingBucket === "all"
+                        ? agingAnalysis.allInvoices
+                        : agingAnalysis.buckets[selectedAgingBucket].invoices;
+
+                    if (invoicesToRender.length === 0) {
+                      return (
+                        <div className="py-12 text-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                          <p className="text-sm font-bold text-slate-700">No open invoices in this aging bucket.</p>
+                          <p className="text-xs text-slate-400 mt-0.5">Select another bucket or view all open liabilities.</p>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                        <table className="w-full text-sm border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200">
+                              <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Invoice & Age</th>
+                              <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Date</th>
+                              <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Product</th>
+                              <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Qty</th>
+                              <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Original Total</th>
+                              <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Returned</th>
+                              <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Paid</th>
+                              <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Remaining Due</th>
+                              <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {invoicesToRender.map((inv) => {
+                              const ageBadgeColor =
+                                inv.ageDays > 90
+                                  ? "bg-rose-100 text-rose-800 border-rose-200"
+                                  : inv.ageDays > 60
+                                    ? "bg-orange-100 text-orange-800 border-orange-200"
+                                    : inv.ageDays > 30
+                                      ? "bg-amber-100 text-amber-800 border-amber-200"
+                                      : "bg-emerald-100 text-emerald-800 border-emerald-200";
+
+                              return (
+                                <tr key={inv.purchase.id} className="hover:bg-slate-50/70 transition-colors">
+                                  <td className="px-4 py-3 text-xs">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono font-bold text-slate-700">{inv.invoiceNumber}</span>
+                                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${ageBadgeColor}`}>
+                                        {inv.ageDays}d old
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 text-xs text-slate-600 font-medium whitespace-nowrap">
+                                    {formatPurchaseDate(inv.purchase)}
+                                  </td>
+                                  <td className="px-4 py-3 text-xs font-semibold text-slate-700">
+                                    {inv.product ? (
+                                      <div>
+                                        <Link href={`/inventory/${inv.product.id}`} className="hover:text-navy-700 hover:underline">
+                                          {inv.product.name}
+                                        </Link>
+                                        <p className="text-[10px] text-slate-400 font-mono font-normal">
+                                          SKU: {inv.product.sku || "—"}
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-3 text-xs text-right font-bold text-slate-700">{inv.purchase.quantity}</td>
+                                  <td className="px-4 py-3 text-xs text-right text-slate-600">₹{inv.originalAmount.toLocaleString()}</td>
+                                  <td className="px-4 py-3 text-xs text-right text-rose-600 font-medium">
+                                    {inv.returnedValue > 0 ? `₹${inv.returnedValue.toLocaleString()}` : "—"}
+                                  </td>
+                                  <td className="px-4 py-3 text-xs text-right text-green-700 font-medium">
+                                    {inv.paidAmount > 0 ? `₹${inv.paidAmount.toLocaleString()}` : "—"}
+                                  </td>
+                                  <td className="px-4 py-3 text-xs text-right font-black text-rose-600">
+                                    ₹{inv.effectiveDue.toLocaleString()}
+                                  </td>
+                                  <td className="px-4 py-3 text-center">
+                                    <button
+                                      onClick={() => setPayPurchase(inv.purchase)}
+                                      className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-md transition-colors cursor-pointer"
+                                    >
+                                      <Coins size={11} />
+                                      Pay
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── STATEMENT & LEDGER TAB (SPRINT 2C) ── */}
+        {activeTab === "statement" && isOwner && (
+          <div className="space-y-6">
+            {/* Header with Title and Quick Actions */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-black text-slate-850">Supplier Statement & Financial Ledger</h3>
+                  <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+                    Period: {effectiveDateRange.label}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Chronological financial ledger tracking invoices, returns, payments, running balances, and opening/closing reconciliation.
+                </p>
+              </div>
+
+              {/* Action Buttons Toolbar */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={handleExportCSV}
+                  disabled={!supplierStatement || supplierStatement.entries.length === 0}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 px-3 py-2 rounded-xl hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Export Statement as CSV"
+                >
+                  <Download size={13} />
+                  Export CSV
+                </button>
+
+                <button
+                  onClick={handleExportExcel}
+                  disabled={!supplierStatement || isExportingExcel || supplierStatement.entries.length === 0}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-xl hover:bg-emerald-100 transition-colors shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Export Statement to Excel (.xlsx)"
+                >
+                  <Download size={13} />
+                  {isExportingExcel ? "Exporting..." : "Export Excel"}
+                </button>
+
+                <button
+                  onClick={handleDownloadPDF}
+                  disabled={!supplierStatement || isExportingPDF}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-800 bg-blue-50 border border-blue-200 px-3 py-2 rounded-xl hover:bg-blue-100 transition-colors shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Download Statement PDF"
+                >
+                  <FileText size={13} />
+                  {isExportingPDF ? "Generating..." : "Download PDF"}
+                </button>
+
+                <button
+                  onClick={handlePrintStatement}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-white bg-slate-900 px-3.5 py-2 rounded-xl hover:bg-slate-800 transition-colors shadow-2xs cursor-pointer"
+                  title="Print Statement"
+                >
+                  <Printer size={13} />
+                  Print Statement
+                </button>
+              </div>
+            </div>
+
+            {/* Date Preset Filter Toolbar & Search */}
+            <div className="space-y-3 bg-slate-50/70 border border-slate-200/80 p-3.5 rounded-2xl">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                {/* Date Presets */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1">Period:</span>
+                  {[
+                    { id: "all_time" as const, label: "All Time" },
+                    { id: "this_month" as const, label: "This Month" },
+                    { id: "last_month" as const, label: "Last Month" },
+                    { id: "last_3_months" as const, label: "Last 3 Months" },
+                    { id: "this_financial_year" as const, label: "This FY" },
+                    { id: "custom" as const, label: "Custom Range" },
+                  ].map((preset) => (
+                    <button
+                      key={preset.id}
+                      onClick={() => setStatementPreset(preset.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                        statementPreset === preset.id
+                          ? "bg-navy-950 text-white shadow-2xs"
+                          : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100/80"
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Sort Order Toggle */}
+                <div className="flex items-center gap-2 self-start md:self-auto">
+                  <button
+                    onClick={() => setStatementSortOrder((prev) => (prev === "desc" ? "asc" : "desc"))}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 bg-white border border-slate-200 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+                    title="Toggle chronological sorting direction"
+                  >
+                    <ArrowUpDown size={12} className="text-slate-400" />
+                    <span>{statementSortOrder === "desc" ? "Newest First" : "Oldest First"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Custom Date Range Inputs (Shown when 'custom' is selected) */}
+              {statementPreset === "custom" && (
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-2 border-t border-slate-200/60">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-bold text-slate-600 whitespace-nowrap">From:</label>
+                    <input
+                      type="date"
+                      value={customFromDate}
+                      onChange={(e) => setCustomFromDate(e.target.value)}
+                      className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-bold text-slate-600 whitespace-nowrap">To:</label>
+                    <input
+                      type="date"
+                      value={customToDate}
+                      onChange={(e) => setCustomToDate(e.target.value)}
+                      className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600"
+                    />
+                  </div>
+
+                  {(customFromDate || customToDate) && (
+                    <button
+                      onClick={() => {
+                        setCustomFromDate("");
+                        setCustomToDate("");
+                      }}
+                      className="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer underline"
+                    >
+                      Clear Dates
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Custom Date Validation Error */}
+              {!statementValidation.isValid && statementValidation.error && (
+                <div className="flex items-center gap-2 p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl">
+                  <AlertCircle size={14} className="shrink-0" />
+                  <span>{statementValidation.error}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Reconciliation KPI Summary Cards */}
+            {supplierStatement && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                  {/* Opening Balance */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Opening Balance</span>
+                    <p className="text-base font-black text-slate-800 mt-1 tabular-nums">
+                      {formatCurrencyINR(supplierStatement.openingBalance)}
+                    </p>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">Prior to statement</span>
+                  </div>
+
+                  {/* Purchases (Debits) */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Period Purchases</span>
+                    <p className="text-base font-black text-blue-700 mt-1 tabular-nums">
+                      {formatCurrencyINR(supplierStatement.totalPurchases)}
+                    </p>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">Invoices (Debits)</span>
+                  </div>
+
+                  {/* Returns (Credits) */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Period Returns</span>
+                    <p className="text-base font-black text-rose-600 mt-1 tabular-nums">
+                      {formatCurrencyINR(supplierStatement.totalReturns)}
+                    </p>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">Credit adjustments</span>
+                  </div>
+
+                  {/* Payments (Credits) */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Period Payments</span>
+                    <p className="text-base font-black text-emerald-700 mt-1 tabular-nums">
+                      {formatCurrencyINR(supplierStatement.totalPayments)}
+                    </p>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">Paid to supplier</span>
+                  </div>
+
+                  {/* Closing Balance */}
+                  <div className="bg-slate-900 text-white rounded-xl p-3.5 shadow-2xs col-span-2 sm:col-span-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Closing Balance</span>
+                    <p className="text-base font-black text-white mt-1 tabular-nums">
+                      {formatCurrencyINR(supplierStatement.closingBalance)}
+                    </p>
+                    <span className="text-[10px] text-slate-300 mt-0.5 block">Net liability balance</span>
+                  </div>
+                </div>
+
+                {/* Explicit Reconciliation Indicator */}
+                <div className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-semibold ${
+                  supplierStatement.reconciled
+                    ? "bg-emerald-50/70 border-emerald-200 text-emerald-900"
+                    : "bg-rose-50 border-rose-200 text-rose-900"
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {supplierStatement.reconciled ? (
+                      <CheckCircle size={16} className="text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertTriangle size={16} className="text-rose-600 shrink-0" />
+                    )}
+                    <span>
+                      {supplierStatement.reconciled
+                        ? `✓ Reconciled: Opening Balance (${formatCurrencyINR(supplierStatement.openingBalance)}) + Debits (${formatCurrencyINR(supplierStatement.periodDebits)}) - Credits (${formatCurrencyINR(supplierStatement.periodCredits)}) = Closing Balance (${formatCurrencyINR(supplierStatement.closingBalance)})`
+                        : `⚠ Reconciliation Difference: Discrepancy of ${formatCurrencyINR(supplierStatement.reconciliationDiff)} detected.`}
+                    </span>
+                  </div>
+                  <span className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded font-black self-start sm:self-auto ${
+                    supplierStatement.reconciled
+                      ? "bg-emerald-200/80 text-emerald-950 border border-emerald-300"
+                      : "bg-rose-200 text-rose-950 border border-rose-300"
+                  }`}>
+                    {supplierStatement.reconciled ? "✓ Reconciled" : "⚠ Difference"}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Ledger Table */}
+            {supplierStatement && (
+              <div className="space-y-3">
+                {displayStatementEntries.length === 0 ? (
+                  <div className="py-16 flex flex-col items-center justify-center gap-3 text-center border border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
+                    <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center">
+                      <Receipt size={22} className="text-slate-300" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-700">No Transactions Found</p>
+                      <p className="text-xs text-slate-400 mt-0.5 max-w-sm mx-auto">
+                        No purchase invoices, payments, or stock returns were recorded for {supplier.name} during this selected period.
+                      </p>
+                    </div>
+                    {statementPreset !== "all_time" && (
+                      <button
+                        onClick={() => setStatementPreset("all_time")}
+                        className="mt-1 inline-flex items-center gap-1.5 text-xs font-bold text-navy-800 bg-white border border-slate-200 px-3.5 py-1.5 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
+                      >
+                        Reset to All Time
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto border border-slate-200 rounded-2xl shadow-2xs">
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200">
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Date</th>
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Type</th>
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Reference</th>
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Description</th>
+                          <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Debit (₹)</th>
+                          <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Credit (₹)</th>
+                          <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Balance (₹)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {/* Opening Balance Row */}
+                        <tr className="bg-slate-50/40 text-slate-600 italic font-medium">
+                          <td className="px-4 py-3 text-xs whitespace-nowrap text-slate-500">
+                            {effectiveDateRange.fromDate ? formatStatementDate(effectiveDateRange.fromDate) : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-xs">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 font-sans not-italic">
+                              OPENING
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-400 font-mono not-italic">—</td>
+                          <td className="px-4 py-3 text-xs text-slate-500">
+                            Opening balance liability immediately prior to statement period
+                          </td>
+                          <td className="px-4 py-3 text-xs text-right text-slate-400 not-italic">—</td>
+                          <td className="px-4 py-3 text-xs text-right text-slate-400 not-italic">—</td>
+                          <td className="px-4 py-3 text-xs text-right font-bold text-slate-700 not-italic tabular-nums">
+                            {formatCurrencyINR(supplierStatement.openingBalance)}
+                          </td>
+                        </tr>
+
+                        {/* Chronological Statement Rows */}
+                        {displayStatementEntries.map((entry) => {
+                          const isPurchase = entry.type === "PURCHASE";
+                          const isPayment = entry.type === "PAYMENT";
+                          const isReturn = entry.type === "RETURN";
+
+                          const typeBadgeClass = isPurchase
+                            ? "bg-blue-50 text-blue-700 border-blue-200"
+                            : isPayment
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : "bg-rose-50 text-rose-700 border-rose-200";
+
+                          return (
+                            <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors">
+                              <td className="px-4 py-3 text-xs text-slate-600 font-medium whitespace-nowrap">
+                                {entry.formattedDate}
+                              </td>
+                              <td className="px-4 py-3 text-xs whitespace-nowrap">
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${typeBadgeClass}`}>
+                                  {entry.type}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-xs font-mono font-bold text-slate-700 whitespace-nowrap">
+                                {entry.reference}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-slate-700 leading-snug">
+                                {entry.description}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-right font-bold text-slate-850 tabular-nums whitespace-nowrap">
+                                {entry.debit > 0 ? `₹${entry.debit.toLocaleString()}` : "—"}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-right font-bold text-emerald-700 tabular-nums whitespace-nowrap">
+                                {entry.credit > 0 ? `₹${entry.credit.toLocaleString()}` : "—"}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-right font-black tabular-nums whitespace-nowrap">
+                                <span className={entry.runningBalance > 0 ? "text-rose-600" : "text-emerald-700"}>
+                                  ₹{entry.runningBalance.toLocaleString()}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+
+                        {/* Closing Balance Row */}
+                        <tr className="bg-slate-900 text-white font-bold">
+                          <td className="px-4 py-3 text-xs whitespace-nowrap text-slate-300">
+                            {effectiveDateRange.toDate ? formatStatementDate(effectiveDateRange.toDate) : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-xs">
+                            <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-white/20 text-white border border-white/30 font-sans">
+                              CLOSING
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-400 font-mono">—</td>
+                          <td className="px-4 py-3 text-xs text-slate-200">
+                            Closing Statement Net Liability Balance
+                          </td>
+                          <td className="px-4 py-3 text-xs text-right text-slate-300 tabular-nums whitespace-nowrap">
+                            ₹{supplierStatement.totalPurchases.toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-right text-emerald-400 tabular-nums whitespace-nowrap">
+                            ₹{supplierStatement.periodCredits.toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-right font-black text-white tabular-nums whitespace-nowrap text-sm">
+                            ₹{supplierStatement.closingBalance.toLocaleString()}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── PAYMENTS TAB ── */}
         {activeTab === "payments" && isOwner && (() => {
           const supplierPayments = getSupplierPaymentsBySupplier(id);
@@ -3803,6 +4824,142 @@ export default function SupplierDetailsPage({ params }: { params: Promise<{ id: 
               >
                 Confirm & Apply Payment
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ISOLATED PRINT / PDF STATEMENT VIEW CONTAINER ── */}
+      {supplierStatement && isOwner && (
+        <div id="supplier-statement-print" className="hidden print:block p-8 bg-white text-slate-900 font-sans text-xs">
+          {/* Header */}
+          <div className="border-b-2 border-slate-900 pb-4 mb-6 flex justify-between items-start">
+            <div>
+              <h1 className="text-xl font-black tracking-tight text-slate-900">AUTOVAULT ENTERPRISE ERP</h1>
+              <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mt-0.5">Supplier Financial Statement & Audit Ledger</p>
+            </div>
+            <div className="text-right">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Generated Date & Time</span>
+              <span className="text-xs font-mono font-bold text-slate-700">{new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST</span>
+            </div>
+          </div>
+
+          {/* Supplier & Statement Metadata */}
+          <div className="grid grid-cols-2 gap-6 bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6">
+            <div>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Supplier Account</p>
+              <h2 className="text-sm font-black text-slate-900 mt-0.5">{supplier?.name || "Supplier"}</h2>
+              <div className="text-xs text-slate-600 space-y-0.5 mt-1 font-mono">
+                <p>ID: {supplier?.id || "—"}</p>
+                <p>GSTIN: {supplier?.gst || "—"}</p>
+                <p>Phone: {supplier?.phone || "—"} {supplier?.email ? `· ${supplier.email}` : ""}</p>
+                {supplier?.address && <p className="font-sans text-slate-500 text-[11px]">{supplier.address}</p>}
+              </div>
+            </div>
+
+            <div className="text-right flex flex-col justify-between">
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Statement Period</p>
+                <p className="text-sm font-black text-slate-900 mt-0.5">{supplierStatement.periodLabel}</p>
+              </div>
+              <div className="mt-2 pt-2 border-t border-slate-200">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Closing Statement Balance</p>
+                <p className="text-lg font-black text-slate-900">{formatCurrencyINR(supplierStatement.closingBalance)}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Reconciliation Summary Block */}
+          <div className="mb-6 border border-slate-200 rounded-xl overflow-hidden">
+            <div className="bg-slate-100 px-4 py-2 border-b border-slate-200 font-bold text-slate-700 text-xs uppercase tracking-wider">
+              Financial Reconciliation Summary
+            </div>
+            <div className="grid grid-cols-5 divide-x divide-slate-200 p-3 text-center bg-white text-xs">
+              <div>
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Opening Balance</span>
+                <span className="font-black text-slate-800 text-sm mt-0.5 block">{formatCurrencyINR(supplierStatement.openingBalance)}</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Purchases (Debits)</span>
+                <span className="font-black text-blue-700 text-sm mt-0.5 block">{formatCurrencyINR(supplierStatement.totalPurchases)}</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Returns (Credits)</span>
+                <span className="font-black text-rose-600 text-sm mt-0.5 block">{formatCurrencyINR(supplierStatement.totalReturns)}</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Payments (Credits)</span>
+                <span className="font-black text-emerald-700 text-sm mt-0.5 block">{formatCurrencyINR(supplierStatement.totalPayments)}</span>
+              </div>
+              <div className="bg-slate-50">
+                <span className="text-[10px] text-slate-500 uppercase font-bold block">Closing Balance</span>
+                <span className="font-black text-slate-900 text-sm mt-0.5 block">{formatCurrencyINR(supplierStatement.closingBalance)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Statement Table */}
+          <div className="mb-8">
+            <table className="w-full text-xs border-collapse border border-slate-200">
+              <thead>
+                <tr className="bg-slate-900 text-white font-bold">
+                  <th className="border border-slate-700 px-3 py-2 text-left">Date</th>
+                  <th className="border border-slate-700 px-3 py-2 text-left">Type</th>
+                  <th className="border border-slate-700 px-3 py-2 text-left">Reference</th>
+                  <th className="border border-slate-700 px-3 py-2 text-left">Description</th>
+                  <th className="border border-slate-700 px-3 py-2 text-right">Debit (₹)</th>
+                  <th className="border border-slate-700 px-3 py-2 text-right">Credit (₹)</th>
+                  <th className="border border-slate-700 px-3 py-2 text-right">Balance (₹)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {/* Opening row */}
+                <tr className="bg-slate-50 font-semibold italic border-b border-slate-200">
+                  <td className="border border-slate-200 px-3 py-2">{effectiveDateRange.fromDate ? formatStatementDate(effectiveDateRange.fromDate) : "—"}</td>
+                  <td className="border border-slate-200 px-3 py-2 not-italic font-bold">OPENING</td>
+                  <td className="border border-slate-200 px-3 py-2 font-mono not-italic">—</td>
+                  <td className="border border-slate-200 px-3 py-2 text-slate-600">Opening Balance immediately prior to statement period</td>
+                  <td className="border border-slate-200 px-3 py-2 text-right not-italic">—</td>
+                  <td className="border border-slate-200 px-3 py-2 text-right not-italic">—</td>
+                  <td className="border border-slate-200 px-3 py-2 text-right font-black not-italic">{formatCurrencyINR(supplierStatement.openingBalance)}</td>
+                </tr>
+
+                {/* Entries (chronological ascending for statement print) */}
+                {supplierStatement.entries.map((entry) => (
+                  <tr key={`print-${entry.id}`} className="border-b border-slate-200">
+                    <td className="border border-slate-200 px-3 py-2 whitespace-nowrap">{entry.formattedDate}</td>
+                    <td className="border border-slate-200 px-3 py-2 font-bold">{entry.type}</td>
+                    <td className="border border-slate-200 px-3 py-2 font-mono font-bold">{entry.reference}</td>
+                    <td className="border border-slate-200 px-3 py-2">{entry.description}</td>
+                    <td className="border border-slate-200 px-3 py-2 text-right font-bold">{entry.debit > 0 ? `₹${entry.debit.toLocaleString()}` : "—"}</td>
+                    <td className="border border-slate-200 px-3 py-2 text-right font-bold text-emerald-700">{entry.credit > 0 ? `₹${entry.credit.toLocaleString()}` : "—"}</td>
+                    <td className="border border-slate-200 px-3 py-2 text-right font-black">{formatCurrencyINR(entry.runningBalance)}</td>
+                  </tr>
+                ))}
+
+                {/* Closing row */}
+                <tr className="bg-slate-100 font-black border-t-2 border-slate-900">
+                  <td className="border border-slate-300 px-3 py-2.5">{effectiveDateRange.toDate ? formatStatementDate(effectiveDateRange.toDate) : "—"}</td>
+                  <td className="border border-slate-300 px-3 py-2.5">CLOSING</td>
+                  <td className="border border-slate-300 px-3 py-2.5 font-mono">—</td>
+                  <td className="border border-slate-300 px-3 py-2.5">Closing Statement Net Liability Balance</td>
+                  <td className="border border-slate-300 px-3 py-2.5 text-right">₹{supplierStatement.totalPurchases.toLocaleString()}</td>
+                  <td className="border border-slate-300 px-3 py-2.5 text-right text-emerald-800">₹{supplierStatement.periodCredits.toLocaleString()}</td>
+                  <td className="border border-slate-300 px-3 py-2.5 text-right text-sm">{formatCurrencyINR(supplierStatement.closingBalance)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Footer Signatures */}
+          <div className="pt-12 grid grid-cols-2 gap-12 text-xs">
+            <div>
+              <p className="border-t border-slate-400 pt-2 font-bold text-slate-700">Verified & Prepared By</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">AutoVault ERP Generated Statement</p>
+            </div>
+            <div className="text-right">
+              <p className="border-t border-slate-400 pt-2 font-bold text-slate-700">Authorised Signatory / Stamp</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">{supplier?.name || "Supplier Acknowledgement"}</p>
             </div>
           </div>
         </div>

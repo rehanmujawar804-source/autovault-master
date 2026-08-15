@@ -1009,7 +1009,5 @@ export function generateFinanceCSVText(transactions: FinanceTransaction[]): stri
     ].join(",");
   });
 
-  return [headers.join(","), ...rows].join("\r\n");
+  return [headers.join(","), ...rows].join("\n");
 }
-
-

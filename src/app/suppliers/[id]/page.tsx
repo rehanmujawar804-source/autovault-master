@@ -1,0 +1,5624 @@
+"use client";
+
+import { use, useMemo, useState, useEffect, memo, useCallback } from "react";
+import { useStore } from "@/lib/store";
+import type { Purchase, SupplierPayment, PaymentMethod, PurchaseLineItem, PurchaseReturn, PurchaseOrder, PurchaseOrderItem, PurchaseOrderStatus } from "@/types";
+import { useRole } from "@/hooks/useRole";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { formatPurchaseDate, sortPurchasesDescending } from "@/lib/dateUtils";
+import {
+  ArrowLeft,
+  Truck,
+  Phone,
+  Mail,
+  MapPin,
+  Package,
+  ShoppingBag,
+  Plus,
+  CheckCircle,
+  XCircle,
+  X,
+  AlertCircle,
+  Calendar,
+  Hash,
+  DollarSign,
+  MessageSquare,
+  Activity,
+  ChevronRight,
+  Pencil,
+  Coins,
+  Info,
+  Trash2,
+  CornerDownLeft,
+  FileText,
+  Printer,
+  Copy,
+  Ban,
+  Check,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  AlertTriangle,
+  Search,
+  Star,
+  SlidersHorizontal,
+  ArrowUpDown,
+  Clock,
+  Receipt,
+  RotateCcw,
+  Download,
+} from "lucide-react";
+import type { Supplier, Product } from "@/types";
+import {
+  buildSupplierStatement,
+  getDateRangeForPreset,
+  validateDateRange,
+  formatStatementDate,
+  formatCurrencyINR,
+  normalizeMoney,
+  generateSupplierStatementCSVText,
+  generateSupplierStatementXLSX,
+  type StatementDatePreset,
+  type StatementLedgerEntry,
+  type SupplierStatementSummary,
+} from "@/lib/statementUtils";
+
+import {
+  validateAndNormalizeSupplierForm,
+  validateSupplierName,
+  validateContactPerson,
+  validatePhone,
+  validateWhatsApp,
+  validateEmail,
+  validateAddress,
+  validateGST,
+  validateNotes,
+} from "@/lib/validationUtils";
+
+// ─────────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────────
+
+function formatDate(dateStr?: string | null) {
+  if (!dateStr) return "—";
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return "—";
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  } catch {
+    return "—";
+  }
+}
+
+function formatActivityTimestamp(dateStr?: string | null) {
+  if (!dateStr) return "—";
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    const now = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday = d.toDateString() === yesterday.toDateString();
+
+    const time = d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+    if (isToday) return `Today · ${time}`;
+    if (isYesterday) return `Yesterday · ${time}`;
+    return `${d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })} · ${time}`;
+  } catch {
+    return dateStr;
+  }
+}
+
+const INPUT =
+  "w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-400";
+
+const PO_STATUS_COLOR: Record<PurchaseOrderStatus, string> = {
+  Draft: "bg-slate-100 text-slate-700 border-slate-200",
+  Sent: "bg-blue-50 text-blue-700 border-blue-200",
+  "Supplier Confirmed": "bg-indigo-50 text-indigo-700 border-indigo-200",
+  "Partially Delivered": "bg-amber-50 text-amber-700 border-amber-200",
+  Completed: "bg-emerald-550 text-emerald-800 border-emerald-200",
+  Cancelled: "bg-rose-50 text-rose-700 border-rose-200",
+};
+
+// ─────────────────────────────────────────────
+//  SUPPLIER INVOICE MODAL (Sprint 4.4 + enhancements)
+// ─────────────────────────────────────────────
+
+interface SupplierInvoiceModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  supplier: Supplier;
+  products: Product[];
+  purchaseCount: number; // for ERP record number preview
+  initialPO?: PurchaseOrder | null; // Sprint 4.6 — pre-fill from PO conversion
+}
+
+function blankRow(): PurchaseLineItem {
+  return { id: crypto.randomUUID(), productId: "", quantity: "", buyPrice: "" };
+}
+
+// ── Text Highlight Helper ───────────────────────────────────────────────────
+
+function HighlightedText({ text, query }: { text: string; query: string }) {
+  if (!query.trim()) return <span>{text}</span>;
+  const safeQuery = query.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const regex = new RegExp(`(${safeQuery})`, "gi");
+  const parts = text.split(regex);
+  return (
+    <span>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <mark key={i} className="bg-yellow-200 text-slate-900 font-bold rounded-sm px-0.5">
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
+    </span>
+  );
+}
+
+// ── Searchable Product Combobox ──────────────────────────────────────────────
+
+interface ProductSearchProps {
+  value: string;
+  onChange: (productId: string) => void;
+  products: Product[];
+  rowIdx: number;
+}
+
+function ProductSearchCombobox({ value, onChange, products, rowIdx }: ProductSearchProps) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const selected = products.find((p) => p.id === value);
+
+  const filtered = useMemo(() => {
+    const purchasable = products.filter((p) => (p.status || "Active") === "Active");
+    const q = query.trim().toLowerCase();
+    if (!q) return purchasable;
+    return purchasable.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        (p.brand && p.brand.toLowerCase().includes(q))
+    );
+  }, [products, query]);
+
+  function choose(p: Product) {
+    onChange(p.id);
+    setQuery("");
+    setOpen(false);
+  }
+
+  function handleFocus() {
+    setQuery("");
+    setOpen(true);
+  }
+
+  function handleBlur() {
+    setTimeout(() => setOpen(false), 200);
+  }
+
+  const displayValue = open ? query : (selected ? selected.name : "");
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        value={displayValue}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        placeholder="Search by name, SKU, brand…"
+        aria-label={`Product search row ${rowIdx + 1}`}
+        className="w-full border border-slate-200 rounded-lg px-2.5 py-2 text-xs bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-450"
+      />
+      {open && filtered.length > 0 && (
+        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-30 max-h-56 overflow-y-auto">
+          {filtered.slice(0, 30).map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onMouseDown={() => choose(p)}
+              className="w-full flex flex-col px-3.5 py-2 text-left hover:bg-navy-50 border-b border-slate-100 last:border-0 transition-colors"
+            >
+              <div className="w-full flex justify-between items-start gap-2">
+                <span className="text-xs font-black text-slate-800">
+                  <HighlightedText text={p.name} query={query} />
+                </span>
+                <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-full shrink-0 border ${p.stock === 0
+                    ? "bg-red-50 border-red-200 text-red-700"
+                    : p.stock <= p.lowStockThreshold
+                      ? "bg-amber-50 border-amber-200 text-amber-700"
+                      : "bg-green-50 border-green-200 text-green-700"
+                  }`}>
+                  Stock: {p.stock}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[9px] text-slate-450 font-mono mt-1">
+                <span>SKU: <HighlightedText text={p.sku} query={query} /></span>
+                {p.brand && <span>Brand: <HighlightedText text={p.brand} query={query} /></span>}
+                <span>Last Cost: ₹{p.currentCost.toLocaleString()}</span>
+                <span>Selling: ₹{p.sellPrice.toLocaleString()}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      {open && filtered.length === 0 && (
+        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-30 p-3 text-center text-xs text-slate-400">
+          No matching products found.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Memoized Product Row Item ───────────────────────────────────────────────
+
+interface RowItemProps {
+  row: PurchaseLineItem;
+  idx: number;
+  products: Product[];
+  error?: { quantity?: string; buyPrice?: string; productId?: string };
+  onChangeProduct: (id: string, productId: string) => void;
+  onChangeQty: (id: string, qty: string) => void;
+  onChangePrice: (id: string, price: string) => void;
+  onDuplicate: (row: PurchaseLineItem) => void;
+  onDelete: (id: string) => void;
+  canDelete: boolean;
+}
+
+const SupplierInvoiceRowItem = memo(({
+  row,
+  idx,
+  products,
+  error,
+  onChangeProduct,
+  onChangeQty,
+  onChangePrice,
+  onDuplicate,
+  onDelete,
+  canDelete,
+}: RowItemProps) => {
+  const selectedProduct = products.find((p) => p.id === row.productId);
+
+  const rowQty = parseInt(row.quantity) || 0;
+  const rowPrice = parseFloat(row.buyPrice) || 0;
+  const rowTotal = rowQty * rowPrice;
+
+  // Margin calculation
+  const sellPrice = selectedProduct?.sellPrice ?? 0;
+  const marginAbs = rowPrice > 0 ? sellPrice - rowPrice : null;
+  const marginPct = rowPrice > 0 && sellPrice > 0
+    ? ((sellPrice - rowPrice) / rowPrice * 100)
+    : null;
+
+  return (
+    <div className="bg-slate-50/50 border border-slate-200 rounded-xl p-3 space-y-2 hover:border-slate-300 transition-all">
+      {/* Header section: name, sku, brand, and stock level badge with health colors */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          {selectedProduct ? (
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className="font-bold text-xs text-slate-800">{selectedProduct.name}</span>
+              <span className="text-[9px] text-slate-450 font-mono">
+                SKU: {selectedProduct.sku} {selectedProduct.brand ? `· Brand: ${selectedProduct.brand}` : ""}
+              </span>
+            </div>
+          ) : (
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+              Line {idx + 1}: Select Product
+            </span>
+          )}
+        </div>
+
+        {selectedProduct && (
+          <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full border shrink-0 ${selectedProduct.stock === 0
+              ? "bg-red-50 border-red-200 text-red-700 animate-pulse"
+              : selectedProduct.stock <= selectedProduct.lowStockThreshold
+                ? "bg-amber-50 border-amber-200 text-amber-700"
+                : "bg-green-50 border-green-200 text-green-700"
+            }`}>
+            {selectedProduct.stock === 0
+              ? "Out of Stock"
+              : selectedProduct.stock <= selectedProduct.lowStockThreshold
+                ? `Low Stock: ${selectedProduct.stock}`
+                : `Stock: ${selectedProduct.stock}`}
+          </span>
+        )}
+      </div>
+
+      {/* Row 1: Search Combobox */}
+      <div className="w-full">
+        <ProductSearchCombobox
+          value={row.productId}
+          onChange={(productId) => onChangeProduct(row.id, productId)}
+          products={products}
+          rowIdx={idx}
+        />
+        {error?.productId && (
+          <span className="text-[9px] font-extrabold text-red-500 mt-1 block pl-1">{error.productId}</span>
+        )}
+      </div>
+
+      {/* Row 2: Qty | Buy Price | Margin info | Total | Actions */}
+      <div className="grid grid-cols-[80px_110px_1fr_90px_60px] gap-2 items-start pt-1">
+        {/* Qty */}
+        <div>
+          <label className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Qty</label>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            placeholder="0"
+            value={row.quantity}
+            onChange={(e) => onChangeQty(row.id, e.target.value)}
+            className={`w-full border rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all ${error?.quantity ? "border-red-400 bg-red-50/50" : "border-slate-200 bg-white"
+              }`}
+          />
+          {error?.quantity && (
+            <span className="text-[9px] font-extrabold text-red-500 mt-0.5 block leading-tight">{error.quantity}</span>
+          )}
+        </div>
+
+        {/* Buy Price */}
+        <div>
+          <label className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Buy Price (₹)</label>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="0.00"
+            value={row.buyPrice}
+            onChange={(e) => onChangePrice(row.id, e.target.value)}
+            className={`w-full border rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all ${error?.buyPrice ? "border-red-400 bg-red-50/50" : "border-slate-200 bg-white"
+              }`}
+          />
+          {error?.buyPrice && (
+            <span className="text-[9px] font-extrabold text-red-500 mt-0.5 block leading-tight">{error.buyPrice}</span>
+          )}
+        </div>
+
+        {/* Margin Preview */}
+        <div className="text-left pl-1 self-center">
+          {selectedProduct ? (
+            <div className="space-y-0.5">
+              <p className="text-[9px] text-slate-400 leading-tight">
+                Last: <span className="font-bold text-slate-700">₹{selectedProduct.currentCost.toLocaleString()}</span> • Sell: <span className="font-bold text-slate-700">₹{selectedProduct.sellPrice.toLocaleString()}</span>
+              </p>
+              {marginAbs !== null && marginPct !== null && (
+                <p className={`text-[9px] font-extrabold leading-tight ${marginAbs >= 0 ? "text-emerald-600" : "text-rose-500"}`}>
+                  Markup: {marginAbs >= 0 ? "▲" : "▼"} ₹{Math.abs(marginAbs).toLocaleString()} ({marginPct.toFixed(1)}%)
+                </p>
+              )}
+            </div>
+          ) : (
+            <span className="text-[9px] text-slate-300 pl-1">—</span>
+          )}
+        </div>
+
+        {/* Total Display */}
+        <div className="text-right self-center pr-1">
+          <span className={`text-xs font-black ${rowTotal > 0 ? "text-slate-800" : "text-slate-350"}`}>
+            ₹{rowTotal.toLocaleString()}
+          </span>
+        </div>
+
+        {/* Action Shortcuts: Duplicate and Delete */}
+        <div className="flex gap-1 justify-end self-center pt-0.5">
+          <button
+            type="button"
+            onClick={() => onDuplicate(row)}
+            title="Duplicate Row"
+            className="w-6 h-6 rounded-md bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 flex items-center justify-center transition-colors cursor-pointer"
+          >
+            <Plus size={11} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(row.id)}
+            disabled={!canDelete}
+            title="Delete Row"
+            className="w-6 h-6 rounded-md bg-slate-100 text-slate-400 hover:bg-red-50 hover:text-red-500 flex items-center justify-center transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <Trash2 size={11} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+SupplierInvoiceRowItem.displayName = "SupplierInvoiceRowItem";
+
+// ── Success Overlay component ────────────────────────────────────────────────
+
+interface SuccessOverlayProps {
+  purchases: number;
+  movements: number;
+  finance: number;
+}
+
+function SuccessOverlay({ purchases, movements, finance }: SuccessOverlayProps) {
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[9999] animate-in fade-in duration-200">
+      <div className="bg-slate-900 border border-slate-800 text-white rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl flex flex-col items-center gap-4 animate-in zoom-in-95 duration-200">
+        <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+          <CheckCircle size={36} className="animate-bounce" />
+        </div>
+        <div>
+          <h2 className="text-lg font-black tracking-tight text-white">✅ Supplier Invoice Recorded</h2>
+          <p className="text-xs text-slate-400 mt-1">Updates written to transaction logs successfully</p>
+        </div>
+        <div className="w-full bg-slate-850 border border-slate-800 rounded-xl p-4 text-left space-y-2 mt-2">
+          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Database Records Generated:</p>
+          <div className="flex justify-between text-xs font-mono border-b border-slate-800 pb-1.5">
+            <span className="text-slate-400">Purchase Records</span>
+            <span className="text-emerald-400 font-bold">{purchases}</span>
+          </div>
+          <div className="flex justify-between text-xs font-mono border-b border-slate-800 pb-1.5">
+            <span className="text-slate-400">Stock Movements</span>
+            <span className="text-emerald-400 font-bold">{movements}</span>
+          </div>
+          <div className="flex justify-between text-xs font-mono">
+            <span className="text-slate-400">Finance Transactions</span>
+            <span className="text-emerald-400 font-bold">{finance}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-2 font-bold uppercase tracking-widest">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+          Closing...
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Modal ───────────────────────────────────────────────────────────────
+
+function SupplierInvoiceModal({ isOpen, onClose, supplier, products, purchaseCount, initialPO }: SupplierInvoiceModalProps) {
+  const { addPurchaseBatch, showToast } = useStore();
+
+  const today = new Date().toISOString().split("T")[0];
+
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [date, setDate] = useState(today);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("Cash");
+  const [paidInput, setPaidInput] = useState("");
+  const [notes, setNotes] = useState("");
+  const [rows, setRows] = useState<PurchaseLineItem[]>([blankRow()]);
+  const [formError, setFormError] = useState("");
+  const [initialized, setInitialized] = useState(false);
+
+  // Bulk Paste panel state
+  const [showBulkPaste, setShowBulkPaste] = useState(false);
+  const [bulkPasteText, setBulkPasteText] = useState("");
+
+  // Success screen state
+  const [successState, setSuccessState] = useState<{
+    purchases: number;
+    movements: number;
+    finance: number;
+  } | null>(null);
+
+  // Reset form when modal opens
+  if (isOpen && !initialized) {
+    setInitialized(true);
+    setInvoiceNumber("");
+    setDate(today);
+    setPaymentMethod("Cash");
+    setPaidInput("");
+    setFormError("");
+    setShowBulkPaste(false);
+    setBulkPasteText("");
+    setSuccessState(null);
+
+    // Pre-fill from PO conversion: only remaining quantities
+    if (initialPO) {
+      setNotes(`Received against ${initialPO.poNumber}`);
+      const poRows: PurchaseLineItem[] = initialPO.items
+        .filter((item) => item.quantity - item.receivedQuantity > 0)
+        .map((item) => ({
+          id: crypto.randomUUID(),
+          productId: item.productId,
+          quantity: String(item.quantity - item.receivedQuantity),
+          buyPrice: String(item.expectedBuyPrice),
+          expectedBuyPrice: String(item.expectedBuyPrice),
+        }));
+      setRows(poRows.length > 0 ? poRows : [blankRow()]);
+    } else {
+      setNotes("");
+      setRows([blankRow()]);
+    }
+  }
+
+  // ── Callbacks for Memoized Row Performance ──────────────────────────────────
+  const onChangeProduct = useCallback((id: string, productId: string) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, productId } : r));
+  }, []);
+
+  const onChangeQty = useCallback((id: string, quantity: string) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, quantity } : r));
+  }, []);
+
+  const onChangePrice = useCallback((id: string, buyPrice: string) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, buyPrice } : r));
+  }, []);
+
+  const onDuplicate = useCallback((row: PurchaseLineItem) => {
+    setRows((prev) => {
+      const idx = prev.findIndex((r) => r.id === row.id);
+      const newRow = {
+        id: crypto.randomUUID(),
+        productId: row.productId,
+        quantity: row.quantity,
+        buyPrice: row.buyPrice,
+      };
+      if (idx === -1) return [...prev, newRow];
+      const copy = [...prev];
+      copy.splice(idx + 1, 0, newRow);
+      return copy;
+    });
+  }, []);
+
+  const onDelete = useCallback((id: string) => {
+    setRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
+  }, []);
+
+  const addRow = useCallback(() => {
+    setRows((prev) => [...prev, blankRow()]);
+  }, []);
+
+  // ── Bulk Paste Import Handler ──────────────────────────────────────────────
+  const handleImportBulk = useCallback((text: string) => {
+    const lines = text.split(/\r?\n/);
+    const newItems: PurchaseLineItem[] = [];
+    const unrecognizedSKUs: string[] = [];
+
+    for (const line of lines) {
+      const clean = line.trim();
+      if (!clean) continue;
+
+      // Match whitespace split
+      const parts = clean.split(/\s+/);
+      if (parts.length >= 1) {
+        const sku = parts[0];
+        const qty = parts[1] || "1";
+        const buyPrice = parts[2] || "0";
+
+        // Find product by SKU
+        const matched = products.find((p) => p.sku.toLowerCase() === sku.toLowerCase());
+        if (matched) {
+          newItems.push({
+            id: crypto.randomUUID(),
+            productId: matched.id,
+            quantity: qty,
+            buyPrice: buyPrice,
+          });
+        } else {
+          unrecognizedSKUs.push(sku);
+        }
+      }
+    }
+
+    if (newItems.length > 0) {
+      setRows((prev) => {
+        // If the single initial row is blank/empty, replace it
+        const isInitialEmpty = prev.length === 1 && !prev[0].productId && !prev[0].quantity && !prev[0].buyPrice;
+        return isInitialEmpty ? newItems : [...prev, ...newItems];
+      });
+      showToast(`Imported ${newItems.length} products.`, "success");
+    }
+
+    if (unrecognizedSKUs.length > 0) {
+      showToast(`Skipped ${unrecognizedSKUs.length} unknown SKUs: ${unrecognizedSKUs.join(", ")}`, "info");
+    }
+  }, [products, showToast]);
+
+  if (!isOpen) return null;
+
+  function handleClose() {
+    setInitialized(false);
+    onClose();
+  }
+
+  // ── Live Summary Calculations ─────────────────
+  const subtotal = rows.reduce((s, r) => {
+    const qty = parseInt(r.quantity) || 0;
+    const price = parseFloat(r.buyPrice) || 0;
+    return s + qty * price;
+  }, 0);
+
+  const totalPaid = Math.min(Math.max(parseFloat(paidInput) || 0, 0), subtotal);
+  const balance = Math.max(0, subtotal - totalPaid);
+  const totalUnits = rows.reduce((s, r) => s + (parseInt(r.quantity) || 0), 0);
+  const productCount = rows.filter((r) => r.productId).length;
+
+  // ERP purchase preview sequence
+  const year = new Date().getFullYear();
+  const firstNum = purchaseCount + 1;
+  const lastNum = purchaseCount + rows.length;
+  const purPreview = rows.length === 1
+    ? `PUR-${year}-${String(firstNum).padStart(5, "0")}`
+    : `PUR-${year}-${String(firstNum).padStart(5, "0")} → ${String(lastNum).padStart(5, "0")}`;
+
+  // ── Inline Validation Logic ───────────────────
+  const rowErrors: Record<string, { quantity?: string; buyPrice?: string; productId?: string }> = {};
+  rows.forEach((r) => {
+    rowErrors[r.id] = {};
+    if (!r.productId) {
+      rowErrors[r.id].productId = "Please select product";
+    }
+    const qVal = parseInt(r.quantity);
+    if (!r.quantity) {
+      rowErrors[r.id].quantity = "Qty required";
+    } else if (isNaN(qVal) || qVal <= 0) {
+      rowErrors[r.id].quantity = "Must be > 0";
+    }
+    const pVal = parseFloat(r.buyPrice);
+    if (!r.buyPrice) {
+      rowErrors[r.id].buyPrice = "Price required";
+    } else if (isNaN(pVal) || pVal < 0) {
+      rowErrors[r.id].buyPrice = "Must be >= 0";
+    }
+  });
+
+  const isFormValid = rows.length > 0 && Object.values(rowErrors).every(
+    (err) => !err.productId && !err.quantity && !err.buyPrice
+  );
+
+  // ── Validation & Save ─────────────────────────
+  function handleSave() {
+    if (!isFormValid) return;
+
+    if (!date) { setFormError("Please select a date."); return; }
+
+    const rawPaid = parseFloat(paidInput) || 0;
+    if (rawPaid < 0) { setFormError("Amount paid cannot be negative."); return; }
+    if (rawPaid > subtotal) { setFormError("Amount paid cannot exceed the invoice total."); return; }
+
+    const items = rows.map((r) => ({
+      productId: r.productId,
+      quantity: parseInt(r.quantity),
+      buyPrice: parseFloat(r.buyPrice),
+      expectedBuyPrice: r.expectedBuyPrice ? parseFloat(r.expectedBuyPrice) : undefined,
+    }));
+
+    try {
+      addPurchaseBatch({
+        supplierId: supplier.id,
+        invoiceNumber: invoiceNumber.trim(),
+        date,
+        notes: notes.trim(),
+        paymentMethod,
+        totalPaid: rawPaid,
+        items,
+        purchaseOrderId: initialPO?.id,
+      });
+
+      // Show success screen animations
+      setSuccessState({
+        purchases: items.length,
+        movements: items.length,
+        finance: rawPaid > 0 ? items.length : 0,
+      });
+
+      // Auto close after 2s
+      setTimeout(() => {
+        setSuccessState(null);
+        setInitialized(false);
+        onClose();
+      }, 2000);
+
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to record invoice.");
+    }
+  }
+
+  return (
+    <>
+      {successState && (
+        <SuccessOverlay
+          purchases={successState.purchases}
+          movements={successState.movements}
+          finance={successState.finance}
+        />
+      )}
+
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        {/* Modal — flex column so sticky summary+footer stay outside scroll */}
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[94vh] flex flex-col animate-in zoom-in-95 duration-150">
+
+          {/* ── Header ── */}
+          <div className="flex items-center justify-between p-5 border-b border-slate-200 shrink-0 rounded-t-2xl">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+                <ShoppingBag size={16} className="text-emerald-700" />
+              </div>
+              <div>
+                <h2 className="font-bold text-slate-800 text-base leading-tight">Record Supplier Invoice</h2>
+                <p className="text-[10px] text-slate-400 leading-tight">{supplier.name}</p>
+              </div>
+            </div>
+            <button onClick={handleClose} className="text-slate-400 hover:text-slate-700 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors">
+              <X size={18} />
+            </button>
+          </div>
+
+          {/* ── Scrollable body ── */}
+          <div className="overflow-y-auto flex-1 p-5 space-y-4">
+
+            {/* Error Banner */}
+            {formError && (
+              <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl shrink-0">
+                <AlertCircle size={15} className="shrink-0 mt-0.5" />
+                <span>{formError}</span>
+              </div>
+            )}
+
+            {/* Invoice Header: Number | Date | Payment Method */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+                  Supplier Invoice No.
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. INV-5482"
+                  value={invoiceNumber}
+                  onChange={(e) => { setInvoiceNumber(e.target.value); setFormError(""); }}
+                  className={INPUT}
+                />
+                {/* ERP purchase number preview */}
+                <p className="text-[10px] text-slate-400 mt-1 font-mono pl-1 leading-tight">
+                  ERP: <span className="font-bold text-navy-800">{purPreview}</span>
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+                  Date <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => { setDate(e.target.value); setFormError(""); }}
+                  className={INPUT}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Payment Method</label>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => { setPaymentMethod(e.target.value as PaymentMethod); setFormError(""); }}
+                  className={INPUT}
+                >
+                  <option value="Cash">Cash</option>
+                  <option value="UPI">UPI</option>
+                  <option value="Card">Card / Bank</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Products Section Header & Bulk Import Actions */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-black text-slate-600 uppercase tracking-wider">Products</h3>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowBulkPaste(!showBulkPaste);
+                      setBulkPasteText("");
+                    }}
+                    className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                  >
+                    Bulk Paste
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addRow}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Plus size={13} />
+                    Add Row
+                  </button>
+                </div>
+              </div>
+
+              {/* Bulk Paste Expansion */}
+              {showBulkPaste && (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5 animate-in slide-in-from-top-2 duration-150">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                      Bulk Paste (Format: SKU Qty BuyPrice)
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder={"OF-101 2 145\nAF-201 1 620"}
+                      value={bulkPasteText}
+                      onChange={(e) => setBulkPasteText(e.target.value)}
+                      className="w-full border border-slate-200 rounded-lg p-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all font-mono placeholder:text-slate-350"
+                    />
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setShowBulkPaste(false)}
+                      className="px-3 py-1.5 text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!bulkPasteText.trim()}
+                      onClick={() => {
+                        handleImportBulk(bulkPasteText);
+                        setBulkPasteText("");
+                        setShowBulkPaste(false);
+                      }}
+                      className="px-3 py-1.5 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Import Rows
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* List of Product Rows (Memoized for peak performance) */}
+            <div className="space-y-2.5">
+              {rows.map((row, idx) => (
+                <SupplierInvoiceRowItem
+                  key={row.id}
+                  row={row}
+                  idx={idx}
+                  products={products}
+                  error={rowErrors[row.id]}
+                  onChangeProduct={onChangeProduct}
+                  onChangeQty={onChangeQty}
+                  onChangePrice={onChangePrice}
+                  onDuplicate={onDuplicate}
+                  onDelete={onDelete}
+                  canDelete={rows.length > 1}
+                />
+              ))}
+            </div>
+
+            {/* Add Row helper button at bottom */}
+            {rows.length >= 3 && (
+              <button
+                type="button"
+                onClick={addRow}
+                className="w-full py-2 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-dashed border-emerald-300 rounded-xl transition-colors cursor-pointer"
+              >
+                + Add Another Product
+              </button>
+            )}
+
+            {/* Notes field */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Notes (optional)</label>
+              <textarea
+                placeholder="Any notes about this invoice…"
+                rows={2}
+                value={notes}
+                onChange={(e) => { setNotes(e.target.value); }}
+                className={INPUT + " resize-none"}
+              />
+            </div>
+          </div>
+
+          {/* ── Sticky Summary & Action Footer ── */}
+          <div className="shrink-0 border-t border-slate-200 bg-slate-50/95 rounded-b-2xl">
+
+            {/* Rich 8-Card ERP Summary Grid */}
+            <div className="px-5 pt-4 pb-3">
+              <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Products</p>
+                  <p className="text-sm font-black text-slate-800 mt-0.5">{productCount}</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Units</p>
+                  <p className="text-sm font-black text-slate-800 mt-0.5">{totalUnits}</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Subtotal</p>
+                  <p className="text-sm font-black text-slate-800 mt-0.5">₹{subtotal.toLocaleString()}</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">GST</p>
+                  <p className="text-sm font-black text-slate-450 mt-0.5">₹0</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Discount</p>
+                  <p className="text-sm font-black text-slate-450 mt-0.5">₹0</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Grand Total</p>
+                  <p className="text-sm font-black text-slate-800 mt-0.5">₹{subtotal.toLocaleString()}</p>
+                </div>
+                <div className="bg-white border border-emerald-250 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-bold text-emerald-600 uppercase tracking-wider">Paid</p>
+                  <p className="text-sm font-black text-emerald-700 mt-0.5">₹{totalPaid.toLocaleString()}</p>
+                </div>
+                <div className={`border rounded-xl p-2 text-center ${balance > 0 ? "bg-amber-50 border-amber-200" : "bg-white border-slate-200"}`}>
+                  <p className={`text-[9px] font-bold uppercase tracking-wider ${balance > 0 ? "text-amber-600" : "text-slate-400"}`}>Balance</p>
+                  <p className={`text-sm font-black mt-0.5 ${balance > 0 ? "text-amber-700" : "text-slate-400"}`}>₹{balance.toLocaleString()}</p>
+                </div>
+              </div>
+
+              {/* Amount Paid Inline Input */}
+              <div className="mt-3 flex items-center gap-3">
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0 pl-1">
+                  Amount Paid (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Leave 0 for full credit"
+                  value={paidInput}
+                  onChange={(e) => { setPaidInput(e.target.value); setFormError(""); }}
+                  className="flex-1 border border-slate-200 rounded-xl px-3.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-400 font-bold"
+                />
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex gap-3 px-5 py-3 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={handleClose}
+                className="flex-1 px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={!isFormValid}
+                className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-500 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Record Invoice →
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+
+
+
+
+
+// ─────────────────────────────────────────────
+//  EDIT SUPPLIER MODAL (inline)
+// ─────────────────────────────────────────────
+
+interface EditSupplierModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  supplier: Supplier;
+}
+
+function EditSupplierModal({ isOpen, onClose, supplier }: EditSupplierModalProps) {
+  const { state, updateSupplier, showToast } = useStore();
+
+  const [form, setForm] = useState({
+    name: supplier.name,
+    contactPerson: supplier.contactPerson || "",
+    phone: supplier.phone || "",
+    whatsApp: supplier.whatsApp || "",
+    email: supplier.email || "",
+    address: supplier.address || "",
+    gst: supplier.gst || "",
+    notes: supplier.notes || "",
+    status: supplier.status,
+  });
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [formError, setFormError] = useState("");
+  const [initialized, setInitialized] = useState<string | null>(null);
+
+  const suppliers = state.suppliers || [];
+
+  if (isOpen) {
+    const key = supplier.id;
+    if (initialized !== key) {
+      setInitialized(key);
+      setForm({
+        name: supplier.name,
+        contactPerson: supplier.contactPerson || "",
+        phone: supplier.phone || "",
+        whatsApp: supplier.whatsApp || "",
+        email: supplier.email || "",
+        address: supplier.address || "",
+        gst: supplier.gst || "",
+        notes: supplier.notes || "",
+        status: supplier.status,
+      });
+      setFieldErrors({});
+      setFormError("");
+    }
+  }
+
+  if (!isOpen) return null;
+
+  function setField<K extends keyof typeof form>(key: K, val: (typeof form)[K]) {
+    setForm((prev) => ({ ...prev, [key]: val }));
+    if (fieldErrors[key]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+    if ((key === "phone" || key === "email") && fieldErrors.contactMethod) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next.contactMethod;
+        return next;
+      });
+    }
+    if (formError) setFormError("");
+  }
+
+  function handleBlur(fieldName: keyof typeof form) {
+    let err: string | null = null;
+    const currentId = supplier.id;
+
+    if (fieldName === "name") {
+      err = validateSupplierName(form.name, suppliers, currentId);
+    } else if (fieldName === "contactPerson") {
+      err = validateContactPerson(form.contactPerson);
+    } else if (fieldName === "phone") {
+      err = validatePhone(form.phone, suppliers, currentId);
+    } else if (fieldName === "whatsApp") {
+      err = validateWhatsApp(form.whatsApp, suppliers, currentId);
+    } else if (fieldName === "email") {
+      err = validateEmail(form.email, suppliers, currentId);
+    } else if (fieldName === "address") {
+      err = validateAddress(form.address);
+    } else if (fieldName === "gst") {
+      err = validateGST(form.gst, suppliers, currentId);
+    } else if (fieldName === "notes") {
+      err = validateNotes(form.notes);
+    }
+
+    if (fieldName === "phone" || fieldName === "email") {
+      if (form.phone.trim() || form.email.trim()) {
+        if (fieldErrors.contactMethod) {
+          setFieldErrors((prev) => {
+            const next = { ...prev };
+            delete next.contactMethod;
+            return next;
+          });
+        }
+      }
+    }
+
+    if (err) {
+      setFieldErrors((prev) => ({ ...prev, [fieldName]: err! }));
+    } else if (fieldErrors[fieldName]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[fieldName];
+        return next;
+      });
+    }
+  }
+
+  function handleClose() {
+    setInitialized(null);
+    setFieldErrors({});
+    setFormError("");
+    onClose();
+  }
+
+  function handleSave() {
+    const validationResult = validateAndNormalizeSupplierForm(form, suppliers, supplier.id);
+
+    if (!validationResult.isValid) {
+      setFieldErrors(validationResult.errors);
+      setFormError("Please fix the validation errors before saving.");
+      return;
+    }
+
+    try {
+      const { normalizedData } = validationResult;
+      updateSupplier({
+        ...supplier,
+        ...normalizedData,
+      });
+      showToast(`"${normalizedData.name}" updated successfully.`, "success");
+      handleClose();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to save supplier.";
+      setFormError(msg);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 sticky top-0 bg-white z-10 rounded-t-2xl">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-navy-50 flex items-center justify-center">
+              <Truck size={16} className="text-navy-700" />
+            </div>
+            <h2 className="font-bold text-slate-800 text-base">Edit Supplier</h2>
+          </div>
+          <button onClick={handleClose} className="text-slate-400 hover:text-slate-700 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          {formError && (
+            <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl">
+              <AlertCircle size={15} className="shrink-0 mt-0.5" />
+              <span>{formError}</span>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+              Supplier Name <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Minda Industries Ltd."
+              value={form.name}
+              onChange={(e) => setField("name", e.target.value)}
+              onBlur={() => handleBlur("name")}
+              maxLength={100}
+              autoComplete="organization"
+              className={`${INPUT} ${fieldErrors.name ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+              autoFocus
+            />
+            {fieldErrors.name && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.name}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+              Contact Person
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Rajesh Kumar"
+              value={form.contactPerson}
+              onChange={(e) => setField("contactPerson", e.target.value)}
+              onBlur={() => handleBlur("contactPerson")}
+              maxLength={80}
+              autoComplete="name"
+              className={`${INPUT} ${fieldErrors.contactPerson ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+            />
+            {fieldErrors.contactPerson && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.contactPerson}
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-3 pt-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                Contact Details
+              </span>
+              <span className="text-[11px] text-slate-400">
+                Phone or Email required
+              </span>
+            </div>
+
+            {fieldErrors.contactMethod && (
+              <div className="flex items-start gap-1.5 text-xs text-red-600 font-medium bg-red-50 border border-red-200 px-3 py-2 rounded-lg">
+                <AlertCircle size={13} className="shrink-0 mt-0.5" />
+                <span>{fieldErrors.contactMethod}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Phone</label>
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  placeholder="98765 43210"
+                  value={form.phone}
+                  onChange={(e) => setField("phone", e.target.value)}
+                  onBlur={() => handleBlur("phone")}
+                  maxLength={20}
+                  className={`${INPUT} ${fieldErrors.phone || fieldErrors.contactMethod ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+                />
+                {fieldErrors.phone && (
+                  <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                    <AlertCircle size={12} className="shrink-0" />
+                    {fieldErrors.phone}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">WhatsApp</label>
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  placeholder="98765 43210"
+                  value={form.whatsApp}
+                  onChange={(e) => setField("whatsApp", e.target.value)}
+                  onBlur={() => handleBlur("whatsApp")}
+                  maxLength={20}
+                  className={`${INPUT} ${fieldErrors.whatsApp ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+                />
+                {fieldErrors.whatsApp && (
+                  <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                    <AlertCircle size={12} className="shrink-0" />
+                    {fieldErrors.whatsApp}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Email</label>
+              <input
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                placeholder="supplier@example.com"
+                value={form.email}
+                onChange={(e) => setField("email", e.target.value)}
+                onBlur={() => handleBlur("email")}
+                maxLength={150}
+                className={`${INPUT} ${fieldErrors.email || fieldErrors.contactMethod ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+              />
+              {fieldErrors.email && (
+                <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                  <AlertCircle size={12} className="shrink-0" />
+                  {fieldErrors.email}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+              Address <span className="text-red-500">*</span>
+            </label>
+            <textarea
+              placeholder="Full business address"
+              rows={2}
+              value={form.address}
+              onChange={(e) => setField("address", e.target.value)}
+              onBlur={() => handleBlur("address")}
+              maxLength={300}
+              autoComplete="street-address"
+              className={`${INPUT} resize-none ${fieldErrors.address ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+            />
+            {fieldErrors.address && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.address}
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+                GST Number <span className="text-slate-400 font-normal">(optional)</span>
+              </label>
+              <input
+                type="text"
+                inputMode="text"
+                autoCapitalize="characters"
+                placeholder="29ABCDE1234F1Z5"
+                value={form.gst}
+                onChange={(e) => setField("gst", e.target.value.toUpperCase())}
+                onBlur={() => handleBlur("gst")}
+                maxLength={18}
+                className={`${INPUT} uppercase ${fieldErrors.gst ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+              />
+              {fieldErrors.gst && (
+                <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                  <AlertCircle size={12} className="shrink-0" />
+                  {fieldErrors.gst}
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Status</label>
+              <select value={form.status} onChange={(e) => setField("status", e.target.value as "Active" | "Inactive")} className={INPUT}>
+                <option value="Active">Active</option>
+                <option value="Inactive">Inactive</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Notes</label>
+            <textarea
+              placeholder="Any notes about this supplier…"
+              rows={3}
+              value={form.notes}
+              onChange={(e) => setField("notes", e.target.value)}
+              onBlur={() => handleBlur("notes")}
+              maxLength={500}
+              className={`${INPUT} resize-none ${fieldErrors.notes ? "border-red-400 bg-red-50/20 focus:border-red-500 focus:ring-red-500/20" : ""}`}
+            />
+            {fieldErrors.notes && (
+              <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                <AlertCircle size={12} className="shrink-0" />
+                {fieldErrors.notes}
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="flex gap-3 px-5 py-4 border-t border-slate-200 bg-slate-50/50 rounded-b-2xl sticky bottom-0">
+          <button onClick={handleClose} className="flex-1 px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer">
+            Cancel
+          </button>
+          <button onClick={handleSave} className="flex-1 px-4 py-2.5 text-sm font-bold text-navy-950 bg-yellow-400 rounded-xl hover:bg-yellow-300 transition-colors cursor-pointer">
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  PURCHASE ORDER MODAL (Sprint 4.6)
+// ─────────────────────────────────────────────
+
+interface POModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  supplier: Supplier;
+  products: Product[];
+  existingPO?: PurchaseOrder | null; // null → create, PurchaseOrder → edit
+}
+
+interface POLineItem {
+  id: string;
+  productId: string;
+  quantity: string;
+  expectedBuyPrice: string;
+}
+
+function blankPORow(): POLineItem {
+  return { id: crypto.randomUUID(), productId: "", quantity: "", expectedBuyPrice: "" };
+}
+
+function PurchaseOrderModal({ isOpen, onClose, supplier, products, existingPO }: POModalProps) {
+  const { state, createPurchaseOrder, updatePurchaseOrder, showToast } = useStore();
+
+  const today = new Date().toISOString().split("T")[0];
+  const oneWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  const isPOPartiallyDelivered = existingPO?.status === "Partially Delivered";
+
+  const [expectedDelivery, setExpectedDelivery] = useState(oneWeek);
+  const [notes, setNotes] = useState("");
+  const [rows, setRows] = useState<POLineItem[]>([blankPORow()]);
+  const [formError, setFormError] = useState("");
+  const [initialized, setInitialized] = useState(false);
+
+  // Reset / seed when modal opens
+  if (isOpen && !initialized) {
+    setInitialized(true);
+    setFormError("");
+    if (existingPO) {
+      setExpectedDelivery(existingPO.expectedDeliveryDate || oneWeek);
+      setNotes(existingPO.notes || "");
+      const isPartiallyDelivered = existingPO.status === "Partially Delivered";
+      setRows(
+        existingPO.items.map((item) => ({
+          id: item.id || crypto.randomUUID(),
+          productId: item.productId,
+          // When partially delivered, show remaining qty only
+          quantity: isPartiallyDelivered
+            ? String(Math.max(0, item.quantity - item.receivedQuantity))
+            : String(item.quantity),
+          expectedBuyPrice: String(item.expectedBuyPrice),
+        }))
+      );
+    } else {
+      setExpectedDelivery(oneWeek);
+      setNotes("");
+      setRows([blankPORow()]);
+    }
+  }
+
+  function handleClose() {
+    setInitialized(false);
+    onClose();
+  }
+
+  const estTotal = rows.reduce((s, r) => {
+    const qty = parseInt(r.quantity) || 0;
+    const price = parseFloat(r.expectedBuyPrice) || 0;
+    return s + qty * price;
+  }, 0);
+
+  // Inline validation
+  const rowErrors: Record<string, { quantity?: string; buyPrice?: string; productId?: string }> = {};
+  rows.forEach((r) => {
+    rowErrors[r.id] = {};
+    if (!r.productId) rowErrors[r.id].productId = "Select product";
+    const qVal = parseInt(r.quantity);
+    if (!r.quantity) rowErrors[r.id].quantity = "Required";
+    else if (isNaN(qVal) || qVal <= 0) rowErrors[r.id].quantity = "> 0";
+    const pVal = parseFloat(r.expectedBuyPrice);
+    if (!r.expectedBuyPrice) rowErrors[r.id].buyPrice = "Required";
+    else if (isNaN(pVal) || pVal < 0) rowErrors[r.id].buyPrice = ">= 0";
+  });
+
+  const isFormValid =
+    rows.length > 0 &&
+    Object.values(rowErrors).every((e) => !e.productId && !e.quantity && !e.buyPrice);
+
+  function handleSave() {
+    if (!isFormValid) { setFormError("Please fix all row errors before saving."); return; }
+    if (!expectedDelivery) { setFormError("Expected delivery date is required."); return; }
+    setFormError("");
+
+    const items: PurchaseOrderItem[] = rows.map((r) => ({
+      id: r.id,
+      productId: r.productId,
+      quantity: parseInt(r.quantity),
+      expectedBuyPrice: parseFloat(r.expectedBuyPrice),
+      receivedQuantity: 0,
+    }));
+
+    if (existingPO) {
+      // Edit — preserve received quantities
+      const mergedItems: PurchaseOrderItem[] = items.map((item) => {
+        const orig = existingPO.items.find((i) => i.id === item.id);
+        return { ...item, receivedQuantity: orig?.receivedQuantity ?? 0 };
+      });
+      updatePurchaseOrder(
+        existingPO.id,
+        expectedDelivery,
+        notes.trim(),
+        mergedItems,
+        existingPO.status
+      );
+      showToast(`${existingPO.poNumber} updated`, "success");
+    } else {
+      createPurchaseOrder({
+        supplierId: supplier.id,
+        expectedDeliveryDate: expectedDelivery,
+        notes: notes.trim(),
+        items,
+        status: "Draft",
+      });
+      showToast("Purchase Order created", "success");
+    }
+
+    setInitialized(false);
+    onClose();
+  }
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
+          <div>
+            <h2 className="text-base font-black text-slate-800">
+              {existingPO ? `Edit ${existingPO.poNumber}` : "New Purchase Order"}
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {supplier.name} · Planning document only — no stock or finance changes
+            </p>
+          </div>
+          <button onClick={handleClose} className="p-2 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors">
+            <X size={16} className="text-slate-500" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          {/* Metadata row */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1.5 block">
+                Expected Delivery Date <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="date"
+                value={expectedDelivery}
+                min={today}
+                onChange={(e) => setExpectedDelivery(e.target.value)}
+                className={INPUT}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1.5 block">
+                Notes / Reference
+              </label>
+              <input
+                type="text"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="e.g. Diwali restock"
+                className={INPUT}
+              />
+            </div>
+          </div>
+
+          {/* Items */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-slate-600">Items</label>
+              {!isPOPartiallyDelivered && (
+                <button
+                  type="button"
+                  onClick={() => setRows((prev) => [...prev, blankPORow()])}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 hover:text-emerald-600 cursor-pointer"
+                >
+                  <Plus size={12} /> Add Row
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              {rows.map((row, idx) => {
+                const errs = rowErrors[row.id] || {};
+                const qty = parseInt(row.quantity) || 0;
+                const price = parseFloat(row.expectedBuyPrice) || 0;
+                const rowTotal = qty * price;
+                const selectedProduct = products.find((p) => p.id === row.productId);
+
+                // Compute historical pricing statistics for smart price suggestions
+                const productPurchases = (state.purchases || []).filter((p) => p.productId === row.productId);
+                const lastBuyPurchase = [...productPurchases].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+                const lastBuy = lastBuyPurchase ? lastBuyPurchase.buyPrice : null;
+                const avgBuy = productPurchases.length > 0
+                  ? productPurchases.reduce((s, p) => s + p.buyPrice, 0) / productPurchases.length
+                  : null;
+                const lowestBuy = productPurchases.length > 0
+                  ? Math.min(...productPurchases.map((p) => p.buyPrice))
+                  : null;
+                const catalogCost = selectedProduct ? selectedProduct.currentCost : null;
+
+                return (
+                  <div key={row.id} className="grid grid-cols-[1fr_80px_90px_60px_24px] gap-2 items-start bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    {/* Product */}
+                    <div>
+                      {isPOPartiallyDelivered ? (
+                        <div className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm bg-slate-100 text-slate-500 font-semibold select-none">
+                          {selectedProduct?.name || "Unknown Product"}
+                        </div>
+                      ) : (
+                        <ProductSearchCombobox
+                          value={row.productId}
+                          onChange={(pid) => setRows((prev) => prev.map((r) => r.id === row.id ? { ...r, productId: pid } : r))}
+                          products={products}
+                          rowIdx={idx}
+                        />
+                      )}
+                      {errs.productId && <p className="text-[10px] text-red-500 mt-0.5">{errs.productId}</p>}
+
+                      {selectedProduct && (
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] text-slate-400 mt-1 select-none font-medium leading-none">
+                          {lastBuy !== null && (
+                            <span>Last: <strong className="text-slate-600 font-bold">₹{lastBuy.toLocaleString()}</strong></span>
+                          )}
+                          {avgBuy !== null && (
+                            <span>Avg: <strong className="text-slate-600 font-bold">₹{Math.round(avgBuy).toLocaleString()}</strong></span>
+                          )}
+                          {lowestBuy !== null && (
+                            <span>Low: <strong className="text-slate-600 font-bold">₹{lowestBuy.toLocaleString()}</strong></span>
+                          )}
+                          {catalogCost !== null && (
+                            <span>Catalog: <strong className="text-slate-600 font-bold">₹{catalogCost.toLocaleString()}</strong></span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Qty */}
+                    <div>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Qty"
+                        value={row.quantity}
+                        disabled={isPOPartiallyDelivered}
+                        onChange={(e) => setRows((prev) => prev.map((r) => r.id === row.id ? { ...r, quantity: e.target.value } : r))}
+                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 disabled:opacity-60 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                      />
+                      {errs.quantity && <p className="text-[10px] text-red-500 mt-0.5">{errs.quantity}</p>}
+                    </div>
+
+                    {/* Expected Buy Price */}
+                    <div>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="₹ Price"
+                        value={row.expectedBuyPrice}
+                        disabled={isPOPartiallyDelivered}
+                        onChange={(e) => setRows((prev) => prev.map((r) => r.id === row.id ? { ...r, expectedBuyPrice: e.target.value } : r))}
+                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 disabled:opacity-60 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                      />
+                      {errs.buyPrice && <p className="text-[10px] text-red-500 mt-0.5">{errs.buyPrice}</p>}
+                    </div>
+
+                    {/* Row total */}
+                    <div className="text-right pt-2 text-xs font-bold text-slate-700">
+                      {rowTotal > 0 ? `₹${rowTotal.toLocaleString()}` : "—"}
+                    </div>
+
+                    {/* Delete row */}
+                    {isPOPartiallyDelivered ? (
+                      <div className="w-6 h-6 shrink-0" />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setRows((prev) => prev.length > 1 ? prev.filter((r) => r.id !== row.id) : prev)}
+                        disabled={rows.length === 1}
+                        className="mt-1.5 w-6 h-6 rounded-md bg-slate-100 text-slate-400 hover:bg-red-50 hover:text-red-500 flex items-center justify-center transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {formError && (
+            <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-xs font-semibold text-red-700">
+              {formError}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-100 shrink-0 flex items-center justify-between gap-3">
+          <div className="text-sm">
+            <span className="text-slate-400 font-medium">Est. Total: </span>
+            <span className="font-extrabold text-slate-800">₹{estTotal.toLocaleString()}</span>
+          </div>
+          <div className="flex gap-3">
+            <button onClick={handleClose} className="px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer">
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!isFormValid}
+              className="px-5 py-2.5 text-sm font-bold text-navy-950 bg-yellow-400 rounded-xl hover:bg-yellow-300 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {existingPO ? "Save Changes" : "Create PO"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  PO PRINT SLIP OVERLAY (Sprint 4.6)
+// ─────────────────────────────────────────────
+
+function POPrintSlip({ po, supplier, products, onClose }: { po: PurchaseOrder; supplier: Supplier; products: Product[]; onClose: () => void }) {
+  const estTotal = po.items.reduce((s, item) => s + item.quantity * item.expectedBuyPrice, 0);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
+        {/* Print header */}
+        <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+          <div>
+            <p className="text-xs text-slate-400 font-mono uppercase tracking-wider">Purchase Order</p>
+            <h2 className="text-xl font-extrabold tracking-tight mt-0.5">{po.poNumber}</h2>
+          </div>
+          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${PO_STATUS_COLOR[po.status]}`}>
+            {po.status}
+          </span>
+        </div>
+
+        {/* Supplier & meta */}
+        <div className="px-6 py-4 grid grid-cols-2 gap-4 border-b border-slate-100 text-xs">
+          <div>
+            <p className="text-slate-400 font-semibold">Supplier</p>
+            <p className="font-bold text-slate-800 mt-0.5">{supplier.name}</p>
+            {supplier.phone && <p className="text-slate-500">{supplier.phone}</p>}
+          </div>
+          <div className="text-right">
+            <p className="text-slate-400 font-semibold">Expected Delivery</p>
+            <p className="font-bold text-slate-800 mt-0.5">{formatDate(po.expectedDeliveryDate)}</p>
+            <p className="text-slate-400 mt-1 font-semibold">Created</p>
+            <p className="text-slate-600">{formatDate(po.createdAt)}</p>
+          </div>
+        </div>
+
+        {/* Items table */}
+        <div className="px-6 py-4">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-slate-100">
+                <th className="text-left text-slate-400 font-semibold pb-2">Product</th>
+                <th className="text-center text-slate-400 font-semibold pb-2">Qty</th>
+                <th className="text-right text-slate-400 font-semibold pb-2">Unit Price</th>
+                <th className="text-right text-slate-400 font-semibold pb-2">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {po.items.map((item) => {
+                const product = products.find((p) => p.id === item.productId);
+                return (
+                  <tr key={item.id} className="py-2">
+                    <td className="py-2 font-semibold text-slate-800">{product?.name || "Unknown"}</td>
+                    <td className="py-2 text-center text-slate-600">{item.quantity}</td>
+                    <td className="py-2 text-right text-slate-600">₹{item.expectedBuyPrice.toLocaleString()}</td>
+                    <td className="py-2 text-right font-bold text-slate-800">₹{(item.quantity * item.expectedBuyPrice).toLocaleString()}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-slate-200">
+                <td colSpan={3} className="pt-3 text-right font-bold text-slate-600 text-sm">Estimated Total</td>
+                <td className="pt-3 text-right font-extrabold text-slate-800 text-sm">₹{estTotal.toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        {po.notes && (
+          <div className="px-6 pb-3">
+            <p className="text-xs text-slate-500 italic">&ldquo;{po.notes}&rdquo;</p>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-3">
+          <p className="text-[10px] text-slate-400">AutoVault ERP · For Supplier Acknowledgement Only</p>
+          <div className="flex gap-3">
+            <button
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-slate-800 rounded-xl hover:bg-slate-700 cursor-pointer transition-colors"
+            >
+              <Printer size={13} /> Print
+            </button>
+            <button onClick={onClose} className="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 cursor-pointer transition-colors">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  SUPPLIER DETAILS PAGE
+// ─────────────────────────────────────────────
+
+const TABS = [
+  { id: "overview", label: "Overview", icon: Truck },
+  { id: "products", label: "Products Supplied", icon: Package },
+  { id: "purchases", label: "Purchase History", icon: ShoppingBag },
+  { id: "aging", label: "Aging Analysis", icon: Clock },
+  { id: "statement", label: "Statement", icon: Receipt },
+  { id: "purchase_orders", label: "Purchase Orders", icon: FileText },
+  { id: "payments", label: "Payment History", icon: Coins },
+  { id: "activity", label: "Activity", icon: Activity },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
+
+export default function SupplierDetailsPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const {
+    state,
+    showToast,
+    addPurchaseBatch,
+    addPurchaseReturn,
+    recordSupplierPayment,
+    recordSupplierPaymentFIFO,
+    getSupplierPaymentsBySupplier,
+    getPurchaseReturnsByPurchase,
+    getPurchaseReturnsBySupplier,
+    updatePurchase,
+    createPurchaseOrder,
+    updatePurchaseOrder,
+    deletePurchaseOrder,
+    completePurchaseOrder,
+    markPurchaseOrderSent,
+    markPurchaseOrderCancelled,
+    confirmPurchaseOrder,
+  } = useStore();
+  const { isOwner, loading, requireOwner } = useRole();
+  const router = useRouter();
+
+  // ── Owner-only route guard ──────────────────────────────────────────
+  useEffect(() => {
+    if (!loading) requireOwner();
+  }, [loading, requireOwner]);
+
+  const [activeTab, setActiveTab] = useState<TabId>("overview");
+  const [showAddPurchase, setShowAddPurchase] = useState(false);
+  const [showEditSupplier, setShowEditSupplier] = useState(false);
+  const [payPurchase, setPayPurchase] = useState<Purchase | null>(null);
+  const [editPurchase, setEditPurchase] = useState<Purchase | null>(null);
+  const [returnPurchase, setReturnPurchase] = useState<Purchase | null>(null);
+
+  // Copy Feedback State
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const handleCopy = useCallback((text: string, fieldName: string) => {
+    if (!text) return;
+    try {
+      navigator.clipboard.writeText(text);
+      setCopiedField(fieldName);
+      setTimeout(() => setCopiedField(null), 1500);
+    } catch {
+      // Fallback
+    }
+  }, []);
+
+  // Purchase History Search, Filters & Sorting State
+  const [purchaseSearchQuery, setPurchaseSearchQuery] = useState("");
+  const [purchaseStatusFilter, setPurchaseStatusFilter] = useState<"All" | "Paid" | "Partial" | "Credit">("All");
+  const [purchaseSort, setPurchaseSort] = useState<"newest" | "oldest" | "highest_amount" | "highest_due">("newest");
+
+  // Sprint 2B: Financial Aging Selected Bucket Filter
+  const [selectedAgingBucket, setSelectedAgingBucket] = useState<"all" | "current" | "days31to60" | "days61to90" | "over90">("all");
+
+  // Sprint 2C: Supplier Statement & Ledger Export State
+  const [statementPreset, setStatementPreset] = useState<StatementDatePreset>("all_time");
+  const [customFromDate, setCustomFromDate] = useState("");
+  const [customToDate, setCustomToDate] = useState("");
+  const [statementSortOrder, setStatementSortOrder] = useState<"asc" | "desc">("desc");
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+
+  // Lump-Sum FIFO Payment Modal State
+  const [showLumpSumModal, setShowLumpSumModal] = useState(false);
+  const [lumpSumAmountInput, setLumpSumAmountInput] = useState("");
+  const [lumpSumMethod, setLumpSumMethod] = useState<PaymentMethod>("Cash");
+  const [lumpSumNote, setLumpSumNote] = useState("");
+  const [lumpSumDate, setLumpSumDate] = useState(() => new Date().toISOString().split("T")[0]);
+
+  const [showAddPO, setShowAddPO] = useState(false);
+  const [editPO, setEditPO] = useState<PurchaseOrder | null>(null);
+  const [printPO, setPrintPO] = useState<PurchaseOrder | null>(null);
+  const [convertingPO, setConvertingPO] = useState<PurchaseOrder | null>(null);
+  const [expandedTimelines, setExpandedTimelines] = useState<Record<string, boolean>>({});
+
+  // Support incoming URL query actions (e.g. ?action=new-invoice or ?action=new-po or ?tab=aging or ?tab=statement)
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      const action = sp.get("action");
+      const tab = sp.get("tab");
+      if (tab && (tab === "overview" || tab === "products" || tab === "purchases" || tab === "aging" || tab === "statement" || tab === "purchase_orders" || tab === "payments" || tab === "activity")) {
+        setActiveTab(tab as TabId);
+      }
+      if (action === "new-invoice") {
+        setActiveTab("purchases");
+        setShowAddPurchase(true);
+      } else if (action === "new-po") {
+        setActiveTab("purchase_orders");
+        setShowAddPO(true);
+      }
+    }
+  }, []);
+
+  const handleConvertPOToInvoice = useCallback((po: PurchaseOrder) => {
+    setConvertingPO(po);
+    setShowAddPurchase(true);
+  }, []);
+
+  const supplier = useMemo(() => (state.suppliers || []).find((s) => s.id === id), [state.suppliers, id]);
+  const purchases = useMemo(() => sortPurchasesDescending((state.purchases || []).filter((p) => p.supplierId === id)), [state.purchases, id]);
+  const products = state.products || [];
+
+  // Products this supplier has supplied (via purchases)
+  const suppliedProducts = useMemo(() => {
+    const productIds = new Set(purchases.map((p) => p.productId));
+    return products.filter((p) => productIds.has(p.id));
+  }, [purchases, products]);
+
+  // Product Procurement Intelligence (Calculated per product supplied)
+  const productsIntelligence = useMemo(() => {
+    return suppliedProducts.map((prod) => {
+      const prodPurchases = purchases.filter((p) => p.productId === prod.id && p.supplierId === id);
+      const lastP = prodPurchases[0];
+      const prevP = prodPurchases[1] || null;
+      const lastBuyPrice = lastP ? lastP.buyPrice : (prod.currentCost || 0);
+      const prevBuyPrice = prevP ? prevP.buyPrice : null;
+
+      const minBuyPrice = prodPurchases.length > 0 ? Math.min(...prodPurchases.map((p) => p.buyPrice)) : lastBuyPrice;
+      const maxBuyPrice = prodPurchases.length > 0 ? Math.max(...prodPurchases.map((p) => p.buyPrice)) : lastBuyPrice;
+
+      const totalPurchasedQty = prodPurchases.reduce((sum, p) => sum + p.quantity, 0);
+      const totalSpend = prodPurchases.reduce((sum, p) => sum + p.quantity * p.buyPrice, 0);
+      const weightedAvgBuyPrice = totalPurchasedQty > 0 ? totalSpend / totalPurchasedQty : lastBuyPrice;
+
+      const lastPurchaseDate = lastP ? lastP.date : null;
+      const purchaseCount = prodPurchases.length;
+
+      let priceVariancePct: number | null = null;
+      if (prevBuyPrice !== null && prevBuyPrice > 0) {
+        priceVariancePct = ((lastBuyPrice - prevBuyPrice) / prevBuyPrice) * 100;
+      }
+
+      const isPreferred = prod.preferredSupplierId === id;
+
+      return {
+        product: prod,
+        lastBuyPrice,
+        prevBuyPrice,
+        minBuyPrice,
+        maxBuyPrice,
+        weightedAvgBuyPrice,
+        lastPurchaseDate,
+        purchaseCount,
+        totalPurchasedQty,
+        priceVariancePct,
+        isPreferred,
+      };
+    });
+  }, [suppliedProducts, purchases, id]);
+
+  // Purchase Financial Details Helper (Return-Aware)
+  const getPurchaseFinancials = useCallback((pur: Purchase) => {
+    const total = pur.totalAmount ?? (pur.buyPrice * pur.quantity);
+    const returns = getPurchaseReturnsBySupplier(id).filter((r) => r.purchaseId === pur.id);
+    const returnedValue = returns.reduce((s, r) => s + r.totalAmount, 0);
+    const returnedQty = returns.reduce((s, r) => s + r.quantity, 0);
+    const payments = getSupplierPaymentsBySupplier(id).filter((sp) => sp.purchaseId === pur.id);
+    const paid = payments.reduce((s, pay) => s + pay.amount, 0);
+    const effectiveDue = Math.max(0, total - returnedValue - paid);
+    const status: "Paid" | "Partial" | "Credit" = effectiveDue <= 0 ? "Paid" : (paid > 0 ? "Partial" : "Credit");
+    return { total, paid, returnedValue, returnedQty, effectiveDue, status };
+  }, [id, getPurchaseReturnsBySupplier, getSupplierPaymentsBySupplier]);
+
+  // Purchase History Filter Counts
+  const purchaseFilterCounts = useMemo(() => {
+    let paid = 0;
+    let partial = 0;
+    let credit = 0;
+    purchases.forEach((pur) => {
+      const fin = getPurchaseFinancials(pur);
+      if (fin.status === "Paid") paid++;
+      else if (fin.status === "Partial") partial++;
+      else if (fin.status === "Credit") credit++;
+    });
+    return { all: purchases.length, paid, partial, credit };
+  }, [purchases, getPurchaseFinancials]);
+
+  // Filtered & Sorted Purchases
+  const filteredPurchases = useMemo(() => {
+    return purchases
+      .filter((pur) => {
+        // 1. Status Filter
+        if (purchaseStatusFilter !== "All") {
+          const fin = getPurchaseFinancials(pur);
+          if (fin.status !== purchaseStatusFilter) return false;
+        }
+        // 2. Search Query Filter
+        if (purchaseSearchQuery.trim() !== "") {
+          const q = purchaseSearchQuery.trim().toLowerCase();
+          const product = products.find((pr) => pr.id === pur.productId);
+          const invMatch = (pur.invoiceNumber || "").toLowerCase().includes(q);
+          const nameMatch = (product?.name || "").toLowerCase().includes(q);
+          const skuMatch = (product?.sku || "").toLowerCase().includes(q);
+          const notesMatch = (pur.notes || "").toLowerCase().includes(q);
+          if (!invMatch && !nameMatch && !skuMatch && !notesMatch) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        if (purchaseSort === "newest") {
+          return new Date(b.date).getTime() - new Date(a.date).getTime();
+        }
+        if (purchaseSort === "oldest") {
+          return new Date(a.date).getTime() - new Date(b.date).getTime();
+        }
+        if (purchaseSort === "highest_amount") {
+          const amtA = a.totalAmount ?? a.buyPrice * a.quantity;
+          const amtB = b.totalAmount ?? b.buyPrice * b.quantity;
+          return amtB - amtA;
+        }
+        if (purchaseSort === "highest_due") {
+          const dueA = getPurchaseFinancials(a).effectiveDue;
+          const dueB = getPurchaseFinancials(b).effectiveDue;
+          return dueB - dueA;
+        }
+        return 0;
+      });
+  }, [purchases, purchaseStatusFilter, purchaseSearchQuery, purchaseSort, getPurchaseFinancials, products]);
+
+  // Summary KPIs for this supplier
+  const kpis = useMemo(() => {
+    const totalPurchases = purchases.length;
+    const totalUnits = purchases.reduce((sum, p) => sum + p.quantity, 0);
+
+    const lifetimePurchase = purchases.reduce((sum, p) => sum + (p.totalAmount ?? (p.buyPrice * p.quantity)), 0);
+
+    const payments = getSupplierPaymentsBySupplier(id);
+    const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
+
+    const returns = getPurchaseReturnsBySupplier(id);
+    const returnsCount = returns.length;
+    const totalRefunded = returns.reduce((s, r) => s + r.refundAmount, 0);
+    const totalReturnedValue = returns.reduce((s, r) => s + r.totalAmount, 0);
+
+    // Outstanding = Original Purchase Total - Total Returned Value - Total Paid
+    const outstanding = purchases.reduce((sum, p) => {
+      const totalForP = p.totalAmount ?? (p.buyPrice * p.quantity);
+      const returnsForP = returns.filter((r) => r.purchaseId === p.id);
+      const returnedValue = returnsForP.reduce((s, r) => s + r.totalAmount, 0);
+      const paymentsForP = payments.filter((sp) => sp.purchaseId === p.id);
+      const paid = paymentsForP.reduce((s, pay) => s + pay.amount, 0);
+      return sum + Math.max(0, totalForP - returnedValue - paid);
+    }, 0);
+
+    const lastPurchaseVal = purchases[0] ? (purchases[0].totalAmount ?? (purchases[0].buyPrice * purchases[0].quantity)) : 0;
+    const lastPurchaseDate = purchases[0] ? formatPurchaseDate(purchases[0]) : null;
+    const lastPurchase = purchases[0] ? `₹${lastPurchaseVal.toLocaleString()} (${lastPurchaseDate})` : "—";
+
+    const averagePurchase = totalPurchases > 0 ? lifetimePurchase / totalPurchases : 0;
+
+    return {
+      totalPurchases,
+      totalUnits,
+      lifetimePurchase,
+      outstanding,
+      lastPurchase,
+      averagePurchase,
+      lastPurchaseDate,
+      returnsCount,
+      totalPaid,
+      totalRefunded,
+      totalReturnedValue,
+    };
+  }, [purchases, id, getSupplierPaymentsBySupplier, getPurchaseReturnsBySupplier]);
+
+  // ── SPRINT 2B: FINANCIAL AGING SELECTOR (DERIVED FROM EXISTING PURCHASES) ──
+  const agingAnalysis = useMemo(() => {
+    const now = new Date();
+    const openInvoices: {
+      purchase: Purchase;
+      product?: Product;
+      invoiceNumber: string;
+      date: string;
+      ageDays: number;
+      originalAmount: number;
+      returnedValue: number;
+      returnedQty: number;
+      paidAmount: number;
+      effectiveDue: number;
+      bucketId: "current" | "days31to60" | "days61to90" | "over90";
+    }[] = [];
+
+    purchases.forEach((pur) => {
+      const fin = getPurchaseFinancials(pur);
+      if (fin.effectiveDue <= 0) return; // Ignore fully settled invoices
+
+      const pDateStr = pur.date || pur.createdAt;
+      const pDate = new Date(pDateStr);
+      const pTime = isNaN(pDate.getTime()) ? now.getTime() : pDate.getTime();
+      const ageDays = Math.max(0, Math.floor((now.getTime() - pTime) / (1000 * 60 * 60 * 24)));
+
+      let bucketId: "current" | "days31to60" | "days61to90" | "over90" = "current";
+      if (ageDays <= 30) {
+        bucketId = "current";
+      } else if (ageDays <= 60) {
+        bucketId = "days31to60";
+      } else if (ageDays <= 90) {
+        bucketId = "days61to90";
+      } else {
+        bucketId = "over90";
+      }
+
+      const product = products.find((pr) => pr.id === pur.productId);
+
+      openInvoices.push({
+        purchase: pur,
+        product,
+        invoiceNumber: pur.invoiceNumber || `PUR-${pur.id.slice(-6).toUpperCase()}`,
+        date: pDateStr,
+        ageDays,
+        originalAmount: fin.total,
+        returnedValue: fin.returnedValue,
+        returnedQty: fin.returnedQty,
+        paidAmount: fin.paid,
+        effectiveDue: fin.effectiveDue,
+        bucketId,
+      });
+    });
+
+    // Sort open invoices by age descending (oldest first)
+    openInvoices.sort((a, b) => b.ageDays - a.ageDays);
+
+    const totalOutstanding = openInvoices.reduce((sum, inv) => sum + inv.effectiveDue, 0);
+    const openInvoicesCount = openInvoices.length;
+    const oldestInvoice = openInvoices[0] || null;
+
+    const createBucket = (
+      id: "current" | "days31to60" | "days61to90" | "over90",
+      label: string,
+      rangeLabel: string,
+      daysRange: string,
+      severity: "neutral" | "warning" | "danger"
+    ) => {
+      const bucketInvoices = openInvoices.filter((inv) => inv.bucketId === id);
+      const amount = bucketInvoices.reduce((sum, inv) => sum + inv.effectiveDue, 0);
+      const count = bucketInvoices.length;
+      const percentage = totalOutstanding > 0 ? (amount / totalOutstanding) * 100 : 0;
+      const oldestAge = bucketInvoices.length > 0 ? Math.max(...bucketInvoices.map((inv) => inv.ageDays)) : 0;
+
+      return {
+        id,
+        label,
+        rangeLabel,
+        daysRange,
+        amount,
+        count,
+        percentage,
+        oldestAge,
+        invoices: bucketInvoices,
+        severity,
+      };
+    };
+
+    const buckets = {
+      current: createBucket("current", "0–30 Days", "Current", "0–30d", "neutral"),
+      days31to60: createBucket("days31to60", "31–60 Days", "Overdue 1–30d", "31–60d", "warning"),
+      days61to90: createBucket("days61to90", "61–90 Days", "Overdue 31–60d", "61–90d", "warning"),
+      over90: createBucket("over90", "90+ Days", "Critical Attention", "> 90d", "danger"),
+    };
+
+    const bucketList = [buckets.current, buckets.days31to60, buckets.days61to90, buckets.over90];
+
+    return {
+      totalOutstanding,
+      openInvoicesCount,
+      oldestInvoice,
+      buckets,
+      bucketList,
+      allInvoices: openInvoices,
+    };
+  }, [purchases, getPurchaseFinancials, products]);
+
+  // ── SPRINT 2C: FINANCIAL STATEMENT SELECTOR & HANDLERS ───────────────────
+  const effectiveDateRange = useMemo(() => {
+    if (statementPreset === "custom") {
+      return { fromDate: customFromDate, toDate: customToDate, label: "Custom Range" };
+    }
+    return getDateRangeForPreset(statementPreset);
+  }, [statementPreset, customFromDate, customToDate]);
+
+  const statementValidation = useMemo(() => {
+    return validateDateRange(effectiveDateRange.fromDate, effectiveDateRange.toDate);
+  }, [effectiveDateRange]);
+
+  const supplierStatement = useMemo(() => {
+    if (!supplier) return null;
+    const allSupplierPayments = getSupplierPaymentsBySupplier(id);
+    const allSupplierReturns = getPurchaseReturnsBySupplier(id);
+
+    return buildSupplierStatement({
+      supplier,
+      purchases,
+      payments: allSupplierPayments,
+      returns: allSupplierReturns,
+      products,
+      fromDate: effectiveDateRange.fromDate,
+      toDate: effectiveDateRange.toDate,
+      preset: statementPreset,
+    });
+  }, [supplier, purchases, id, getSupplierPaymentsBySupplier, getPurchaseReturnsBySupplier, products, effectiveDateRange, statementPreset]);
+
+  // Display-sorted entries (does NOT modify chronological running balance calculation)
+  const displayStatementEntries = useMemo(() => {
+    if (!supplierStatement?.entries) return [];
+    if (statementSortOrder === "asc") {
+      return supplierStatement.entries; // oldest-first
+    }
+    return [...supplierStatement.entries].reverse(); // newest-first
+  }, [supplierStatement, statementSortOrder]);
+
+  const handleExportCSV = useCallback(() => {
+    if (!supplierStatement) return;
+    try {
+      const csvText = generateSupplierStatementCSVText(supplierStatement);
+      const blob = new Blob(["\uFEFF" + csvText], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const cleanName = (supplier?.name || "supplier").replace(/[^a-zA-Z0-9_-]/g, "_");
+      link.download = `statement_${cleanName}_${new Date().toISOString().split("T")[0]}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast("Supplier statement exported as CSV", "success");
+    } catch (err) {
+      console.error("CSV Export failed:", err);
+      showToast("Failed to export statement CSV.", "error");
+    }
+  }, [supplierStatement, supplier, showToast]);
+
+  const handleExportExcel = useCallback(async () => {
+    if (!supplierStatement) return;
+    try {
+      setIsExportingExcel(true);
+      const blob = await generateSupplierStatementXLSX(supplierStatement);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const cleanName = (supplier?.name || "supplier").replace(/[^a-zA-Z0-9_-]/g, "_");
+      link.download = `statement_${cleanName}_${new Date().toISOString().split("T")[0]}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast("Supplier statement exported to Excel (.xlsx)", "success");
+    } catch (err) {
+      console.error("Excel Export failed:", err);
+      showToast("Failed to export Excel workbook.", "error");
+    } finally {
+      setIsExportingExcel(false);
+    }
+  }, [supplierStatement, supplier, showToast]);
+
+  const handleDownloadPDF = useCallback(async () => {
+    if (!supplierStatement) return;
+    try {
+      setIsExportingPDF(true);
+      showToast("Generating PDF statement...", "info");
+      const { exportElementToPdf } = await import("@/lib/pdfUtils");
+      const cleanName = (supplier?.name || "supplier").replace(/[^a-zA-Z0-9_-]/g, "_");
+      await exportElementToPdf("supplier-statement-print", {
+        filename: `statement_${cleanName}_${new Date().toISOString().split("T")[0]}.pdf`,
+        isA5: false,
+      });
+      showToast("Statement PDF downloaded successfully!", "success");
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+      showToast("Failed to generate PDF. You can also use Print Statement.", "error");
+    } finally {
+      setIsExportingPDF(false);
+    }
+  }, [supplierStatement, supplier, showToast]);
+
+  const handlePrintStatement = useCallback(() => {
+    window.print();
+  }, []);
+
+
+  function openLumpSumModal() {
+    setLumpSumAmountInput(String(kpis.outstanding));
+    setLumpSumMethod("Cash");
+    setLumpSumNote("");
+    setLumpSumDate(new Date().toISOString().split("T")[0]);
+    setShowLumpSumModal(true);
+  }
+
+  function closeLumpSumModal() {
+    setShowLumpSumModal(false);
+    setLumpSumAmountInput("");
+    setLumpSumNote("");
+  }
+
+  const lumpSumPreview = useMemo(() => {
+    if (!supplier) return { allocations: [], totalAllocated: 0, unallocated: 0 };
+    const numAmount = Math.max(0, Number(lumpSumAmountInput) || 0);
+
+    const getEffectiveDue = (pur: Purchase) => {
+      const total = pur.totalAmount ?? (pur.buyPrice * pur.quantity);
+      const returns = getPurchaseReturnsBySupplier(id).filter((r) => r.purchaseId === pur.id);
+      const returnedValue = returns.reduce((s, r) => s + r.totalAmount, 0);
+      const payments = getSupplierPaymentsBySupplier(id).filter((sp) => sp.purchaseId === pur.id);
+      const paid = payments.reduce((s, pay) => s + pay.amount, 0);
+      return Math.max(0, total - returnedValue - paid);
+    };
+
+    const openPurchases = purchases
+      .filter((pur) => getEffectiveDue(pur) > 0)
+      .sort((a, b) => new Date(a.createdAt || a.date).getTime() - new Date(b.createdAt || b.date).getTime());
+
+    let rem = numAmount;
+    let totalAllocated = 0;
+
+    const allocations = openPurchases.map((pur) => {
+      const due = getEffectiveDue(pur);
+      const alloc = rem > 0 ? Math.min(rem, due) : 0;
+      if (alloc > 0) {
+        totalAllocated += alloc;
+        rem -= alloc;
+      }
+      return {
+        purchase: pur,
+        effectiveDue: due,
+        allocated: alloc,
+        remainingDue: Math.max(0, due - alloc),
+      };
+    });
+
+    const unallocated = Math.max(0, numAmount - totalAllocated);
+    return { allocations, totalAllocated, unallocated };
+  }, [supplier, lumpSumAmountInput, purchases, id, getPurchaseReturnsBySupplier, getSupplierPaymentsBySupplier]);
+
+  function handleLumpSumSubmit() {
+    if (!supplier) return;
+    const numAmount = Math.max(0, Number(lumpSumAmountInput) || 0);
+    if (numAmount <= 0) return;
+
+    recordSupplierPaymentFIFO({
+      supplierId: supplier.id,
+      totalAmount: numAmount,
+      method: lumpSumMethod,
+      date: lumpSumDate ? new Date(lumpSumDate).toISOString() : new Date().toISOString(),
+      note: lumpSumNote.trim() || undefined,
+      paidBy: isOwner ? "Owner" : "Staff",
+    });
+
+    const { totalAllocated, unallocated, allocations } = lumpSumPreview;
+    const affectedCount = allocations.filter((a) => a.allocated > 0).length;
+
+    if (unallocated > 0) {
+      showToast(
+        `₹${numAmount.toLocaleString()} paid. ₹${totalAllocated.toLocaleString()} applied across ${affectedCount} purchase(s) (₹${unallocated.toLocaleString()} unallocated excess).`,
+        "info"
+      );
+    } else {
+      showToast(
+        `₹${totalAllocated.toLocaleString()} paid to supplier "${supplier.name}" and applied across ${affectedCount} purchase(s) using FIFO.`,
+        "success"
+      );
+    }
+
+    closeLumpSumModal();
+  }
+
+  // Unified Supplier Activity Feed (Aggregates Purchases, Payments, Returns, POs)
+  const unifiedActivityStream = useMemo(() => {
+    const events: {
+      id: string;
+      type: "purchase" | "payment" | "return" | "po";
+      date: string;
+      timestamp: number;
+      title: string;
+      detail: string;
+      subDetail?: string;
+      amount?: number;
+      badge: string;
+      badgeColor: string;
+      refNumber?: string;
+      icon: any;
+    }[] = [];
+
+    // 1. Purchases
+    purchases.forEach((p) => {
+      const prod = products.find((pr) => pr.id === p.productId);
+      const amount = p.totalAmount ?? (p.buyPrice * p.quantity);
+      const dateStr = p.createdAt || (p.date ? `${p.date}T12:00:00.000Z` : new Date().toISOString());
+      events.push({
+        id: `act-pur-${p.id}`,
+        type: "purchase",
+        date: dateStr,
+        timestamp: new Date(dateStr).getTime() || 0,
+        title: `Purchase Invoice ${p.invoiceNumber ? `#${p.invoiceNumber}` : ""}`,
+        detail: `${prod?.name || "Product"} · ${p.quantity} units @ ₹${p.buyPrice.toLocaleString()}`,
+        subDetail: `Invoice Total: ₹${amount.toLocaleString()} · Status: ${p.paymentStatus}`,
+        amount,
+        badge: "Invoice",
+        badgeColor: "bg-blue-50 text-blue-700 border-blue-200",
+        refNumber: p.invoiceNumber,
+        icon: ShoppingBag,
+      });
+    });
+
+    // 2. Supplier Payments
+    const supplierPayments = getSupplierPaymentsBySupplier(id);
+    supplierPayments.forEach((sp) => {
+      const dateStr = sp.date || sp.createdAt || new Date().toISOString();
+      events.push({
+        id: `act-pay-${sp.id}`,
+        type: "payment",
+        date: dateStr,
+        timestamp: new Date(dateStr).getTime() || 0,
+        title: `Payment Recorded (${sp.method})`,
+        detail: `Paid ₹${sp.amount.toLocaleString()} ${sp.isUpfront ? "· Upfront deposit" : "· Repayment"}${sp.note ? ` · "${sp.note}"` : ""}`,
+        subDetail: `Recorded by ${sp.paidBy || "Owner"}`,
+        amount: sp.amount,
+        badge: `Payment · ${sp.method}`,
+        badgeColor: "bg-emerald-50 text-emerald-700 border-emerald-200",
+        icon: Coins,
+      });
+    });
+
+    // 3. Purchase Returns
+    const purchaseReturns = getPurchaseReturnsBySupplier(id);
+    purchaseReturns.forEach((pr) => {
+      const prod = products.find((p) => p.id === pr.productId);
+      const dateStr = pr.createdAt || new Date().toISOString();
+      events.push({
+        id: `act-ret-${pr.id}`,
+        type: "return",
+        date: dateStr,
+        timestamp: new Date(dateStr).getTime() || 0,
+        title: "Purchase Stock Return",
+        detail: `Returned ${pr.quantity} units of ${prod?.name || "Product"} (Value: ₹${pr.totalAmount.toLocaleString()})`,
+        subDetail: `${pr.refundAmount > 0 ? `Cash Refund: ₹${pr.refundAmount.toLocaleString()}` : "Balance Adjustment"}${pr.reason ? ` · Reason: "${pr.reason}"` : ""}`,
+        amount: pr.totalAmount,
+        badge: "Return",
+        badgeColor: "bg-rose-50 text-rose-700 border-rose-200",
+        icon: CornerDownLeft,
+      });
+    });
+
+    // 4. Purchase Orders
+    const supplierPOs = (state.purchaseOrders || []).filter((po) => po.supplierId === id);
+    supplierPOs.forEach((po) => {
+      const poTotalValue = po.items.reduce((s, it) => s + ((it.expectedBuyPrice || 0) * (it.quantity || 0)), 0);
+      if (po.activityLog && po.activityLog.length > 0) {
+        po.activityLog.forEach((log, logIdx) => {
+          const dateStr = log.date || po.createdAt || new Date().toISOString();
+          const totalUnits = po.items.reduce((s, it) => s + it.quantity, 0);
+          events.push({
+            id: `act-po-${po.id}-${logIdx}`,
+            type: "po",
+            date: dateStr,
+            timestamp: new Date(dateStr).getTime() || 0,
+            title: `Purchase Order ${po.poNumber} — ${log.type}`,
+            detail: `${log.notes || `PO status set to ${log.type}`} · ${po.items.length} product(s) (${totalUnits} units)`,
+            subDetail: `PO Status: ${po.status} · Estimated Value: ₹${poTotalValue.toLocaleString()}`,
+            amount: poTotalValue,
+            badge: `PO ${log.type}`,
+            badgeColor:
+              log.type === "Completed"
+                ? "bg-green-50 text-green-700 border-green-200"
+                : log.type === "Cancelled"
+                  ? "bg-red-50 text-red-700 border-red-200"
+                  : "bg-purple-50 text-purple-700 border-purple-200",
+            refNumber: po.poNumber,
+            icon: FileText,
+          });
+        });
+      } else {
+        const dateStr = po.createdAt || new Date().toISOString();
+        events.push({
+          id: `act-po-${po.id}-created`,
+          type: "po",
+          date: dateStr,
+          timestamp: new Date(dateStr).getTime() || 0,
+          title: `Purchase Order Created (${po.poNumber})`,
+          detail: `${po.items.length} product(s) · Estimated: ₹${poTotalValue.toLocaleString()}`,
+          subDetail: `Status: ${po.status}`,
+          amount: poTotalValue,
+          badge: `PO ${po.status}`,
+          badgeColor: "bg-purple-50 text-purple-700 border-purple-200",
+          refNumber: po.poNumber,
+          icon: FileText,
+        });
+      }
+    });
+
+    // Sort newest first with deterministic tie-breaker
+    return events.sort((a, b) => {
+      if (b.timestamp !== a.timestamp) return b.timestamp - a.timestamp;
+      return b.id.localeCompare(a.id);
+    });
+  }, [purchases, products, id, getSupplierPaymentsBySupplier, getPurchaseReturnsBySupplier, state.purchaseOrders]);
+
+  // Owner guard early return — placed after all hooks to satisfy Rules of Hooks
+  if (loading || !isOwner) return null;
+
+  if (!supplier) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center gap-4">
+        <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center">
+          <Truck size={26} className="text-slate-300" />
+        </div>
+        <div>
+          <p className="font-bold text-slate-700">Supplier not found</p>
+          <p className="text-sm text-slate-400 mt-1">The supplier you are looking for does not exist.</p>
+        </div>
+        <Link href="/suppliers" className="inline-flex items-center gap-1.5 text-sm font-semibold text-navy-700 hover:text-navy-900">
+          <ArrowLeft size={14} />
+          Back to Suppliers
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 max-w-7xl mx-auto">
+      {/* Supplier Command Header */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* Left: Identity & Metadata */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Link href="/suppliers" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-navy-950 font-semibold transition-colors">
+                <ArrowLeft size={13} />
+                Back to Suppliers
+              </Link>
+            </div>
+
+            <div className="flex items-center gap-3 flex-wrap">
+              <h1 className="text-2xl sm:text-3xl font-black text-navy-950 tracking-tight">{supplier.name}</h1>
+
+              {/* Supplier ID with 1-click Copy */}
+              <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-slate-700 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg">
+                <span className="text-[10px] text-slate-400 font-sans uppercase">ID:</span>
+                {supplier.id}
+                <button
+                  onClick={() => handleCopy(supplier.id, "id")}
+                  title="Copy Supplier ID"
+                  className="text-slate-400 hover:text-slate-700 ml-0.5 cursor-pointer transition-colors"
+                >
+                  {copiedField === "id" ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
+                </button>
+              </span>
+
+              {/* Status Badge */}
+              <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full border ${supplier.status === "Active" ? "bg-green-50 text-green-700 border-green-200" : "bg-slate-100 text-slate-500 border-slate-200"}`}>
+                {supplier.status === "Active" ? <CheckCircle size={11} /> : <XCircle size={11} />}
+                {supplier.status}
+              </span>
+
+              {/* GSTIN with 1-click Copy */}
+              {supplier.gst && (
+                <span className="inline-flex items-center gap-1.5 text-xs font-mono font-medium text-slate-700 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg">
+                  <span className="text-[10px] font-bold uppercase text-slate-400 font-sans">GSTIN:</span>
+                  {supplier.gst}
+                  <button
+                    onClick={() => handleCopy(supplier.gst!, "gst")}
+                    title="Copy GSTIN"
+                    className="text-slate-400 hover:text-slate-700 ml-0.5 cursor-pointer transition-colors"
+                  >
+                    {copiedField === "gst" ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
+                  </button>
+                </span>
+              )}
+            </div>
+
+            {/* Contact Person & Direct Communication Links */}
+            <div className="flex items-center gap-3 flex-wrap text-xs text-slate-600 pt-0.5">
+              {supplier.contactPerson && (
+                <span className="font-semibold text-slate-700">{supplier.contactPerson}</span>
+              )}
+
+              {supplier.phone && (
+                <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/80 px-2.5 py-1 rounded-md">
+                  <a href={`tel:${supplier.phone}`} className="inline-flex items-center gap-1 font-semibold text-slate-700 hover:text-navy-900 hover:underline">
+                    <Phone size={12} className="text-slate-400" />
+                    {supplier.phone}
+                  </a>
+                  <button
+                    onClick={() => handleCopy(supplier.phone!, "phone")}
+                    title="Copy Phone"
+                    className="text-slate-400 hover:text-slate-600 ml-0.5 cursor-pointer transition-colors"
+                  >
+                    {copiedField === "phone" ? <Check size={11} className="text-green-600" /> : <Copy size={11} />}
+                  </button>
+                </div>
+              )}
+
+              {(supplier.whatsApp || supplier.phone) && (
+                <a
+                  href={`https://wa.me/91${(supplier.whatsApp || supplier.phone || "").replace(/[^0-9]/g, "")}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 font-semibold px-2.5 py-1 rounded-md transition-colors"
+                >
+                  <MessageSquare size={12} />
+                  WhatsApp
+                </a>
+              )}
+
+              {supplier.email && (
+                <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/80 px-2.5 py-1 rounded-md">
+                  <a href={`mailto:${supplier.email}`} className="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-navy-900 hover:underline">
+                    <Mail size={12} className="text-slate-400" />
+                    {supplier.email}
+                  </a>
+                  <button
+                    onClick={() => handleCopy(supplier.email!, "email")}
+                    title="Copy Email"
+                    className="text-slate-400 hover:text-slate-600 ml-0.5 cursor-pointer transition-colors"
+                  >
+                    {copiedField === "email" ? <Check size={11} className="text-green-600" /> : <Copy size={11} />}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right: Command Actions */}
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            {isOwner && kpis.outstanding > 0 && (
+              <button onClick={openLumpSumModal} className="inline-flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-xs sm:text-sm font-bold px-3.5 py-2.5 rounded-xl transition-all shadow-xs hover:shadow cursor-pointer">
+                <Coins size={15} />
+                Record Lump-Sum Payment
+              </button>
+            )}
+            {isOwner && (
+              <button onClick={() => setShowAddPO(true)} className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 text-xs sm:text-sm font-semibold px-3.5 py-2.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer">
+                <FileText size={14} />
+                Create PO
+              </button>
+            )}
+            <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-1.5 bg-yellow-400 hover:bg-yellow-300 text-navy-950 text-xs sm:text-sm font-bold px-3.5 py-2.5 rounded-xl transition-all shadow-xs hover:shadow cursor-pointer">
+              <Plus size={15} />
+              Record Invoice
+            </button>
+            {isOwner && (
+              <button onClick={() => setShowEditSupplier(true)} className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 text-xs sm:text-sm font-semibold px-3.5 py-2.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer">
+                <Pencil size={13} />
+                Edit
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* KPI Cards */}
+      <div className={`grid grid-cols-2 sm:grid-cols-3 ${isOwner ? "lg:grid-cols-4 xl:grid-cols-9" : "lg:grid-cols-2"} gap-4`}>
+        {[
+          { label: "Total Purchases", value: kpis.totalPurchases, icon: ShoppingBag, color: "text-blue-600", bg: "bg-blue-50" },
+          { label: "Units Received", value: kpis.totalUnits, icon: Package, color: "text-purple-700", bg: "bg-purple-50" },
+          ...(isOwner ? [
+            { label: "Lifetime Purchases", value: `₹${kpis.lifetimePurchase.toLocaleString()}`, icon: DollarSign, color: "text-emerald-700", bg: "bg-emerald-50" },
+            { label: "Outstanding Dues", value: `₹${kpis.outstanding.toLocaleString()}`, icon: Coins, color: "text-rose-600", bg: "bg-rose-50" },
+            { label: "Total Paid", value: `₹${kpis.totalPaid.toLocaleString()}`, icon: Coins, color: "text-blue-700", bg: "bg-blue-50" },
+            { label: "Returns", value: `${kpis.returnsCount} items`, icon: CornerDownLeft, color: "text-rose-700", bg: "bg-rose-50" },
+            { label: "Refunded", value: `₹${kpis.totalRefunded.toLocaleString()}`, icon: DollarSign, color: "text-emerald-700", bg: "bg-emerald-50" },
+            { label: "Last Purchase", value: kpis.lastPurchase, icon: Calendar, color: "text-amber-700", bg: "bg-amber-50" },
+            { label: "Average Purchase", value: `₹${Math.round(kpis.averagePurchase).toLocaleString()}`, icon: CheckCircle, color: "text-blue-700", bg: "bg-blue-50" },
+          ] : []),
+        ].map((card) => (
+          <div key={card.label} className="bg-white border border-slate-200 rounded-2xl p-4 hover:shadow-sm transition-shadow">
+            <div className="flex flex-col justify-between h-full gap-2">
+              <div className="min-w-0">
+                <p className="text-slate-500 text-[10px] uppercase tracking-wider font-bold">{card.label}</p>
+                <p className="text-sm font-black text-slate-800 mt-1 truncate" title={String(card.value)}>{card.value}</p>
+              </div>
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 self-end ${card.bg} ${card.color}`}>
+                <card.icon size={16} />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tab Navigation */}
+      <div className="border-b border-slate-200">
+        <nav className="flex gap-0 -mb-px overflow-x-auto">
+          {TABS.filter(tab => (tab.id !== "payments" && tab.id !== "aging" && tab.id !== "statement") || isOwner).map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 transition-all whitespace-nowrap cursor-pointer ${activeTab === tab.id
+                  ? "border-navy-950 text-navy-950"
+                  : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
+                }`}
+            >
+              <tab.icon size={15} />
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {/* Tab Content */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm min-h-[300px]">
+
+        {/* ── OVERVIEW TAB ── */}
+        {activeTab === "overview" && (
+          <div className="grid md:grid-cols-2 gap-8">
+            {/* Contact Information */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-black text-slate-700 uppercase tracking-wider border-b border-slate-100 pb-2">Contact Information</h3>
+              <div className="space-y-3">
+                {[
+                  { icon: Phone, label: "Phone", value: supplier.phone || "—" },
+                  { icon: Phone, label: "WhatsApp", value: supplier.whatsApp || "—" },
+                  { icon: Mail, label: "Email", value: supplier.email || "—" },
+                  { icon: MapPin, label: "Address", value: supplier.address || "—" },
+                  { icon: Hash, label: "GST Number", value: supplier.gst || "—" },
+                ].map((row) => (
+                  <div key={row.label} className="flex items-start gap-3">
+                    <div className="w-7 h-7 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center shrink-0">
+                      <row.icon size={13} className="text-slate-500" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{row.label}</p>
+                      <p className="text-sm text-slate-700 mt-0.5 break-words">{row.value}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-black text-slate-700 uppercase tracking-wider border-b border-slate-100 pb-2">Notes</h3>
+              {supplier.notes ? (
+                <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
+                  <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{supplier.notes}</p>
+                </div>
+              ) : (
+                <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 text-center">
+                  <MessageSquare size={20} className="text-slate-300 mx-auto mb-2" />
+                  <p className="text-xs text-slate-400">No notes added yet.</p>
+                </div>
+              )}
+
+              {/* Meta */}
+              <div className="space-y-2 pt-2">
+                <h3 className="text-sm font-black text-slate-700 uppercase tracking-wider border-b border-slate-100 pb-2">Record Info</h3>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                    <p className="text-slate-400 font-semibold uppercase tracking-wider text-[9px]">Created</p>
+                    <p className="text-slate-700 font-bold mt-0.5">{formatDate(supplier.createdAt)}</p>
+                  </div>
+                  <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                    <p className="text-slate-400 font-semibold uppercase tracking-wider text-[9px]">Status</p>
+                    <p className={`font-bold mt-0.5 ${supplier.status === "Active" ? "text-green-700" : "text-slate-500"}`}>{supplier.status}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sprint 2B: Financial Aging Quick Discovery Banner */}
+              {isOwner && (
+                <div className="bg-slate-50/80 border border-slate-200 rounded-xl p-3.5 space-y-2 mt-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                      <Clock size={11} className="text-slate-400" />
+                      Liability Aging Status
+                    </span>
+                    <button
+                      onClick={() => setActiveTab("aging")}
+                      className="text-xs font-bold text-navy-700 hover:text-navy-950 hover:underline cursor-pointer"
+                    >
+                      View Aging Analysis →
+                    </button>
+                  </div>
+                  {agingAnalysis.totalOutstanding > 0 ? (
+                    <div className="flex items-center justify-between text-xs pt-1">
+                      <div>
+                        <p className="font-black text-slate-850">
+                          ₹{agingAnalysis.totalOutstanding.toLocaleString()} Outstanding
+                        </p>
+                        <p className="text-[10px] text-slate-400">
+                          {agingAnalysis.openInvoicesCount} open invoice{agingAnalysis.openInvoicesCount !== 1 ? "s" : ""}
+                        </p>
+                      </div>
+                      {agingAnalysis.buckets.over90.amount > 0 ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200">
+                          ₹{agingAnalysis.buckets.over90.amount.toLocaleString()} in 90d+
+                        </span>
+                      ) : agingAnalysis.buckets.days61to90.amount > 0 ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-orange-100 text-orange-800 border border-orange-200">
+                          ₹{agingAnalysis.buckets.days61to90.amount.toLocaleString()} in 61–90d
+                        </span>
+                      ) : agingAnalysis.buckets.days31to60.amount > 0 ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                          ₹{agingAnalysis.buckets.days31to60.amount.toLocaleString()} in 31–60d
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          All Current (&lt;30d)
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-xs font-semibold text-emerald-700">✓ All invoices settled (₹0 due)</p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── PRODUCTS SUPPLIED TAB (PROCUREMENT INTELLIGENCE) ── */}
+        {activeTab === "products" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h3 className="text-base font-black text-slate-850">Products Supplied & Procurement Intelligence</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Historical buy prices, price trends, and quantity-weighted average procurement costs.</p>
+              </div>
+              <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-md px-2.5 py-1">
+                {productsIntelligence.length} Product{productsIntelligence.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+
+            {productsIntelligence.length === 0 ? (
+              <div className="py-16 flex flex-col items-center justify-center gap-3 text-center">
+                <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center"><Package size={20} className="text-slate-300" /></div>
+                <div>
+                  <p className="text-sm font-bold text-slate-700">No Products Sourced Yet</p>
+                  <p className="text-xs text-slate-400 mt-0.5 max-w-xs leading-relaxed">Products and pricing statistics will appear here after the first purchase invoice is recorded from this supplier.</p>
+                </div>
+                <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3.5 py-2 rounded-xl hover:bg-emerald-100 transition-colors cursor-pointer">
+                  <Plus size={13} />
+                  Record First Purchase
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Desktop Table View (Hidden on mobile) */}
+                <div className="hidden md:block overflow-x-auto border border-slate-200 rounded-xl">
+                  <table className="w-full text-sm border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200">
+                        <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Product & SKU</th>
+                        <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Last Buy Price</th>
+                        <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Price Trend</th>
+                        <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Min · Max · Wtd Avg</th>
+                        <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Sourcing History</th>
+                        <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Stock</th>
+                        <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {productsIntelligence.map((item) => {
+                        const { product, lastBuyPrice, prevBuyPrice, minBuyPrice, maxBuyPrice, weightedAvgBuyPrice, lastPurchaseDate, purchaseCount, totalPurchasedQty, priceVariancePct, isPreferred } = item;
+                        return (
+                          <tr key={product.id} className="hover:bg-slate-50/70 transition-colors">
+                            {/* Product & SKU */}
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <Link href={`/inventory/${product.id}`} className="font-bold text-slate-850 hover:text-navy-800 hover:underline text-sm">
+                                  {product.name}
+                                </Link>
+                                {isPreferred && (
+                                  <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                                    <Star size={9} className="fill-amber-500 text-amber-500" />
+                                    Preferred
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono mt-0.5">
+                                <span>SKU: {product.sku || "—"}</span>
+                                {product.category && <span className="text-slate-300">·</span>}
+                                {product.category && <span className="font-sans text-slate-500">{product.category}</span>}
+                              </div>
+                            </td>
+
+                            {/* Last Buy Price */}
+                            <td className="px-4 py-3 text-right">
+                              <span className="font-black text-slate-850 text-sm tabular-nums">
+                                ₹{lastBuyPrice.toLocaleString()}
+                              </span>
+                              {prevBuyPrice !== null ? (
+                                <p className="text-[10px] text-slate-400 tabular-nums font-medium">Prev: ₹{prevBuyPrice.toLocaleString()}</p>
+                              ) : (
+                                <p className="text-[10px] text-slate-400 font-normal">1st order</p>
+                              )}
+                            </td>
+
+                            {/* Price Trend */}
+                            <td className="px-4 py-3 text-center">
+                              {priceVariancePct === null ? (
+                                <span className="text-xs text-slate-400 font-medium">—</span>
+                              ) : priceVariancePct > 0 ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md tabular-nums">
+                                  <AlertTriangle size={11} className="text-amber-600" />
+                                  +{priceVariancePct.toFixed(1)}%
+                                </span>
+                              ) : priceVariancePct < 0 ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md tabular-nums">
+                                  <TrendingDown size={11} className="text-emerald-600" />
+                                  {priceVariancePct.toFixed(1)}%
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
+                                  No change
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Min / Max / Weighted Avg */}
+                            <td className="px-4 py-3 text-right">
+                              <div className="text-xs text-slate-600 tabular-nums">
+                                <span className="text-[10px] text-slate-400 font-semibold uppercase">Avg: </span>
+                                <span className="font-bold text-slate-800">₹{Math.round(weightedAvgBuyPrice).toLocaleString()}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-400 tabular-nums mt-0.5">
+                                Min ₹{minBuyPrice.toLocaleString()} · Max ₹{maxBuyPrice.toLocaleString()}
+                              </div>
+                            </td>
+
+                            {/* Sourcing History */}
+                            <td className="px-4 py-3 text-left text-xs">
+                              <p className="font-semibold text-slate-700">{totalPurchasedQty} units <span className="text-slate-400 font-normal">({purchaseCount} order{purchaseCount !== 1 ? "s" : ""})</span></p>
+                              <p className="text-[10px] text-slate-400 mt-0.5">Last: {formatDate(lastPurchaseDate)}</p>
+                            </td>
+
+                            {/* Stock */}
+                            <td className="px-4 py-3 text-right">
+                              <span className={`text-xs font-bold tabular-nums ${product.stock <= product.lowStockThreshold ? "text-red-600 font-black" : "text-slate-700"}`}>
+                                {product.stock} units
+                              </span>
+                            </td>
+
+                            {/* Details Link */}
+                            <td className="px-4 py-3 text-center">
+                              <Link href={`/inventory/${product.id}`} title="View in Inventory" className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-400 hover:bg-navy-50 hover:text-navy-700 transition-colors">
+                                <ChevronRight size={14} />
+                              </Link>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile Card View (Visible on mobile screens) */}
+                <div className="md:hidden space-y-3">
+                  {productsIntelligence.map((item) => {
+                    const { product, lastBuyPrice, prevBuyPrice, minBuyPrice, maxBuyPrice, weightedAvgBuyPrice, lastPurchaseDate, purchaseCount, totalPurchasedQty, priceVariancePct, isPreferred } = item;
+                    return (
+                      <div key={product.id} className="bg-white border border-slate-200 rounded-xl p-4 space-y-3 shadow-2xs">
+                        {/* Header */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <Link href={`/inventory/${product.id}`} className="font-bold text-slate-850 hover:text-navy-800 text-sm break-words">
+                              {product.name}
+                            </Link>
+                            <div className="flex items-center gap-1.5 text-[11px] text-slate-400 font-mono mt-0.5">
+                              <span>SKU: {product.sku || "—"}</span>
+                              {isPreferred && (
+                                <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 py-0.2 rounded font-sans">
+                                  <Star size={8} className="fill-amber-500 text-amber-500" />
+                                  Preferred
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <Link href={`/inventory/${product.id}`} className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-400 bg-slate-50 border border-slate-200 shrink-0">
+                            <ChevronRight size={13} />
+                          </Link>
+                        </div>
+
+                        {/* Price & Trend Grid */}
+                        <div className="grid grid-cols-2 gap-2 bg-slate-50 rounded-lg p-2.5 border border-slate-100 text-xs">
+                          <div>
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Last Buy Price</span>
+                            <span className="text-sm font-black text-slate-850 tabular-nums">₹{lastBuyPrice.toLocaleString()}</span>
+                            {prevBuyPrice !== null && (
+                              <p className="text-[10px] text-slate-400 tabular-nums">Prev: ₹{prevBuyPrice.toLocaleString()}</p>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Price Movement</span>
+                            <div className="mt-0.5">
+                              {priceVariancePct === null ? (
+                                <span className="text-xs text-slate-400">—</span>
+                              ) : priceVariancePct > 0 ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded">
+                                  <AlertTriangle size={10} /> +{priceVariancePct.toFixed(1)}%
+                                </span>
+                              ) : priceVariancePct < 0 ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded">
+                                  <TrendingDown size={10} /> {priceVariancePct.toFixed(1)}%
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-medium text-slate-600 bg-slate-200 px-1.5 py-0.5 rounded">No change</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Stats Footer */}
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-100">
+                          <div>
+                            <span>Avg: </span>
+                            <span className="font-bold text-slate-700 tabular-nums">₹{Math.round(weightedAvgBuyPrice).toLocaleString()}</span>
+                            <span className="text-slate-300 mx-1">·</span>
+                            <span>Stock: </span>
+                            <span className={`font-bold tabular-nums ${product.stock <= product.lowStockThreshold ? "text-red-600" : "text-slate-700"}`}>{product.stock}</span>
+                          </div>
+                          <span className="text-slate-400 text-[10px]">
+                            {totalPurchasedQty} units ({purchaseCount} orders)
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── PURCHASE HISTORY TAB ── */}
+        {activeTab === "purchases" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <h3 className="text-base font-black text-slate-850">Purchase History</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Filter by payment status, search invoices, and track outstanding supplier liabilities.</p>
+              </div>
+              <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3.5 py-2 rounded-xl hover:bg-emerald-100 transition-colors cursor-pointer">
+                <Plus size={13} />
+                Record Purchase
+              </button>
+            </div>
+
+            {purchases.length === 0 ? (
+              <div className="py-16 flex flex-col items-center justify-center gap-3 text-center">
+                <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center"><ShoppingBag size={20} className="text-slate-300" /></div>
+                <div>
+                  <p className="text-sm font-bold text-slate-700">No Purchases Recorded Yet</p>
+                  <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">Record the first purchase invoice from {supplier.name} to start tracking inventory and liabilities.</p>
+                </div>
+                <button onClick={() => setShowAddPurchase(true)} className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3.5 py-2 rounded-xl hover:bg-emerald-100 transition-colors cursor-pointer">
+                  <Plus size={13} />
+                  Record First Purchase
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Search, Filter Pills & Sort Toolbar */}
+                <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-slate-50/70 border border-slate-200/80 p-3 rounded-xl">
+                  {/* Search Input */}
+                  <div className="relative flex-1 min-w-[220px]">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={purchaseSearchQuery}
+                      onChange={(e) => setPurchaseSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setPurchaseSearchQuery("");
+                      }}
+                      placeholder="Search invoice #, product, SKU... (Esc to clear)"
+                      className="w-full pl-9 pr-8 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-400"
+                    />
+                    {purchaseSearchQuery && (
+                      <button
+                        onClick={() => setPurchaseSearchQuery("")}
+                        title="Clear search"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Filter Pills & Sort Selector */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Payment Status Pills */}
+                    <div className="inline-flex items-center bg-white border border-slate-200 rounded-lg p-0.5 text-xs">
+                      {[
+                        { id: "All" as const, label: "All", count: purchaseFilterCounts.all },
+                        { id: "Paid" as const, label: "Paid", count: purchaseFilterCounts.paid },
+                        { id: "Partial" as const, label: "Partial", count: purchaseFilterCounts.partial },
+                        { id: "Credit" as const, label: "Credit", count: purchaseFilterCounts.credit },
+                      ].map((pill) => (
+                        <button
+                          key={pill.id}
+                          onClick={() => setPurchaseStatusFilter(pill.id)}
+                          className={`px-2.5 py-1 rounded-md font-semibold text-xs transition-all cursor-pointer ${
+                            purchaseStatusFilter === pill.id
+                              ? "bg-navy-950 text-white shadow-2xs"
+                              : "text-slate-600 hover:text-navy-950 hover:bg-slate-50"
+                          }`}
+                        >
+                          {pill.label} <span className={`text-[10px] font-normal ${purchaseStatusFilter === pill.id ? "text-slate-300" : "text-slate-400"}`}>({pill.count})</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Sort Dropdown */}
+                    <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-600">
+                      <ArrowUpDown size={12} className="text-slate-400" />
+                      <select
+                        value={purchaseSort}
+                        onChange={(e) => setPurchaseSort(e.target.value as any)}
+                        className="bg-transparent border-none text-xs font-semibold text-slate-700 focus:outline-none cursor-pointer"
+                      >
+                        <option value="newest">Newest Date</option>
+                        <option value="oldest">Oldest Date</option>
+                        <option value="highest_amount">Highest Amount</option>
+                        <option value="highest_due">Highest Due</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Active Filter Bar (If filtered) */}
+                {(purchaseStatusFilter !== "All" || purchaseSearchQuery.trim() !== "") && (
+                  <div className="flex items-center justify-between text-xs bg-slate-100/70 border border-slate-200 px-3 py-1.5 rounded-lg">
+                    <span className="text-slate-600">
+                      Showing <strong className="text-slate-900 font-bold">{filteredPurchases.length}</strong> of {purchases.length} invoices
+                      {purchaseStatusFilter !== "All" && ` · Status: ${purchaseStatusFilter}`}
+                      {purchaseSearchQuery.trim() && ` · Query: "${purchaseSearchQuery.trim()}"`}
+                    </span>
+                    <button
+                      onClick={() => {
+                        setPurchaseStatusFilter("All");
+                        setPurchaseSearchQuery("");
+                      }}
+                      className="text-navy-700 hover:text-navy-900 font-bold hover:underline cursor-pointer"
+                    >
+                      Clear Filters
+                    </button>
+                  </div>
+                )}
+
+                {/* Purchase Table */}
+                {filteredPurchases.length === 0 ? (
+                  <div className="py-12 flex flex-col items-center justify-center text-center gap-2 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                    <p className="text-sm font-bold text-slate-700">No purchases match your current filters.</p>
+                    <p className="text-xs text-slate-400">Try adjusting your search query or payment status filter.</p>
+                    <button
+                      onClick={() => {
+                        setPurchaseStatusFilter("All");
+                        setPurchaseSearchQuery("");
+                      }}
+                      className="mt-1 text-xs font-bold text-navy-700 bg-white border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      Clear All Filters
+                    </button>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200">
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Invoice</th>
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Date</th>
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Product & SKU</th>
+                          <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Qty</th>
+                          {isOwner && <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Rate</th>}
+                          {isOwner && <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Total</th>}
+                          {isOwner && <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Paid</th>}
+                          {isOwner && <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Due</th>}
+                          <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Status</th>
+                          <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredPurchases.map((pur) => {
+                          const product = products.find((p) => p.id === pur.productId);
+                          const fin = getPurchaseFinancials(pur);
+
+                          const statusColors =
+                            fin.status === "Paid"
+                              ? "bg-green-50 text-green-700 border-green-200"
+                              : fin.status === "Partial"
+                                ? "bg-amber-50 text-amber-700 border-amber-200"
+                                : "bg-red-50 text-red-700 border-red-200";
+                          return (
+                            <tr key={pur.id} className="hover:bg-slate-50/70 transition-colors">
+                              <td className="px-4 py-3 text-xs font-mono text-slate-500 font-bold">
+                                {pur.invoiceNumber || "—"}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-slate-600 font-medium whitespace-nowrap">
+                                {formatPurchaseDate(pur)}
+                              </td>
+                              <td className="px-4 py-3 text-xs font-semibold text-slate-700">
+                                {product ? (
+                                  <div>
+                                    <Link href={`/inventory/${product.id}`} className="hover:text-navy-700 hover:underline">
+                                      {product.name}
+                                    </Link>
+                                    <p className="text-[10px] text-slate-400 font-mono font-normal">
+                                      SKU: {product.sku || "—"}
+                                      {fin.returnedQty > 0 && (
+                                        <span className="text-rose-600 font-semibold ml-1.5">({fin.returnedQty} returned)</span>
+                                      )}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-right font-bold text-slate-700">{pur.quantity}</td>
+                              {isOwner && <td className="px-4 py-3 text-xs text-right text-slate-600">₹{pur.buyPrice.toLocaleString()}</td>}
+                              {isOwner && <td className="px-4 py-3 text-xs text-right font-bold text-slate-800">₹{fin.total.toLocaleString()}</td>}
+                              {isOwner && <td className="px-4 py-3 text-xs text-right text-green-700 font-semibold">₹{fin.paid.toLocaleString()}</td>}
+                              {isOwner && (
+                                <td className="px-4 py-3 text-xs text-right font-bold">
+                                  <span className={fin.effectiveDue > 0 ? "text-red-600 font-black" : "text-slate-400 font-normal"}>
+                                    ₹{fin.effectiveDue.toLocaleString()}
+                                  </span>
+                                </td>
+                              )}
+                              <td className="px-4 py-3 text-center">
+                                <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${statusColors}`}>
+                                  {fin.status}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <Link
+                                    href={`/inventory/${product?.id ?? ""}`}
+                                    title="View Product"
+                                    className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-400 hover:bg-navy-50 hover:text-navy-700 transition-colors"
+                                  >
+                                    <ChevronRight size={13} />
+                                  </Link>
+                                  {isOwner && (
+                                    <button
+                                      onClick={() => setEditPurchase(pur)}
+                                      title="Edit Purchase"
+                                      className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors cursor-pointer"
+                                    >
+                                      <Pencil size={13} />
+                                    </button>
+                                  )}
+                                  {isOwner && fin.effectiveDue > 0 && (
+                                    <button
+                                      onClick={() => setPayPurchase(pur)}
+                                      title="Record Payment"
+                                      className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-amber-500 hover:bg-amber-50 hover:text-amber-700 transition-colors cursor-pointer"
+                                    >
+                                      <Coins size={13} />
+                                    </button>
+                                  )}
+                                  {isOwner && (pur.quantity - (pur.returnedQuantity ?? 0)) > 0 && (
+                                    <button
+                                      onClick={() => setReturnPurchase(pur)}
+                                      title="Return Stock"
+                                      className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition-colors cursor-pointer"
+                                    >
+                                      <CornerDownLeft size={13} />
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── AGING ANALYSIS TAB (SPRINT 2B) ── */}
+        {activeTab === "aging" && isOwner && (
+          <div className="space-y-6">
+            {/* Header with Title and Metrics */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-black text-slate-850">Outstanding Aging Analysis</h3>
+                  <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+                    Derived from Invoice Dates
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Real-time liability aging breakdown grouped into 0–30, 31–60, 61–90, and 90+ day buckets.
+                </p>
+              </div>
+
+              {agingAnalysis.totalOutstanding > 0 && (
+                <div className="flex items-center gap-3 shrink-0">
+                  <button
+                    onClick={openLumpSumModal}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-white bg-navy-950 px-3.5 py-2 rounded-xl hover:bg-navy-900 transition-colors shadow-2xs cursor-pointer"
+                  >
+                    <Coins size={13} />
+                    Settle Dues (FIFO)
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {agingAnalysis.totalOutstanding === 0 ? (
+              <div className="py-16 flex flex-col items-center justify-center gap-3 text-center">
+                <div className="w-14 h-14 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center">
+                  <CheckCircle size={26} className="text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-base font-black text-slate-850">No Outstanding Dues</p>
+                  <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto leading-relaxed">
+                    All supplier invoices are currently settled. There are no aging liabilities or overdue payables for {supplier.name}.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setActiveTab("purchases")}
+                  className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-navy-700 bg-slate-50 border border-slate-200 px-3.5 py-2 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <ShoppingBag size={13} />
+                  View Purchase History
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Outstanding Aging Summary Bar & Oldest Invoice Highlight */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Total Outstanding Card */}
+                  <div className="bg-slate-900 text-white rounded-2xl p-4 flex flex-col justify-between shadow-xs">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Outstanding Liability</span>
+                      <p className="text-2xl font-black mt-1 text-white tracking-tight">
+                        ₹{agingAnalysis.totalOutstanding.toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-slate-300 mt-3 pt-3 border-t border-slate-800">
+                      <span>{agingAnalysis.openInvoicesCount} Open Invoice{agingAnalysis.openInvoicesCount !== 1 ? "s" : ""}</span>
+                      <span className="text-emerald-400 font-semibold">FIFO Eligible</span>
+                    </div>
+                  </div>
+
+                  {/* Oldest Invoice Highlight Card */}
+                  {agingAnalysis.oldestInvoice ? (
+                    <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 flex flex-col justify-between md:col-span-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md bg-amber-200/80 text-amber-900 border border-amber-300">
+                              <AlertTriangle size={11} />
+                              Oldest Open Invoice
+                            </span>
+                            <span className="text-xs font-bold font-mono text-slate-850">
+                              {agingAnalysis.oldestInvoice.invoiceNumber}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600">
+                            Purchased on <strong className="text-slate-800 font-semibold">{formatDate(agingAnalysis.oldestInvoice.date)}</strong>
+                            {agingAnalysis.oldestInvoice.product ? ` (${agingAnalysis.oldestInvoice.product.name})` : ""}
+                          </p>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Remaining Due</span>
+                          <span className="text-base font-black text-rose-600 block">
+                            ₹{agingAnalysis.oldestInvoice.effectiveDue.toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-amber-200/70 text-xs">
+                        <span className="text-amber-900 font-bold">
+                          Age: {agingAnalysis.oldestInvoice.ageDays} Days
+                          {agingAnalysis.oldestInvoice.ageDays > 90 ? " (Critical Overdue)" : agingAnalysis.oldestInvoice.ageDays > 60 ? " (Extended)" : ""}
+                        </span>
+                        <button
+                          onClick={() => setPayPurchase(agingAnalysis.oldestInvoice!.purchase)}
+                          className="inline-flex items-center gap-1 text-xs font-bold text-amber-900 hover:text-amber-950 underline cursor-pointer"
+                        >
+                          <Coins size={12} />
+                          Pay This Invoice
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* Aging Proportional Distribution Bar */}
+                <div className="bg-slate-50/80 border border-slate-200 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-700">Aging Distribution Breakdown</span>
+                    <span className="text-slate-400 font-medium">100% of Open Dues</span>
+                  </div>
+
+                  {/* Horizontal Segmented Bar */}
+                  <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex shadow-inner">
+                    {agingAnalysis.bucketList.map((bucket) => {
+                      if (bucket.percentage <= 0) return null;
+                      const barColors =
+                        bucket.id === "current"
+                          ? "bg-emerald-500 hover:bg-emerald-600"
+                          : bucket.id === "days31to60"
+                            ? "bg-amber-400 hover:bg-amber-500"
+                            : bucket.id === "days61to90"
+                              ? "bg-orange-500 hover:bg-orange-600"
+                              : "bg-rose-500 hover:bg-rose-600";
+                      return (
+                        <div
+                          key={bucket.id}
+                          style={{ width: `${bucket.percentage}%` }}
+                          title={`${bucket.label}: ₹${bucket.amount.toLocaleString()} (${bucket.percentage.toFixed(1)}%)`}
+                          className={`${barColors} transition-all duration-300 relative group cursor-pointer`}
+                          onClick={() => setSelectedAgingBucket(bucket.id)}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {/* Distribution Legend */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                    {agingAnalysis.bucketList.map((bucket) => {
+                      const dotColor =
+                        bucket.id === "current"
+                          ? "bg-emerald-500"
+                          : bucket.id === "days31to60"
+                            ? "bg-amber-400"
+                            : bucket.id === "days61to90"
+                              ? "bg-orange-500"
+                              : "bg-rose-500";
+                      return (
+                        <button
+                          key={bucket.id}
+                          onClick={() => setSelectedAgingBucket(bucket.id === selectedAgingBucket ? "all" : bucket.id)}
+                          className={`text-left p-1.5 rounded-lg transition-colors cursor-pointer ${
+                            selectedAgingBucket === bucket.id ? "bg-white shadow-2xs border border-slate-200" : "hover:bg-slate-100/70"
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full ${dotColor} shrink-0`} />
+                            <span className="text-[11px] font-bold text-slate-700 truncate">{bucket.label}</span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 pl-3.5 mt-0.5">
+                            {bucket.percentage.toFixed(1)}% · ₹{bucket.amount.toLocaleString()}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 4 Interactive Aging Bucket Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {agingAnalysis.bucketList.map((bucket) => {
+                    const isSelected = selectedAgingBucket === bucket.id;
+                    const isOver90 = bucket.id === "over90";
+                    const isDanger = isOver90 && bucket.amount > 0;
+
+                    const cardTheme = isDanger
+                      ? "border-rose-300 bg-rose-50/40 hover:bg-rose-50/80"
+                      : bucket.id === "days61to90" && bucket.amount > 0
+                        ? "border-orange-200 bg-orange-50/30 hover:bg-orange-50/70"
+                        : bucket.id === "days31to60" && bucket.amount > 0
+                          ? "border-amber-200 bg-amber-50/30 hover:bg-amber-50/70"
+                          : "border-slate-200 bg-white hover:bg-slate-50/70";
+
+                    return (
+                      <div
+                        key={bucket.id}
+                        onClick={() => setSelectedAgingBucket(isSelected ? "all" : bucket.id)}
+                        className={`border rounded-2xl p-4 transition-all cursor-pointer relative flex flex-col justify-between ${cardTheme} ${
+                          isSelected ? "ring-2 ring-navy-950 shadow-sm" : ""
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-black text-slate-800">{bucket.label}</span>
+                            {isDanger ? (
+                              <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-200 text-rose-900 border border-rose-300 animate-pulse">
+                                Critical
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                {bucket.daysRange}
+                              </span>
+                            )}
+                          </div>
+
+                          <p className={`text-xl font-black mt-2 tracking-tight ${isDanger ? "text-rose-700" : "text-slate-850"}`}>
+                            ₹{bucket.amount.toLocaleString()}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center justify-between text-xs text-slate-500 mt-4 pt-2.5 border-t border-slate-150">
+                          <span>{bucket.count} Invoice{bucket.count !== 1 ? "s" : ""}</span>
+                          <span className="font-bold text-slate-700">{bucket.percentage.toFixed(1)}%</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Drilldown Section */}
+                <div className="space-y-4 pt-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/70 border border-slate-200 p-3 rounded-xl">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-black text-slate-800">Drilldown View:</span>
+                      <div className="inline-flex items-center bg-white border border-slate-200 rounded-lg p-0.5 text-xs">
+                        {[
+                          { id: "all" as const, label: `All (${agingAnalysis.allInvoices.length})` },
+                          { id: "current" as const, label: `0–30d (${agingAnalysis.buckets.current.count})` },
+                          { id: "days31to60" as const, label: `31–60d (${agingAnalysis.buckets.days31to60.count})` },
+                          { id: "days61to90" as const, label: `61–90d (${agingAnalysis.buckets.days61to90.count})` },
+                          { id: "over90" as const, label: `90+d (${agingAnalysis.buckets.over90.count})` },
+                        ].map((btn) => (
+                          <button
+                            key={btn.id}
+                            onClick={() => setSelectedAgingBucket(btn.id)}
+                            className={`px-2.5 py-1 rounded-md font-semibold text-xs transition-all cursor-pointer ${
+                              selectedAgingBucket === btn.id
+                                ? "bg-navy-950 text-white shadow-2xs"
+                                : "text-slate-600 hover:text-navy-950 hover:bg-slate-50"
+                            }`}
+                          >
+                            {btn.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {selectedAgingBucket !== "all" && (
+                      <button
+                        onClick={() => setSelectedAgingBucket("all")}
+                        className="text-xs font-bold text-navy-700 hover:underline cursor-pointer self-start sm:self-auto"
+                      >
+                        Reset to All Invoices
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Invoices Table */}
+                  {(() => {
+                    const invoicesToRender =
+                      selectedAgingBucket === "all"
+                        ? agingAnalysis.allInvoices
+                        : agingAnalysis.buckets[selectedAgingBucket].invoices;
+
+                    if (invoicesToRender.length === 0) {
+                      return (
+                        <div className="py-12 text-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                          <p className="text-sm font-bold text-slate-700">No open invoices in this aging bucket.</p>
+                          <p className="text-xs text-slate-400 mt-0.5">Select another bucket or view all open liabilities.</p>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                        <table className="w-full text-sm border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200">
+                              <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Invoice & Age</th>
+                              <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Date</th>
+                              <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Product</th>
+                              <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Qty</th>
+                              <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Original Total</th>
+                              <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Returned</th>
+                              <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Paid</th>
+                              <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">Remaining Due</th>
+                              <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {invoicesToRender.map((inv) => {
+                              const ageBadgeColor =
+                                inv.ageDays > 90
+                                  ? "bg-rose-100 text-rose-800 border-rose-200"
+                                  : inv.ageDays > 60
+                                    ? "bg-orange-100 text-orange-800 border-orange-200"
+                                    : inv.ageDays > 30
+                                      ? "bg-amber-100 text-amber-800 border-amber-200"
+                                      : "bg-emerald-100 text-emerald-800 border-emerald-200";
+
+                              return (
+                                <tr key={inv.purchase.id} className="hover:bg-slate-50/70 transition-colors">
+                                  <td className="px-4 py-3 text-xs">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono font-bold text-slate-700">{inv.invoiceNumber}</span>
+                                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${ageBadgeColor}`}>
+                                        {inv.ageDays}d old
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 text-xs text-slate-600 font-medium whitespace-nowrap">
+                                    {formatPurchaseDate(inv.purchase)}
+                                  </td>
+                                  <td className="px-4 py-3 text-xs font-semibold text-slate-700">
+                                    {inv.product ? (
+                                      <div>
+                                        <Link href={`/inventory/${inv.product.id}`} className="hover:text-navy-700 hover:underline">
+                                          {inv.product.name}
+                                        </Link>
+                                        <p className="text-[10px] text-slate-400 font-mono font-normal">
+                                          SKU: {inv.product.sku || "—"}
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-3 text-xs text-right font-bold text-slate-700">{inv.purchase.quantity}</td>
+                                  <td className="px-4 py-3 text-xs text-right text-slate-600">₹{inv.originalAmount.toLocaleString()}</td>
+                                  <td className="px-4 py-3 text-xs text-right text-rose-600 font-medium">
+                                    {inv.returnedValue > 0 ? `₹${inv.returnedValue.toLocaleString()}` : "—"}
+                                  </td>
+                                  <td className="px-4 py-3 text-xs text-right text-green-700 font-medium">
+                                    {inv.paidAmount > 0 ? `₹${inv.paidAmount.toLocaleString()}` : "—"}
+                                  </td>
+                                  <td className="px-4 py-3 text-xs text-right font-black text-rose-600">
+                                    ₹{inv.effectiveDue.toLocaleString()}
+                                  </td>
+                                  <td className="px-4 py-3 text-center">
+                                    <button
+                                      onClick={() => setPayPurchase(inv.purchase)}
+                                      className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-md transition-colors cursor-pointer"
+                                    >
+                                      <Coins size={11} />
+                                      Pay
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── STATEMENT & LEDGER TAB (SPRINT 2C) ── */}
+        {activeTab === "statement" && isOwner && (
+          <div className="space-y-6">
+            {/* Header with Title and Quick Actions */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-black text-slate-850">Supplier Statement & Financial Ledger</h3>
+                  <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+                    Period: {effectiveDateRange.label}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Chronological financial ledger tracking invoices, returns, payments, running balances, and opening/closing reconciliation.
+                </p>
+              </div>
+
+              {/* Action Buttons Toolbar */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={handleExportCSV}
+                  disabled={!supplierStatement || supplierStatement.entries.length === 0}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 px-3 py-2 rounded-xl hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Export Statement as CSV"
+                >
+                  <Download size={13} />
+                  Export CSV
+                </button>
+
+                <button
+                  onClick={handleExportExcel}
+                  disabled={!supplierStatement || isExportingExcel || supplierStatement.entries.length === 0}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-xl hover:bg-emerald-100 transition-colors shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Export Statement to Excel (.xlsx)"
+                >
+                  <Download size={13} />
+                  {isExportingExcel ? "Exporting..." : "Export Excel"}
+                </button>
+
+                <button
+                  onClick={handleDownloadPDF}
+                  disabled={!supplierStatement || isExportingPDF}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-800 bg-blue-50 border border-blue-200 px-3 py-2 rounded-xl hover:bg-blue-100 transition-colors shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Download Statement PDF"
+                >
+                  <FileText size={13} />
+                  {isExportingPDF ? "Generating..." : "Download PDF"}
+                </button>
+
+                <button
+                  onClick={handlePrintStatement}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-white bg-slate-900 px-3.5 py-2 rounded-xl hover:bg-slate-800 transition-colors shadow-2xs cursor-pointer"
+                  title="Print Statement"
+                >
+                  <Printer size={13} />
+                  Print Statement
+                </button>
+              </div>
+            </div>
+
+            {/* Date Preset Filter Toolbar & Search */}
+            <div className="space-y-3 bg-slate-50/70 border border-slate-200/80 p-3.5 rounded-2xl">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                {/* Date Presets */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1">Period:</span>
+                  {[
+                    { id: "all_time" as const, label: "All Time" },
+                    { id: "this_month" as const, label: "This Month" },
+                    { id: "last_month" as const, label: "Last Month" },
+                    { id: "last_3_months" as const, label: "Last 3 Months" },
+                    { id: "this_financial_year" as const, label: "This FY" },
+                    { id: "custom" as const, label: "Custom Range" },
+                  ].map((preset) => (
+                    <button
+                      key={preset.id}
+                      onClick={() => setStatementPreset(preset.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                        statementPreset === preset.id
+                          ? "bg-navy-950 text-white shadow-2xs"
+                          : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100/80"
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Sort Order Toggle */}
+                <div className="flex items-center gap-2 self-start md:self-auto">
+                  <button
+                    onClick={() => setStatementSortOrder((prev) => (prev === "desc" ? "asc" : "desc"))}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 bg-white border border-slate-200 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+                    title="Toggle chronological sorting direction"
+                  >
+                    <ArrowUpDown size={12} className="text-slate-400" />
+                    <span>{statementSortOrder === "desc" ? "Newest First" : "Oldest First"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Custom Date Range Inputs (Shown when 'custom' is selected) */}
+              {statementPreset === "custom" && (
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-2 border-t border-slate-200/60">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-bold text-slate-600 whitespace-nowrap">From:</label>
+                    <input
+                      type="date"
+                      value={customFromDate}
+                      onChange={(e) => setCustomFromDate(e.target.value)}
+                      className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-bold text-slate-600 whitespace-nowrap">To:</label>
+                    <input
+                      type="date"
+                      value={customToDate}
+                      onChange={(e) => setCustomToDate(e.target.value)}
+                      className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600"
+                    />
+                  </div>
+
+                  {(customFromDate || customToDate) && (
+                    <button
+                      onClick={() => {
+                        setCustomFromDate("");
+                        setCustomToDate("");
+                      }}
+                      className="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer underline"
+                    >
+                      Clear Dates
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Custom Date Validation Error */}
+              {!statementValidation.isValid && statementValidation.error && (
+                <div className="flex items-center gap-2 p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl">
+                  <AlertCircle size={14} className="shrink-0" />
+                  <span>{statementValidation.error}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Reconciliation KPI Summary Cards */}
+            {supplierStatement && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                  {/* Opening Balance */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Opening Balance</span>
+                    <p className="text-base font-black text-slate-800 mt-1 tabular-nums">
+                      {formatCurrencyINR(supplierStatement.openingBalance)}
+                    </p>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">Prior to statement</span>
+                  </div>
+
+                  {/* Purchases (Debits) */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Period Purchases</span>
+                    <p className="text-base font-black text-blue-700 mt-1 tabular-nums">
+                      {formatCurrencyINR(supplierStatement.totalPurchases)}
+                    </p>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">Invoices (Debits)</span>
+                  </div>
+
+                  {/* Returns (Credits) */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Period Returns</span>
+                    <p className="text-base font-black text-rose-600 mt-1 tabular-nums">
+                      {formatCurrencyINR(supplierStatement.totalReturns)}
+                    </p>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">Credit adjustments</span>
+                  </div>
+
+                  {/* Payments (Credits) */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Period Payments</span>
+                    <p className="text-base font-black text-emerald-700 mt-1 tabular-nums">
+                      {formatCurrencyINR(supplierStatement.totalPayments)}
+                    </p>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">Paid to supplier</span>
+                  </div>
+
+                  {/* Closing Balance */}
+                  <div className="bg-slate-900 text-white rounded-xl p-3.5 shadow-2xs col-span-2 sm:col-span-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Closing Balance</span>
+                    <p className="text-base font-black text-white mt-1 tabular-nums">
+                      {formatCurrencyINR(supplierStatement.closingBalance)}
+                    </p>
+                    <span className="text-[10px] text-slate-300 mt-0.5 block">Net liability balance</span>
+                  </div>
+                </div>
+
+                {/* Explicit Reconciliation Indicator */}
+                <div className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-semibold ${
+                  supplierStatement.reconciled
+                    ? "bg-emerald-50/70 border-emerald-200 text-emerald-900"
+                    : "bg-rose-50 border-rose-200 text-rose-900"
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {supplierStatement.reconciled ? (
+                      <CheckCircle size={16} className="text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertTriangle size={16} className="text-rose-600 shrink-0" />
+                    )}
+                    <span>
+                      {supplierStatement.reconciled
+                        ? `✓ Reconciled: Opening Balance (${formatCurrencyINR(supplierStatement.openingBalance)}) + Debits (${formatCurrencyINR(supplierStatement.periodDebits)}) - Credits (${formatCurrencyINR(supplierStatement.periodCredits)}) = Closing Balance (${formatCurrencyINR(supplierStatement.closingBalance)})`
+                        : `⚠ Reconciliation Difference: Discrepancy of ${formatCurrencyINR(supplierStatement.reconciliationDiff)} detected.`}
+                    </span>
+                  </div>
+                  <span className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded font-black self-start sm:self-auto ${
+                    supplierStatement.reconciled
+                      ? "bg-emerald-200/80 text-emerald-950 border border-emerald-300"
+                      : "bg-rose-200 text-rose-950 border border-rose-300"
+                  }`}>
+                    {supplierStatement.reconciled ? "✓ Reconciled" : "⚠ Difference"}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Ledger Table */}
+            {supplierStatement && (
+              <div className="space-y-3">
+                {displayStatementEntries.length === 0 ? (
+                  <div className="py-16 flex flex-col items-center justify-center gap-3 text-center border border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
+                    <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center">
+                      <Receipt size={22} className="text-slate-300" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-700">No Transactions Found</p>
+                      <p className="text-xs text-slate-400 mt-0.5 max-w-sm mx-auto">
+                        No purchase invoices, payments, or stock returns were recorded for {supplier.name} during this selected period.
+                      </p>
+                    </div>
+                    {statementPreset !== "all_time" && (
+                      <button
+                        onClick={() => setStatementPreset("all_time")}
+                        className="mt-1 inline-flex items-center gap-1.5 text-xs font-bold text-navy-800 bg-white border border-slate-200 px-3.5 py-1.5 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
+                      >
+                        Reset to All Time
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto border border-slate-200 rounded-2xl shadow-2xs">
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200">
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Date</th>
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Type</th>
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Reference</th>
+                          <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">Description</th>
+                          <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Debit (₹)</th>
+                          <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Credit (₹)</th>
+                          <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">Balance (₹)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {/* Opening Balance Row */}
+                        <tr className="bg-slate-50/40 text-slate-600 italic font-medium">
+                          <td className="px-4 py-3 text-xs whitespace-nowrap text-slate-500">
+                            {effectiveDateRange.fromDate ? formatStatementDate(effectiveDateRange.fromDate) : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-xs">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 font-sans not-italic">
+                              OPENING
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-400 font-mono not-italic">—</td>
+                          <td className="px-4 py-3 text-xs text-slate-500">
+                            Opening balance liability immediately prior to statement period
+                          </td>
+                          <td className="px-4 py-3 text-xs text-right text-slate-400 not-italic">—</td>
+                          <td className="px-4 py-3 text-xs text-right text-slate-400 not-italic">—</td>
+                          <td className="px-4 py-3 text-xs text-right font-bold text-slate-700 not-italic tabular-nums">
+                            {formatCurrencyINR(supplierStatement.openingBalance)}
+                          </td>
+                        </tr>
+
+                        {/* Chronological Statement Rows */}
+                        {displayStatementEntries.map((entry) => {
+                          const isPurchase = entry.type === "PURCHASE";
+                          const isPayment = entry.type === "PAYMENT";
+                          const isReturn = entry.type === "RETURN";
+
+                          const typeBadgeClass = isPurchase
+                            ? "bg-blue-50 text-blue-700 border-blue-200"
+                            : isPayment
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : "bg-rose-50 text-rose-700 border-rose-200";
+
+                          return (
+                            <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors">
+                              <td className="px-4 py-3 text-xs text-slate-600 font-medium whitespace-nowrap">
+                                {entry.formattedDate}
+                              </td>
+                              <td className="px-4 py-3 text-xs whitespace-nowrap">
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${typeBadgeClass}`}>
+                                  {entry.type}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-xs font-mono font-bold text-slate-700 whitespace-nowrap">
+                                {entry.reference}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-slate-700 leading-snug">
+                                {entry.description}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-right font-bold text-slate-850 tabular-nums whitespace-nowrap">
+                                {entry.debit > 0 ? `₹${entry.debit.toLocaleString()}` : "—"}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-right font-bold text-emerald-700 tabular-nums whitespace-nowrap">
+                                {entry.credit > 0 ? `₹${entry.credit.toLocaleString()}` : "—"}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-right font-black tabular-nums whitespace-nowrap">
+                                <span className={entry.runningBalance > 0 ? "text-rose-600" : "text-emerald-700"}>
+                                  ₹{entry.runningBalance.toLocaleString()}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+
+                        {/* Closing Balance Row */}
+                        <tr className="bg-slate-900 text-white font-bold">
+                          <td className="px-4 py-3 text-xs whitespace-nowrap text-slate-300">
+                            {effectiveDateRange.toDate ? formatStatementDate(effectiveDateRange.toDate) : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-xs">
+                            <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-white/20 text-white border border-white/30 font-sans">
+                              CLOSING
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-400 font-mono">—</td>
+                          <td className="px-4 py-3 text-xs text-slate-200">
+                            Closing Statement Net Liability Balance
+                          </td>
+                          <td className="px-4 py-3 text-xs text-right text-slate-300 tabular-nums whitespace-nowrap">
+                            ₹{supplierStatement.totalPurchases.toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-right text-emerald-400 tabular-nums whitespace-nowrap">
+                            ₹{supplierStatement.periodCredits.toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-right font-black text-white tabular-nums whitespace-nowrap text-sm">
+                            ₹{supplierStatement.closingBalance.toLocaleString()}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── PAYMENTS TAB ── */}
+        {activeTab === "payments" && isOwner && (() => {
+          const supplierPayments = getSupplierPaymentsBySupplier(id);
+          const purchasesWithTimeline = sortPurchasesDescending(purchases);
+
+          return (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-black text-slate-800">Ledger Timeline</h3>
+                <span className="text-xs text-slate-400 font-medium">{purchasesWithTimeline.length} purchase ledger{purchasesWithTimeline.length !== 1 ? "s" : ""}</span>
+              </div>
+              {purchasesWithTimeline.length === 0 ? (
+                <div className="py-16 flex flex-col items-center justify-center gap-3 text-center">
+                  <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center"><Coins size={20} className="text-slate-300" /></div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-700">No Purchases or Payments recorded</p>
+                    <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">Purchases and their payment timeline will appear here.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {purchasesWithTimeline.map((pur) => {
+                    const product = products.find((p) => p.id === pur.productId);
+                    const total = pur.totalAmount ?? (pur.buyPrice * pur.quantity);
+
+                    // Get all payments for this purchase, sorted chronologically (oldest first)
+                    const paymentsForP = supplierPayments
+                      .filter((sp) => sp.purchaseId === pur.id)
+                      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+                    const returnsForP = getPurchaseReturnsByPurchase(pur.id)
+                      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+                    type TimelineEvent =
+                      | { type: "payment"; id: string; date: string; amount: number; method: PaymentMethod; isUpfront?: boolean; paidBy: string; note?: string }
+                      | { type: "return"; id: string; date: string; qty: number; buyPrice: number; totalAmount: number; refundAmount: number; reason: string; returnedBy: string };
+
+                    const allEvents: TimelineEvent[] = [
+                      ...paymentsForP.map((p): TimelineEvent => ({
+                        type: "payment",
+                        id: p.id,
+                        date: p.date,
+                        amount: p.amount,
+                        method: p.method,
+                        isUpfront: p.isUpfront,
+                        paidBy: p.paidBy,
+                        note: p.note,
+                      })),
+                      ...returnsForP.map((r): TimelineEvent => ({
+                        type: "return",
+                        id: r.id,
+                        date: r.createdAt,
+                        qty: r.quantity,
+                        buyPrice: r.buyPrice,
+                        totalAmount: r.totalAmount,
+                        refundAmount: r.refundAmount,
+                        reason: r.reason,
+                        returnedBy: r.returnedBy,
+                      })),
+                    ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+                    // Compute timeline events with remaining balance step-by-step
+                    let runningPaid = 0;
+                    let runningReturned = 0;
+                    const timelineEvents = allEvents.map((ev) => {
+                      if (ev.type === "payment") {
+                        runningPaid += ev.amount;
+                      } else {
+                        runningReturned += ev.totalAmount;
+                      }
+                      const runningBalance = Math.max(0, Math.round((total - runningReturned - runningPaid) * 100) / 100);
+                      return {
+                        ...ev,
+                        remaining: runningBalance,
+                      };
+                    });
+
+                    const finalOutstanding = Math.max(0, Math.round((total - runningReturned - runningPaid) * 100) / 100);
+                    const isFullyPaid = finalOutstanding <= 0;
+
+                    return (
+                      <div key={pur.id} className="bg-slate-50/50 border border-slate-200 rounded-2xl p-5 space-y-4 hover:bg-slate-50/80 transition-all">
+                        {/* Header */}
+                        <div className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 pb-3">
+                          <div>
+                            <span className="text-[10px] font-mono font-bold text-slate-400 block tracking-wider uppercase">
+                              Invoice: {pur.invoiceNumber || "No Invoice"}
+                            </span>
+                            <span className="font-bold text-slate-800 text-sm mt-0.5 block">
+                              {product?.name ?? "Unknown Product"}
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xs text-slate-500 block">Total Cost</span>
+                            <span className="font-extrabold text-slate-800 text-sm block">₹{total.toLocaleString()}</span>
+                          </div>
+                        </div>
+
+                        {pur.expectedBuyPrice !== undefined && (() => {
+                          const varianceAmt = pur.buyPrice - pur.expectedBuyPrice;
+                          const variancePct = pur.expectedBuyPrice > 0 ? (varianceAmt / pur.expectedBuyPrice) * 100 : 0;
+                          return (
+                            <div className="bg-white border border-slate-150 rounded-xl p-3 flex items-center justify-between text-xs">
+                              <div>
+                                <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest">Cost Variance Analysis</p>
+                                <div className="flex items-center gap-3 mt-1.5 text-slate-500 font-semibold">
+                                  <span>Expected Unit: <strong className="text-slate-700 font-bold">₹{pur.expectedBuyPrice.toLocaleString()}</strong></span>
+                                  <span>Actual Unit: <strong className="text-slate-700 font-bold">₹{pur.buyPrice.toLocaleString()}</strong></span>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest">Deviation</p>
+                                <span className={`inline-block font-black text-xs mt-1.5 ${varianceAmt > 0 ? "text-rose-600" : varianceAmt < 0 ? "text-emerald-600" : "text-slate-500"}`}>
+                                  {varianceAmt > 0 ? "+" : ""}{varianceAmt.toLocaleString()} ({varianceAmt > 0 ? "+" : ""}{variancePct.toFixed(1)}%)
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* Vertical Timeline */}
+                        <div className="relative border-l-2 border-slate-200 ml-3 pl-5 space-y-4 py-1">
+                          {/* Purchase Created Event */}
+                          <div className="relative">
+                            <span className="absolute -left-[27px] top-1 w-3.5 h-3.5 rounded-full border-2 border-slate-400 bg-white flex items-center justify-center">
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                            </span>
+                            <div>
+                              <p className="text-xs font-bold text-slate-700">Purchase Declared</p>
+                              <p className="text-[10px] text-slate-400 mt-0.5">{formatDate(pur.date)} · Initial Liability: ₹{total.toLocaleString()}</p>
+                            </div>
+                          </div>
+
+                          {/* Events */}
+                          {timelineEvents.map((ev, index) => {
+                            if (ev.type === "payment") {
+                              const methodColors: Record<string, string> = {
+                                Cash: "bg-emerald-100 text-emerald-800 border-emerald-200",
+                                UPI: "bg-blue-100 text-blue-800 border-blue-200",
+                                Card: "bg-purple-100 text-purple-800 border-purple-200",
+                                Credit: "bg-red-100 text-red-800 border-red-200",
+                              };
+                              return (
+                                <div key={ev.id} className="relative">
+                                  <span className="absolute -left-[27px] top-1 w-3.5 h-3.5 rounded-full border-2 border-emerald-500 bg-white flex items-center justify-center">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                  </span>
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-xs font-bold text-slate-700">
+                                        {ev.isUpfront ? "Upfront Payment" : `Payment #${index}`}
+                                      </p>
+                                      <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full border ${methodColors[ev.method] || "bg-slate-100 text-slate-600 border-slate-200"}`}>
+                                        {ev.method}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-slate-800 font-semibold">
+                                      Paid ₹{ev.amount.toLocaleString()} <span className="text-[10px] text-slate-400 font-normal">· Balance remaining: ₹{ev.remaining.toLocaleString()}</span>
+                                    </p>
+                                    <p className="text-[10px] text-slate-400">
+                                      {formatDate(ev.date)} · Paid by {ev.paidBy} {ev.note ? `· "${ev.note}"` : ""}
+                                    </p>
+                                  </div>
+                                </div>
+                              );
+                            } else {
+                              return (
+                                <div key={ev.id} className="relative">
+                                  <span className="absolute -left-[27px] top-1 w-3.5 h-3.5 rounded-full border-2 border-rose-500 bg-white flex items-center justify-center">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                  </span>
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-xs font-bold text-slate-700">
+                                        Returned Qty: {ev.qty}
+                                      </p>
+                                      <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full border bg-rose-50 text-rose-700 border-rose-200">
+                                        Return
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-slate-800 font-semibold">
+                                      {ev.refundAmount > 0 ? `Refunded ₹${ev.refundAmount.toLocaleString()}` : "Adjustment only"}
+                                      <span className="text-[10px] text-slate-400 font-normal"> · Value: ₹{ev.totalAmount.toLocaleString()} · Balance remaining: ₹{ev.remaining.toLocaleString()}</span>
+                                    </p>
+                                    <p className="text-[10px] text-slate-400">
+                                      {formatDate(ev.date)} · Reason: "{ev.reason}" · Returned by {ev.returnedBy}
+                                    </p>
+                                  </div>
+                                </div>
+                              );
+                            }
+                          })}
+                        </div>
+
+                        {/* Footer Status summary */}
+                        <div className="flex items-center justify-between bg-white border border-slate-150 rounded-xl p-3 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-500 font-medium">Status:</span>
+                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${isFullyPaid
+                                ? "bg-green-100 text-green-800 border-green-200"
+                                : (runningPaid > 0 || runningReturned > 0)
+                                  ? "bg-amber-100 text-amber-800 border-amber-200"
+                                  : "bg-red-100 text-red-800 border-red-200"
+                              }`}>
+                              {isFullyPaid ? "Paid" : (runningPaid > 0 || runningReturned > 0) ? "Partial" : "Credit"}
+                            </span>
+                          </div>
+                          <div className="font-semibold text-slate-700">
+                            Outstanding: <span className={finalOutstanding > 0 ? "text-red-600 font-bold" : "text-slate-400"}>₹{finalOutstanding.toLocaleString()}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* ── PURCHASE ORDERS TAB ── */}
+        {activeTab === "purchase_orders" && (() => {
+          const pos = sortPurchasesDescending(
+            (state.purchaseOrders || []).filter((po) => po.supplierId === id)
+          );
+
+          return (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-black text-slate-800">Purchase Orders</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Planning documents · No impact on stock or finance until converted</p>
+                </div>
+                {isOwner && (
+                  <button
+                    onClick={() => setShowAddPO(true)}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-navy-950 bg-yellow-400 px-3 py-1.5 rounded-xl hover:bg-yellow-300 transition-colors cursor-pointer"
+                  >
+                    <Plus size={13} />
+                    Create PO
+                  </button>
+                )}
+              </div>
+
+              {pos.length === 0 ? (
+                <div className="py-16 flex flex-col items-center justify-center gap-3 text-center">
+                  <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center">
+                    <FileText size={20} className="text-slate-300" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-700">No Purchase Orders</p>
+                    <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
+                      Create purchase orders to plan inventory restocking before committing a purchase.
+                    </p>
+                  </div>
+                  {isOwner && (
+                    <button
+                      onClick={() => setShowAddPO(true)}
+                      className="inline-flex items-center gap-2 text-xs font-bold text-navy-950 bg-yellow-400 px-3 py-2 rounded-xl hover:bg-yellow-300 transition-colors cursor-pointer mt-2"
+                    >
+                      <Plus size={13} />
+                      Create First PO
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {pos.map((po) => {
+                    const estTotal = po.items.reduce((s, item) => s + item.quantity * item.expectedBuyPrice, 0);
+                    const totalUnits = po.items.reduce((s, item) => s + item.quantity, 0);
+                    const receivedUnits = po.items.reduce((s, item) => s + item.receivedQuantity, 0);
+                    const remainingUnits = Math.max(0, totalUnits - receivedUnits);
+                    const isEditable = po.status === "Draft" || po.status === "Sent" || po.status === "Supplier Confirmed";
+                    const isLimitedEdit = po.status === "Partially Delivered";
+                    const isTerminal = po.status === "Completed" || po.status === "Cancelled";
+                    const canConvert = !isTerminal && remainingUnits > 0;
+
+                    return (
+                      <div key={po.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col">
+                        {/* Card header */}
+                        <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">Purchase Order</span>
+                            <span className="font-extrabold text-slate-800 text-sm block mt-0.5">{po.poNumber}</span>
+                          </div>
+                          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${PO_STATUS_COLOR[po.status]}`}>
+                            {po.status}
+                          </span>
+                        </div>
+
+                        {/* Card body */}
+                        <div className="px-5 py-4 flex-1 space-y-3">
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                            <div>
+                              <p className="text-slate-400 font-medium">Created</p>
+                              <p className="font-bold text-slate-700 mt-0.5">{formatPurchaseDate(po)}</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-400 font-medium">Expected Delivery</p>
+                              <p className="font-bold text-slate-700 mt-0.5">{formatDate(po.expectedDeliveryDate)}</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-400 font-medium">Items / Units</p>
+                              <p className="font-bold text-slate-700 mt-0.5">{po.items.length} products · {totalUnits} units</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-400 font-medium">Est. Value</p>
+                              <p className="font-bold text-slate-700 mt-0.5">₹{estTotal.toLocaleString()}</p>
+                            </div>
+                          </div>
+
+                          {po.status === "Partially Delivered" && (
+                            <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-800 font-semibold">
+                              ⚡ {receivedUnits} of {totalUnits} units received · {remainingUnits} remaining
+                            </div>
+                          )}
+
+                          {po.notes && (
+                            <div className="bg-slate-50 border border-slate-100 rounded-xl px-3 py-2 text-xs text-slate-500 italic">
+                              &ldquo;{po.notes}&rdquo;
+                            </div>
+                          )}
+
+                          {/* Chronological Activity Timeline (oldest -> newest stored, rendered oldest -> newest) */}
+                          <div className="border-t border-slate-100 pt-3">
+                            <button
+                              onClick={() => setExpandedTimelines((prev) => ({ ...prev, [po.id]: !prev[po.id] }))}
+                              className="w-full flex items-center justify-between text-xs text-slate-500 hover:text-slate-700 font-bold select-none cursor-pointer transition-colors"
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <Activity size={12} className="text-slate-400" />
+                                PO Activity Log ({po.activityLog?.length || 0})
+                              </span>
+                              <span className="text-[10px]">{expandedTimelines[po.id] ? "▲ Hide" : "▼ Show"}</span>
+                            </button>
+
+                            {expandedTimelines[po.id] && (
+                              <div className="mt-3 pl-3.5 border-l-2 border-slate-200 space-y-3 py-1 animate-in slide-in-from-top-1 duration-150">
+                                {(po.activityLog || []).map((log) => {
+                                  const icons = {
+                                    Created: "●",
+                                    Edited: "✏",
+                                    Sent: "📨",
+                                    Confirmed: "✔",
+                                    Delivery: "📦",
+                                    Completed: "✔",
+                                    Cancelled: "❌",
+                                  };
+                                  const colors = {
+                                    Created: "text-slate-500",
+                                    Edited: "text-slate-600 font-medium",
+                                    Sent: "text-blue-600 font-semibold",
+                                    Confirmed: "text-indigo-600 font-bold",
+                                    Delivery: "text-amber-600 font-medium",
+                                    Completed: "text-emerald-600 font-black",
+                                    Cancelled: "text-rose-600 font-bold",
+                                  };
+                                  return (
+                                    <div key={log.id} className="text-[11px] leading-relaxed relative pl-1">
+                                      <span className="absolute -left-[19.5px] top-0 font-bold bg-white text-xs px-0.5">
+                                        {icons[log.type] || "•"}
+                                      </span>
+                                      <div>
+                                        <p className={`${colors[log.type]} font-bold`}>
+                                          {log.type} {log.type === "Confirmed" ? "by Supplier" : ""}
+                                        </p>
+                                        <p className="text-slate-600 text-[10px]">{log.notes}</p>
+                                        <p className="text-[9px] text-slate-400 mt-0.5">{formatDate(log.date)}</p>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Card footer actions */}
+                        <div className="px-5 py-3 border-t border-slate-100 flex items-center gap-2 flex-wrap justify-end bg-slate-50/50">
+                          {/* Print */}
+                          <button
+                            onClick={() => setPrintPO(po)}
+                            title="Print PO Slip"
+                            className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg cursor-pointer transition-colors"
+                          >
+                            <Printer size={14} />
+                          </button>
+
+                          {/* Duplicate */}
+                          <button
+                            onClick={() => {
+                              const deliveryDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+                              createPurchaseOrder({
+                                supplierId: po.supplierId,
+                                expectedDeliveryDate: deliveryDate,
+                                notes: `Copy of ${po.poNumber}${po.notes ? " · " + po.notes : ""}`,
+                                items: po.items.map((it) => ({ ...it, id: crypto.randomUUID(), receivedQuantity: 0 })),
+                                status: "Draft",
+                              });
+                              showToast(`Duplicated ${po.poNumber} as Draft`, "success");
+                            }}
+                            title="Duplicate as Draft"
+                            className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg cursor-pointer transition-colors"
+                          >
+                            <Copy size={14} />
+                          </button>
+
+                          {/* Edit — Draft, Sent, or Partially Received */}
+                          {(isEditable || isLimitedEdit) && (
+                            <button
+                              onClick={() => setEditPO(po)}
+                              className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors"
+                            >
+                              {isLimitedEdit ? "Edit Notes" : "Edit"}
+                            </button>
+                          )}
+
+                          {/* Mark as Sent (Draft only) */}
+                          {po.status === "Draft" && (
+                            <button
+                              onClick={() => {
+                                markPurchaseOrderSent(po.id);
+                                showToast(`${po.poNumber} marked as Sent`, "success");
+                              }}
+                              className="px-3 py-1.5 text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-lg cursor-pointer transition-colors"
+                            >
+                              Mark Sent
+                            </button>
+                          )}
+
+                          {/* Confirm PO (Sent only) */}
+                          {po.status === "Sent" && (
+                            <button
+                              onClick={() => {
+                                confirmPurchaseOrder(po.id);
+                                showToast(`${po.poNumber} confirmed by supplier`, "success");
+                              }}
+                              className="px-3 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg cursor-pointer transition-colors"
+                            >
+                              Confirm
+                            </button>
+                          )}
+
+                          {/* Cancel — non-terminal */}
+                          {!isTerminal && (
+                            <button
+                              onClick={() => {
+                                markPurchaseOrderCancelled(po.id);
+                                showToast(`${po.poNumber} cancelled`, "info");
+                              }}
+                              title="Cancel PO"
+                              className="p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-700 rounded-lg cursor-pointer transition-colors"
+                            >
+                              <Ban size={14} />
+                            </button>
+                          )}
+
+                          {/* Delete — Draft only */}
+                          {po.status === "Draft" && (
+                            <button
+                              onClick={() => {
+                                deletePurchaseOrder(po.id);
+                                showToast(`${po.poNumber} deleted`, "error");
+                              }}
+                              title="Delete PO"
+                              className="p-1.5 text-red-500 hover:bg-red-50 hover:text-red-700 rounded-lg cursor-pointer transition-colors"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+
+                          {/* Convert → Receive Stock */}
+                          {canConvert && (
+                            <button
+                              onClick={() => handleConvertPOToInvoice(po)}
+                              className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg cursor-pointer transition-all shadow-sm"
+                            >
+                              Receive Stock →
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* ── ACTIVITY TAB (UNIFIED SUPPLIER EVENT STREAM) ── */}
+        {activeTab === "activity" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h3 className="text-base font-black text-slate-850">Supplier Activity Stream</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Chronological audit feed of purchase invoices, vendor payments, stock returns, and purchase order milestones.</p>
+              </div>
+              <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-md px-2.5 py-1">
+                {unifiedActivityStream.length} Event{unifiedActivityStream.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+
+            {unifiedActivityStream.length === 0 ? (
+              <div className="py-16 flex flex-col items-center justify-center gap-3 text-center">
+                <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center"><Activity size={20} className="text-slate-300" /></div>
+                <div>
+                  <p className="text-sm font-bold text-slate-700">No Activity Recorded Yet</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Activity events will automatically appear here as purchases, payments, returns, and POs are logged.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="relative border-l-2 border-slate-150 ml-4 pl-6 space-y-4">
+                {unifiedActivityStream.map((event) => {
+                  const EventIcon = event.icon;
+                  return (
+                    <div key={event.id} className="relative">
+                      {/* Node Icon on Timeline */}
+                      <span className="absolute -left-[35px] top-1.5 w-5 h-5 rounded-full bg-white border-2 border-slate-300 flex items-center justify-center text-slate-600 shadow-2xs">
+                        <EventIcon size={10} />
+                      </span>
+
+                      {/* Event Card */}
+                      <div className="bg-slate-50/70 border border-slate-200/80 rounded-xl p-3.5 hover:bg-slate-50 transition-colors">
+                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${event.badgeColor}`}>
+                                {event.badge}
+                              </span>
+                              <p className="text-xs sm:text-sm font-bold text-slate-850">{event.title}</p>
+                            </div>
+                            <p className="text-xs text-slate-600 leading-snug">{event.detail}</p>
+                            {event.subDetail && (
+                              <p className="text-[11px] text-slate-400 font-mono">{event.subDetail}</p>
+                            )}
+                          </div>
+
+                          <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-1 shrink-0 pt-1 sm:pt-0">
+                            {event.amount !== undefined && (
+                              <span className="text-xs font-bold text-slate-800 tabular-nums">
+                                ₹{event.amount.toLocaleString()}
+                              </span>
+                            )}
+                            <span className="text-[10px] text-slate-400 font-medium">
+                              {formatActivityTimestamp(event.date)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Modals */}
+      <SupplierInvoiceModal
+        isOpen={showAddPurchase}
+        onClose={() => {
+          setShowAddPurchase(false);
+          setConvertingPO(null);
+        }}
+        supplier={supplier}
+        products={products}
+        purchaseCount={state.purchases?.length ?? 0}
+        initialPO={convertingPO}
+      />
+      <EditSupplierModal
+        isOpen={showEditSupplier}
+        onClose={() => setShowEditSupplier(false)}
+        supplier={supplier}
+      />
+      {payPurchase && supplier && (
+        <RecordSupplierPaymentModal
+          purchase={payPurchase}
+          supplierId={supplier.id}
+          products={products}
+          onClose={() => setPayPurchase(null)}
+          recordSupplierPayment={recordSupplierPayment}
+        />
+      )}
+      {editPurchase && (
+        <EditPurchaseModal
+          isOpen={!!editPurchase}
+          onClose={() => setEditPurchase(null)}
+          purchase={editPurchase}
+          products={products}
+        />
+      )}
+      {returnPurchase && supplier && (
+        <ReturnPurchaseModal
+          purchase={returnPurchase}
+          supplier={supplier}
+          products={products}
+          onClose={() => setReturnPurchase(null)}
+          addPurchaseReturn={addPurchaseReturn}
+        />
+      )}
+
+      {/* Purchase Order Modals (Sprint 4.6) */}
+      {supplier && (
+        <PurchaseOrderModal
+          isOpen={showAddPO}
+          onClose={() => setShowAddPO(false)}
+          supplier={supplier}
+          products={products}
+          existingPO={null}
+        />
+      )}
+      {editPO && supplier && (
+        <PurchaseOrderModal
+          isOpen={!!editPO}
+          onClose={() => setEditPO(null)}
+          supplier={supplier}
+          products={products}
+          existingPO={editPO}
+        />
+      )}
+      {printPO && supplier && (
+        <POPrintSlip
+          po={printPO}
+          supplier={supplier}
+          products={products}
+          onClose={() => setPrintPO(null)}
+        />
+      )}
+
+      {/* Lump-Sum Supplier Payment Modal */}
+      {showLumpSumModal && supplier && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy-950/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-xl w-full p-6 space-y-5 relative max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-green-50 border border-green-200 flex items-center justify-center">
+                  <Coins className="text-green-600" size={18} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-navy-950">Record Lump-Sum Payment</h3>
+                  <p className="text-xs text-slate-500">FIFO Allocation across purchases — {supplier.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={closeLumpSumModal}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Current Return-Aware Payable</p>
+                <p className="text-2xl font-black text-red-600 mt-0.5">₹{kpis.outstanding.toLocaleString()}</p>
+              </div>
+              <span className="text-xs font-medium text-slate-500 bg-white border border-slate-200 px-3 py-1.5 rounded-lg">
+                Total Supplier Dues
+              </span>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                  Payment Amount (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={lumpSumAmountInput}
+                  onChange={(e) => setLumpSumAmountInput(e.target.value)}
+                  placeholder="Enter payment amount"
+                  className={INPUT}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                    Payment Method
+                  </label>
+                  <select
+                    value={lumpSumMethod}
+                    onChange={(e) => setLumpSumMethod(e.target.value as PaymentMethod)}
+                    className={INPUT}
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="Card">Card</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                    <option value="UPI">UPI</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                    Payment Date
+                  </label>
+                  <input
+                    type="date"
+                    value={lumpSumDate}
+                    onChange={(e) => setLumpSumDate(e.target.value)}
+                    className={INPUT}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wider">
+                  Notes (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={lumpSumNote}
+                  onChange={(e) => setLumpSumNote(e.target.value)}
+                  placeholder="e.g. Lump sum vendor settlement"
+                  className={INPUT}
+                />
+              </div>
+
+              {/* FIFO Allocation Preview */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">
+                  FIFO Allocation Preview (Oldest First)
+                </label>
+                {lumpSumPreview.allocations.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic bg-slate-50 p-3 rounded-xl text-center border border-slate-200">
+                    No outstanding purchases to allocate.
+                  </p>
+                ) : (
+                  <div className="border border-slate-200 rounded-xl overflow-hidden text-xs max-h-48 overflow-y-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead className="bg-slate-100 border-b border-slate-200 sticky top-0">
+                        <tr>
+                          <th className="p-2 font-bold text-slate-600">Invoice</th>
+                          <th className="p-2 font-bold text-slate-600 text-right">Due</th>
+                          <th className="p-2 font-bold text-slate-600 text-right">Allocated</th>
+                          <th className="p-2 font-bold text-slate-600 text-right">Post Due</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {lumpSumPreview.allocations.map((item) => (
+                          <tr key={item.purchase.id} className={item.allocated > 0 ? "bg-green-50/40" : ""}>
+                            <td className="p-2 font-medium text-slate-800">
+                              {item.purchase.invoiceNumber}
+                              <span className="block text-[10px] text-slate-400">{formatDate(item.purchase.date)}</span>
+                            </td>
+                            <td className="p-2 text-right font-medium text-slate-700">₹{item.effectiveDue.toLocaleString()}</td>
+                            <td className="p-2 text-right font-bold text-green-600">
+                              {item.allocated > 0 ? `₹${item.allocated.toLocaleString()}` : "—"}
+                            </td>
+                            <td className="p-2 text-right font-medium text-slate-700">₹{item.remainingDue.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Overpayment Warning */}
+              {lumpSumPreview.unallocated > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex items-start gap-2.5">
+                  <AlertCircle className="text-amber-600 shrink-0 mt-0.5" size={16} />
+                  <div className="text-xs text-amber-800">
+                    <p className="font-bold">Overpayment Warning</p>
+                    <p className="mt-0.5 leading-relaxed">
+                      ₹{lumpSumPreview.unallocated.toLocaleString()} exceeds total supplier payable (₹{kpis.outstanding.toLocaleString()}). Only ₹{lumpSumPreview.totalAllocated.toLocaleString()} will be applied across purchases; no excess expense or ledger record will be created.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={closeLumpSumModal}
+                className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleLumpSumSubmit}
+                disabled={Number(lumpSumAmountInput) <= 0 || lumpSumPreview.allocations.length === 0}
+                className="px-5 py-2.5 text-xs font-bold bg-green-600 hover:bg-green-700 text-white rounded-xl transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                Confirm & Apply Payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ISOLATED PRINT / PDF STATEMENT VIEW CONTAINER ── */}
+      {supplierStatement && isOwner && (
+        <div id="supplier-statement-print" className="hidden print:block p-8 bg-white text-slate-900 font-sans text-xs">
+          {/* Header */}
+          <div className="border-b-2 border-slate-900 pb-4 mb-6 flex justify-between items-start">
+            <div>
+              <h1 className="text-xl font-black tracking-tight text-slate-900">AUTOVAULT ENTERPRISE ERP</h1>
+              <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mt-0.5">Supplier Financial Statement & Audit Ledger</p>
+            </div>
+            <div className="text-right">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Generated Date & Time</span>
+              <span className="text-xs font-mono font-bold text-slate-700">{new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST</span>
+            </div>
+          </div>
+
+          {/* Supplier & Statement Metadata */}
+          <div className="grid grid-cols-2 gap-6 bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6">
+            <div>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Supplier Account</p>
+              <h2 className="text-sm font-black text-slate-900 mt-0.5">{supplier?.name || "Supplier"}</h2>
+              <div className="text-xs text-slate-600 space-y-0.5 mt-1 font-mono">
+                <p>ID: {supplier?.id || "—"}</p>
+                <p>GSTIN: {supplier?.gst || "—"}</p>
+                <p>Phone: {supplier?.phone || "—"} {supplier?.email ? `· ${supplier.email}` : ""}</p>
+                {supplier?.address && <p className="font-sans text-slate-500 text-[11px]">{supplier.address}</p>}
+              </div>
+            </div>
+
+            <div className="text-right flex flex-col justify-between">
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Statement Period</p>
+                <p className="text-sm font-black text-slate-900 mt-0.5">{supplierStatement.periodLabel}</p>
+              </div>
+              <div className="mt-2 pt-2 border-t border-slate-200">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Closing Statement Balance</p>
+                <p className="text-lg font-black text-slate-900">{formatCurrencyINR(supplierStatement.closingBalance)}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Reconciliation Summary Block */}
+          <div className="mb-6 border border-slate-200 rounded-xl overflow-hidden">
+            <div className="bg-slate-100 px-4 py-2 border-b border-slate-200 font-bold text-slate-700 text-xs uppercase tracking-wider">
+              Financial Reconciliation Summary
+            </div>
+            <div className="grid grid-cols-5 divide-x divide-slate-200 p-3 text-center bg-white text-xs">
+              <div>
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Opening Balance</span>
+                <span className="font-black text-slate-800 text-sm mt-0.5 block">{formatCurrencyINR(supplierStatement.openingBalance)}</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Purchases (Debits)</span>
+                <span className="font-black text-blue-700 text-sm mt-0.5 block">{formatCurrencyINR(supplierStatement.totalPurchases)}</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Returns (Credits)</span>
+                <span className="font-black text-rose-600 text-sm mt-0.5 block">{formatCurrencyINR(supplierStatement.totalReturns)}</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Payments (Credits)</span>
+                <span className="font-black text-emerald-700 text-sm mt-0.5 block">{formatCurrencyINR(supplierStatement.totalPayments)}</span>
+              </div>
+              <div className="bg-slate-50">
+                <span className="text-[10px] text-slate-500 uppercase font-bold block">Closing Balance</span>
+                <span className="font-black text-slate-900 text-sm mt-0.5 block">{formatCurrencyINR(supplierStatement.closingBalance)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Statement Table */}
+          <div className="mb-8">
+            <table className="w-full text-xs border-collapse border border-slate-200">
+              <thead>
+                <tr className="bg-slate-900 text-white font-bold">
+                  <th className="border border-slate-700 px-3 py-2 text-left">Date</th>
+                  <th className="border border-slate-700 px-3 py-2 text-left">Type</th>
+                  <th className="border border-slate-700 px-3 py-2 text-left">Reference</th>
+                  <th className="border border-slate-700 px-3 py-2 text-left">Description</th>
+                  <th className="border border-slate-700 px-3 py-2 text-right">Debit (₹)</th>
+                  <th className="border border-slate-700 px-3 py-2 text-right">Credit (₹)</th>
+                  <th className="border border-slate-700 px-3 py-2 text-right">Balance (₹)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {/* Opening row */}
+                <tr className="bg-slate-50 font-semibold italic border-b border-slate-200">
+                  <td className="border border-slate-200 px-3 py-2">{effectiveDateRange.fromDate ? formatStatementDate(effectiveDateRange.fromDate) : "—"}</td>
+                  <td className="border border-slate-200 px-3 py-2 not-italic font-bold">OPENING</td>
+                  <td className="border border-slate-200 px-3 py-2 font-mono not-italic">—</td>
+                  <td className="border border-slate-200 px-3 py-2 text-slate-600">Opening Balance immediately prior to statement period</td>
+                  <td className="border border-slate-200 px-3 py-2 text-right not-italic">—</td>
+                  <td className="border border-slate-200 px-3 py-2 text-right not-italic">—</td>
+                  <td className="border border-slate-200 px-3 py-2 text-right font-black not-italic">{formatCurrencyINR(supplierStatement.openingBalance)}</td>
+                </tr>
+
+                {/* Entries (chronological ascending for statement print) */}
+                {supplierStatement.entries.map((entry) => (
+                  <tr key={`print-${entry.id}`} className="border-b border-slate-200">
+                    <td className="border border-slate-200 px-3 py-2 whitespace-nowrap">{entry.formattedDate}</td>
+                    <td className="border border-slate-200 px-3 py-2 font-bold">{entry.type}</td>
+                    <td className="border border-slate-200 px-3 py-2 font-mono font-bold">{entry.reference}</td>
+                    <td className="border border-slate-200 px-3 py-2">{entry.description}</td>
+                    <td className="border border-slate-200 px-3 py-2 text-right font-bold">{entry.debit > 0 ? `₹${entry.debit.toLocaleString()}` : "—"}</td>
+                    <td className="border border-slate-200 px-3 py-2 text-right font-bold text-emerald-700">{entry.credit > 0 ? `₹${entry.credit.toLocaleString()}` : "—"}</td>
+                    <td className="border border-slate-200 px-3 py-2 text-right font-black">{formatCurrencyINR(entry.runningBalance)}</td>
+                  </tr>
+                ))}
+
+                {/* Closing row */}
+                <tr className="bg-slate-100 font-black border-t-2 border-slate-900">
+                  <td className="border border-slate-300 px-3 py-2.5">{effectiveDateRange.toDate ? formatStatementDate(effectiveDateRange.toDate) : "—"}</td>
+                  <td className="border border-slate-300 px-3 py-2.5">CLOSING</td>
+                  <td className="border border-slate-300 px-3 py-2.5 font-mono">—</td>
+                  <td className="border border-slate-300 px-3 py-2.5">Closing Statement Net Liability Balance</td>
+                  <td className="border border-slate-300 px-3 py-2.5 text-right">₹{supplierStatement.totalPurchases.toLocaleString()}</td>
+                  <td className="border border-slate-300 px-3 py-2.5 text-right text-emerald-800">₹{supplierStatement.periodCredits.toLocaleString()}</td>
+                  <td className="border border-slate-300 px-3 py-2.5 text-right text-sm">{formatCurrencyINR(supplierStatement.closingBalance)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Footer Signatures */}
+          <div className="pt-12 grid grid-cols-2 gap-12 text-xs">
+            <div>
+              <p className="border-t border-slate-400 pt-2 font-bold text-slate-700">Verified & Prepared By</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">AutoVault ERP Generated Statement</p>
+            </div>
+            <div className="text-right">
+              <p className="border-t border-slate-400 pt-2 font-bold text-slate-700">Authorised Signatory / Stamp</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">{supplier?.name || "Supplier Acknowledgement"}</p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  RECORD SUPPLIER PAYMENT MODAL
+// ─────────────────────────────────────────────
+
+interface RecordSupplierPaymentModalProps {
+  purchase: Purchase;
+  supplierId: string;
+  products: Product[];
+  onClose: () => void;
+  recordSupplierPayment: (payment: Omit<SupplierPayment, "id">) => void;
+}
+
+function RecordSupplierPaymentModal({
+  purchase,
+  supplierId,
+  products,
+  onClose,
+  recordSupplierPayment,
+}: RecordSupplierPaymentModalProps) {
+  const { getSupplierPaymentsBySupplier, getPurchaseReturnsBySupplier, showToast } = useStore();
+
+  const total = purchase.totalAmount ?? (purchase.buyPrice * purchase.quantity);
+  const paymentsForP = getSupplierPaymentsBySupplier(supplierId).filter((sp) => sp.purchaseId === purchase.id);
+  const paid = paymentsForP.reduce((s, pay) => s + pay.amount, 0);
+  const returnsForP = getPurchaseReturnsBySupplier(supplierId).filter((r) => r.purchaseId === purchase.id);
+  const returnedValue = returnsForP.reduce((s, r) => s + r.totalAmount, 0);
+  const due = Math.max(0, total - returnedValue - paid);
+  const product = products.find((p) => p.id === purchase.productId);
+
+  const [amount, setAmount] = useState(String(due));
+  const [method, setMethod] = useState<PaymentMethod>("Cash");
+  const [paidBy, setPaidBy] = useState<"Owner" | "Staff" | "">("Owner");
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split("T")[0]);
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  const parsedAmount = Math.round(parseFloat(amount) * 100) / 100 || 0;
+  const remaining = Math.max(0, due - parsedAmount);
+  const willClear = parsedAmount >= due;
+
+  const INPUT = "w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-navy-600/20 focus:border-navy-600 transition-all placeholder:text-slate-400";
+
+  const METHOD_COLORS: Record<string, string> = {
+    Cash: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    UPI: "bg-blue-50 text-blue-700 border-blue-200",
+    Card: "bg-purple-50 text-purple-700 border-purple-200",
+    Credit: "bg-red-50 text-red-600 border-red-200",
+  };
+
+  function handleSubmit() {
+    setError("");
+    if (!paidBy) { setError("Please select who is making this payment."); return; }
+    if (parsedAmount <= 0) { setError("Payment amount must be greater than ₹0."); return; }
+
+    // Decimal precision validation
+    if (amount.includes(".")) {
+      const decimalPart = amount.split(".")[1];
+      if (decimalPart && decimalPart.length > 2) {
+        setError("Payment amount cannot have more than 2 decimal places.");
+        return;
+      }
+    }
+
+    if (parsedAmount > due) { setError(`Cannot exceed outstanding due of ₹${due.toLocaleString()}.`); return; }
+
+    // Future date validation
+    const todayStr = new Date().toISOString().split("T")[0];
+    if (paymentDate > todayStr) {
+      setError("Payment date cannot be in the future.");
+      return;
+    }
+
+    recordSupplierPayment({
+      supplierId,
+      purchaseId: purchase.id,
+      amount: parsedAmount,
+      date: paymentDate + "T12:00:00.000Z",
+      method,
+      note: note.trim() || undefined,
+      paidBy: paidBy as "Owner" | "Staff",
+    });
+
+    showToast(`₹${parsedAmount.toLocaleString()} payment recorded.`, "success");
+    setSuccess(true);
+    setTimeout(() => onClose(), 1500);
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-slate-200">
+          <div>
+            <h2 className="font-bold text-slate-800 text-base">Record Payment</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {product?.name ?? "Unknown Product"}
+              {purchase.invoiceNumber ? ` · ${purchase.invoiceNumber}` : ""}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        {success ? (
+          <div className="p-10 flex flex-col items-center text-center">
+            <CheckCircle size={48} className="text-green-500 mb-3" />
+            <p className="font-bold text-slate-800">Payment Recorded!</p>
+            <p className="text-xs text-slate-500 mt-1">Closing automatically…</p>
+          </div>
+        ) : (
+          <>
+            {/* Purchase Summary */}
+            <div className="px-5 pt-5">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 grid grid-cols-3 gap-3 text-center text-xs">
+                <div>
+                  <p className="text-slate-400">Total</p>
+                  <p className="font-bold text-slate-800 text-sm mt-1">₹{total.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-slate-400">Paid</p>
+                  <p className="font-bold text-green-700 text-sm mt-1">₹{paid.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-slate-400">Due</p>
+                  <p className="font-bold text-red-600 text-sm mt-1">₹{due.toLocaleString()}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {error && (
+                <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl">
+                  <AlertCircle size={15} className="shrink-0 mt-0.5" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {/* Amount */}
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Amount (₹)</label>
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  max={due}
+                  value={amount}
+                  onChange={(e) => { setAmount(e.target.value); setError(""); }}
+                  className={INPUT}
+                  autoFocus
+                />
+                {parsedAmount > 0 && (
+                  <p className={`text-xs mt-1.5 font-semibold ${willClear ? "text-green-600" : "text-amber-600"}`}>
+                    {willClear
+                      ? "✓ Clears this purchase fully → Paid"
+                      : `₹${remaining.toLocaleString()} still outstanding after payment`}
+                  </p>
+                )}
+              </div>
+
+              {/* Method */}
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Payment Method</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(["Cash", "UPI", "Card"] as PaymentMethod[]).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setMethod(m)}
+                      className={`py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${method === m
+                          ? "bg-slate-900 border-slate-900 text-white"
+                          : `${METHOD_COLORS[m]} hover:opacity-80`
+                        }`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Paid By */}
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                  Paid By <span className="text-red-500">*</span>
+                </label>
+                <div className="flex gap-2">
+                  {(["Owner", "Staff"] as const).map((role) => (
+                    <button
+                      key={role}
+                      type="button"
+                      onClick={() => setPaidBy(role)}
+                      className={`flex-1 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${paidBy === role
+                          ? "bg-slate-900 border-slate-900 text-white"
+                          : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                        }`}
+                    >
+                      {role}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Date */}
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                  Payment Date <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  value={paymentDate}
+                  onChange={(e) => { setPaymentDate(e.target.value); setError(""); }}
+                  className={INPUT}
+                />
+              </div>
+
+              {/* Note */}
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Note (optional)</label>
+                <input
+                  type="text"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="e.g. Paid via NEFT"
+                  className={INPUT}
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex gap-3 px-5 py-4 border-t border-slate-200 bg-slate-50/50 rounded-b-2xl">
+              <button onClick={onClose} className="flex-1 px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer">
+                Cancel
+              </button>
+              <button onClick={handleSubmit} className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-navy-950 rounded-xl hover:bg-navy-800 transition-colors cursor-pointer">
+                Record Payment
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  EDIT PURCHASE MODAL
+// ─────────────────────────────────────────────
+
+interface EditPurchaseModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  purchase: Purchase;
+  products: Product[];
+}
+
+function EditPurchaseModal({ isOpen, onClose, purchase, products }: EditPurchaseModalProps) {
+  const { updatePurchase, showToast } = useStore();
+  const product = products.find((p) => p.id === purchase.productId);
+
+  const [invoiceNumber, setInvoiceNumber] = useState(purchase.invoiceNumber || "");
+  const [date, setDate] = useState(purchase.date || "");
+  const [notes, setNotes] = useState(purchase.notes || "");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (isOpen) {
+      setInvoiceNumber(purchase.invoiceNumber || "");
+      setDate(purchase.date || "");
+      setNotes(purchase.notes || "");
+      setError("");
+    }
+  }, [isOpen, purchase]);
+
+  if (!isOpen) return null;
+
+  function handleSave() {
+    if (!date) {
+      setError("Please select a date.");
+      return;
+    }
+
+    try {
+      updatePurchase(purchase.id, invoiceNumber.trim(), date, notes.trim());
+      showToast("Purchase updated successfully.", "success");
+      onClose();
+    } catch (err) {
+      setError("Failed to update purchase.");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[92vh] overflow-y-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 sticky top-0 bg-white z-10 rounded-t-2xl">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-navy-50 flex items-center justify-center">
+              <Pencil size={16} className="text-navy-700" />
+            </div>
+            <div>
+              <h2 className="font-bold text-slate-800 text-base leading-tight">Edit Purchase</h2>
+              <p className="text-[10px] text-slate-400 leading-tight">{product?.name ?? "Unknown Product"}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-5 space-y-4">
+          {error && (
+            <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl">
+              <AlertCircle size={15} className="shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {/* Immutable Fields Information Alert */}
+          <div className="bg-slate-50 border border-slate-150 rounded-xl px-4 py-3 text-xs text-slate-500 leading-relaxed flex gap-2">
+            <Info size={14} className="shrink-0 mt-0.5 text-navy-600" />
+            <span>
+              Product, Quantity, Buy Price, and Supplier are immutable. Correcting these values requires a reversal and recording a new purchase.
+            </span>
+          </div>
+
+          {/* Invoice Number */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Invoice Number</label>
+            <input type="text" placeholder="e.g. INV-2025-001" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} className={INPUT} />
+          </div>
+
+          {/* Date */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+              Date <span className="text-red-500">*</span>
+            </label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={INPUT} />
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">Notes</label>
+            <textarea placeholder="Any notes about this purchase…" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} className={INPUT + " resize-none"} />
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex gap-3 px-5 py-4 border-t border-slate-200 bg-slate-50/50 rounded-b-2xl sticky bottom-0">
+          <button onClick={onClose} className="flex-1 px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer">
+            Cancel
+          </button>
+          <button onClick={handleSave} className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-navy-950 rounded-xl hover:bg-navy-800 transition-colors cursor-pointer">
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  RETURN PURCHASE MODAL  (Sprint 4.5)
+// ─────────────────────────────────────────────
+
+interface ReturnPurchaseModalProps {
+  purchase: Purchase;
+  supplier: Supplier;
+  products: Product[];
+  onClose: () => void;
+  addPurchaseReturn: (
+    record: Omit<PurchaseReturn, "id" | "createdAt" | "originalPurchaseQuantity" | "originalPurchaseValue">,
+    refundMethod: PaymentMethod | "Adjustment"
+  ) => boolean | void;
+}
+
+function ReturnPurchaseModal({
+  purchase,
+  supplier,
+  products,
+  onClose,
+  addPurchaseReturn,
+}: ReturnPurchaseModalProps) {
+  const { showToast } = useStore();
+  const product = products.find((p) => p.id === purchase.productId);
+
+  const availableQty = purchase.quantity - (purchase.returnedQuantity ?? 0);
+  const maxRefund = roundMoney(availableQty * purchase.buyPrice);
+
+  const [qty, setQty] = useState("1");
+  const [refundInput, setRefundInput] = useState(String(roundMoney(1 * purchase.buyPrice)));
+  const [refundMethod, setRefundMethod] = useState<PaymentMethod | "Adjustment">("Cash");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  const parsedQty = Math.floor(parseFloat(qty) || 0);
+  const parsedRefund = Math.round(parseFloat(refundInput) * 100) / 100 || 0;
+  const returnTotal = roundMoney(parsedQty * purchase.buyPrice);
+
+  // Auto-recalculate refund when qty changes
+  function handleQtyChange(val: string) {
+    setQty(val);
+    const q = Math.floor(parseFloat(val) || 0);
+    if (q > 0) setRefundInput(String(roundMoney(q * purchase.buyPrice)));
+    setError("");
+  }
+
+  function validate(): string | null {
+    if (!product) return "Purchase return cannot be completed. The selected product no longer exists in inventory.";
+    if (!reason.trim()) return "Please enter a reason for the return.";
+    if (parsedQty <= 0 || !Number.isInteger(parsedQty)) return "Return quantity must be a whole positive number.";
+    if (parsedQty > availableQty) return `Cannot return more than ${availableQty} unit(s) available on this purchase.`;
+    if (parsedQty > product.stock) return `Cannot complete purchase return: requested ${parsedQty} units, but only ${product.stock} units are currently in stock.`;
+    if (parsedRefund < 0) return "Refund amount cannot be negative.";
+    if (parsedRefund > returnTotal) return `Refund cannot exceed return value of ₹${returnTotal.toLocaleString()}.`;
+    if (refundMethod !== "Adjustment" && parsedRefund === 0) return "Enter the refund amount, or choose 'Adjustment' if no money is returned.";
+    return null;
+  }
+
+  function handleSubmit() {
+    const err = validate();
+    if (err) { setError(err); return; }
+    setError("");
+
+    const isOk = addPurchaseReturn(
+      {
+        purchaseId: purchase.id,
+        supplierId: purchase.supplierId,
+        productId: purchase.productId,
+        quantity: parsedQty,
+        buyPrice: purchase.buyPrice,
+        totalAmount: returnTotal,
+        refundAmount: refundMethod === "Adjustment" ? 0 : parsedRefund,
+        reason: reason.trim(),
+        returnedBy: "Owner",
+      },
+      refundMethod
+    );
+
+    if (isOk !== false) {
+      showToast(
+        `Return recorded: ${parsedQty} unit(s) of ${product?.name ?? "product"}`,
+        "success"
+      );
+      setSuccess(true);
+      setTimeout(() => onClose(), 2000);
+    }
+  }
+
+  const REFUND_METHODS: { value: PaymentMethod | "Adjustment"; label: string; color: string }[] = [
+    { value: "Cash", label: "Cash", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+    { value: "UPI", label: "UPI", color: "bg-blue-50 text-blue-700 border-blue-200" },
+    { value: "Card", label: "Bank/Card", color: "bg-purple-50 text-purple-700 border-purple-200" },
+    { value: "Adjustment", label: "Adjustment", color: "bg-slate-100 text-slate-600 border-slate-200" },
+  ];
+
+  const INPUT_CLS =
+    "w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-600/20 focus:border-rose-500 transition-all placeholder:text-slate-400";
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[95vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 rounded-t-2xl">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-rose-50 flex items-center justify-center">
+              <CornerDownLeft size={16} className="text-rose-600" />
+            </div>
+            <div>
+              <h2 className="font-bold text-slate-800 text-base leading-tight">Return to Supplier</h2>
+              <p className="text-[10px] text-slate-400 leading-tight">{supplier.name}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Body */}
+        {success ? (
+          <div className="p-12 flex flex-col items-center text-center gap-3">
+            <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
+              <CheckCircle size={36} className="text-green-500" />
+            </div>
+            <p className="font-bold text-slate-800">Return Recorded!</p>
+            <div className="text-xs text-slate-500 space-y-1">
+              <p>{parsedQty} unit(s) removed from stock</p>
+              {parsedRefund > 0 && <p>₹{parsedRefund.toLocaleString()} {refundMethod} refund logged</p>}
+              <p className="text-slate-400 mt-2">Closing…</p>
+            </div>
+          </div>
+        ) : (
+          <div className="overflow-y-auto flex-1 p-5 space-y-4">
+
+            {/* Purchase Summary Card */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Original Purchase</p>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-slate-800 truncate">{product?.name ?? "Unknown Product"}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Invoice: {purchase.invoiceNumber || "—"} · {purchase.quantity} units @ ₹{purchase.buyPrice.toLocaleString()}
+                  </p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-xs text-slate-400">Returnable</p>
+                  <p className="text-sm font-extrabold text-slate-800">{availableQty} unit{availableQty !== 1 ? "s" : ""}</p>
+                </div>
+              </div>
+              {/* Stock info */}
+              <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-2 gap-3 text-center text-xs">
+                <div>
+                  <p className="text-slate-400">Current Stock</p>
+                  <p className="font-bold text-slate-800 mt-0.5">{product?.stock ?? "?"} units</p>
+                </div>
+                <div>
+                  <p className="text-slate-400">After Return</p>
+                  <p className={`font-bold mt-0.5 ${parsedQty > 0 && product ? (product.stock - parsedQty < 0 ? "text-red-600" : "text-slate-800") : "text-slate-800"}`}>
+                    {product ? Math.max(0, product.stock - parsedQty) : "?"} units
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Error */}
+            {error && (
+              <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl">
+                <AlertCircle size={15} className="shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {/* Return Qty */}
+            <div>
+              <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                Quantity to Return <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                max={availableQty}
+                value={qty}
+                onChange={(e) => handleQtyChange(e.target.value)}
+                className={INPUT_CLS}
+                autoFocus
+              />
+              <p className="text-[10px] text-slate-400 mt-1 pl-1">
+                Max returnable: {availableQty} unit{availableQty !== 1 ? "s" : ""}
+                {parsedQty > 0 && (
+                  <span className="text-slate-600 font-semibold"> · Return value: ₹{returnTotal.toLocaleString()}</span>
+                )}
+              </p>
+            </div>
+
+            {/* Reason */}
+            <div>
+              <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                Reason <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                rows={2}
+                placeholder="e.g. Damaged goods, Wrong part supplied, Excess stock"
+                value={reason}
+                onChange={(e) => { setReason(e.target.value); setError(""); }}
+                className={INPUT_CLS + " resize-none"}
+              />
+            </div>
+
+            {/* Refund Method */}
+            <div>
+              <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Refund Method</label>
+              <div className="grid grid-cols-4 gap-2">
+                {REFUND_METHODS.map((m) => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    onClick={() => { setRefundMethod(m.value); setError(""); }}
+                    className={`py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${refundMethod === m.value
+                        ? "bg-slate-900 border-slate-900 text-white"
+                        : `${m.color} hover:opacity-80`
+                      }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Refund Amount — hidden for Adjustment */}
+            {refundMethod !== "Adjustment" && (
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                  Refund Amount (₹) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  max={returnTotal}
+                  value={refundInput}
+                  onChange={(e) => { setRefundInput(e.target.value); setError(""); }}
+                  className={INPUT_CLS}
+                />
+                {parsedRefund > 0 && parsedRefund < returnTotal && (
+                  <p className="text-[10px] text-amber-600 font-semibold mt-1 pl-1">
+                    Partial refund — ₹{roundMoney(returnTotal - parsedRefund).toLocaleString()} written off
+                  </p>
+                )}
+                {parsedRefund === returnTotal && returnTotal > 0 && (
+                  <p className="text-[10px] text-green-600 font-semibold mt-1 pl-1">
+                    Full refund of ₹{returnTotal.toLocaleString()}
+                  </p>
+                )}
+              </div>
+            )}
+            {refundMethod === "Adjustment" && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-700 flex gap-2">
+                <Info size={14} className="shrink-0 mt-0.5 text-amber-600" />
+                <span>No refund will be recorded. The return will reduce supplier outstanding and reduce stock without creating a finance entry.</span>
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* Footer */}
+        {!success && (
+          <div className="flex gap-3 px-5 py-4 border-t border-slate-200 bg-slate-50/50 rounded-b-2xl">
+            <button
+              onClick={onClose}
+              className="flex-1 px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-rose-600 rounded-xl hover:bg-rose-500 transition-colors cursor-pointer"
+            >
+              Record Return →
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Small inline helper — mirrors the one in store but available in this module */
+function roundMoney(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}

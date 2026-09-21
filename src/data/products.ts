@@ -1,0 +1,32 @@
+export const products = [
+  {
+    id: 1,
+    name: "LED Headlight H7",
+    sku: "LED001",
+    brand: "Philips",
+    category: "Lights",
+    stock: 25,
+    buyPrice: 500,
+    sellPrice: 800,
+  },
+  {
+    id: 2,
+    name: "Android Stereo",
+    sku: "AUD001",
+    brand: "Sony",
+    category: "Audio",
+    stock: 8,
+    buyPrice: 4500,
+    sellPrice: 6500,
+  },
+  {
+    id: 3,
+    name: "Rear Camera",
+    sku: "CAM001",
+    brand: "Bosch",
+    category: "Electronics",
+    stock: 15,
+    buyPrice: 1200,
+    sellPrice: 1800,
+  },
+];

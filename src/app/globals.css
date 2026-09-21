@@ -1,0 +1,242 @@
+@import "tailwindcss";
+
+@theme {
+  /* ── Brand: 7 Star Car Accessories ─────────────────────────────── */
+  /* Primary dark: deep navy (logo background) */
+  --color-navy-50:  #f0f4fa;
+  --color-navy-100: #dbe4f0;
+  --color-navy-200: #b7c8e0;
+  --color-navy-300: #8aa3c8;
+  --color-navy-400: #5b78a8;
+  --color-navy-500: #3d5a8a;
+  --color-navy-600: #2c4470;
+  --color-navy-700: #213355;
+  --color-navy-800: #16233d;
+  --color-navy-900: #0f1a2e;
+  --color-navy-950: #0a121f;
+
+  /* Brand accent: warm gold (logo text + border ring) */
+  --color-brand-gold:      #f5c518;
+  --color-brand-gold-deep: #d4a017;
+  --color-brand-gold-light:#fff3b0;
+
+  /* Legacy amber scale (kept for component compatibility) */
+  --color-amber-50:  #fdf6e8;
+  --color-amber-100: #fbe9c2;
+  --color-amber-200: #f6d68f;
+  --color-amber-300: #f0c05c;
+  --color-amber-400: #e3a435;
+  --color-amber-500: #d4891a;
+  --color-amber-600: #b06f14;
+  --color-amber-700: #8a560f;
+  --color-amber-800: #633c09;
+  --color-amber-900: #412402;
+
+  /* Yellow scale for brand gold (Tailwind's yellow-400 = #facc15 ≈ brand gold) */
+  --font-sans: var(--font-inter), Arial, Helvetica, sans-serif;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+body {
+  background: #f4f6f9;
+  color: #0f172a;
+  font-family: var(--font-inter), Arial, Helvetica, sans-serif;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+/* Brand focus ring utility */
+.brand-focus {
+  outline: none;
+  box-shadow: 0 0 0 2px #f5c518;
+}
+
+/* Scrollbar hide utility for clean sidebar navigation and horizontal scroll chips */
+.scrollbar-hide,
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   GLOBAL DARK MODE STYLING (ERP UI ONLY — PRINTABLE INVOICE STAYS LIGHT PAPER)
+   ───────────────────────────────────────────────────────────────────────────── */
+html.dark body {
+  background-color: #0a111e !important;
+  color: #f8fafc !important;
+}
+
+html.dark .bg-white {
+  background-color: #0f192c !important;
+  color: #f8fafc !important;
+}
+
+html.dark .bg-slate-50,
+html.dark .bg-slate-50\/70,
+html.dark .bg-slate-50\/50 {
+  background-color: #0d1627 !important;
+  color: #e2e8f0 !important;
+}
+
+html.dark .bg-slate-100,
+html.dark .bg-slate-100\/80 {
+  background-color: #14223b !important;
+  color: #f8fafc !important;
+}
+
+html.dark .border-slate-200,
+html.dark .border-slate-200\/80,
+html.dark .border-slate-100 {
+  border-color: #1d2d47 !important;
+}
+
+html.dark .border-slate-300 {
+  border-color: #273b5c !important;
+}
+
+html.dark .text-slate-800,
+html.dark .text-slate-900,
+html.dark .text-navy-950 {
+  color: #f8fafc !important;
+}
+
+html.dark .text-slate-700,
+html.dark .text-slate-600 {
+  color: #cbd5e1 !important;
+}
+
+html.dark .text-slate-500,
+html.dark .text-slate-400 {
+  color: #94a3b8 !important;
+}
+
+html.dark input[type="text"],
+html.dark input[type="number"],
+html.dark input[type="email"],
+html.dark input[type="tel"],
+html.dark input[type="password"],
+html.dark textarea,
+html.dark select {
+  background-color: #0d1627 !important;
+  color: #f8fafc !important;
+  border-color: #273b5c !important;
+}
+
+/* MANDATORY SAFETY RULE: Printable Invoice & Receipt ALWAYS stay crisp white paper in Dark Mode */
+html.dark #invoice-print,
+html.dark #invoice-print *,
+html.dark #invoice-print-preview,
+html.dark #invoice-print-preview *,
+html.dark #receipt-print,
+html.dark #receipt-print * {
+  color: #0f172a !important;
+}
+
+html.dark #invoice-print,
+html.dark #invoice-print-preview,
+html.dark #receipt-print {
+  background-color: #ffffff !important;
+  border-color: #0a121f !important;
+}
+
+html.dark #invoice-print .bg-slate-50\/70,
+html.dark #invoice-print .bg-slate-50,
+html.dark #invoice-print .bg-slate-100\/80,
+html.dark #invoice-print-preview .bg-slate-50\/70,
+html.dark #invoice-print-preview .bg-slate-50,
+html.dark #invoice-print-preview .bg-slate-100\/80,
+html.dark #receipt-print .bg-slate-50,
+html.dark #receipt-print .bg-slate-100 {
+  background-color: #f8fafc !important;
+}
+
+html.dark #invoice-print .text-slate-400,
+html.dark #invoice-print .text-slate-500,
+html.dark #invoice-print-preview .text-slate-400,
+html.dark #invoice-print-preview .text-slate-500,
+html.dark #receipt-print .text-slate-400,
+html.dark #receipt-print .text-slate-500 {
+  color: #64748b !important;
+}
+
+html.dark #invoice-print .text-slate-800,
+html.dark #invoice-print .text-navy-950,
+html.dark #invoice-print-preview .text-slate-800,
+html.dark #invoice-print-preview .text-navy-950,
+html.dark #receipt-print .text-slate-800,
+html.dark #receipt-print .text-navy-950 {
+  color: #0a121f !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PRINT MEDIA STYLES
+   ───────────────────────────────────────────────────────────────────────────── */
+@media print {
+  /* Hide the sidebar, scrollbars, headers/footers, buttons, modals, and actions panels */
+  aside,
+  aside *,
+  .print\:hidden,
+  button,
+  nav,
+  input,
+  select,
+  textarea {
+    display: none !important;
+  }
+
+  /* Reset document background, dimensions, and margins for print */
+  @page {
+    size: A4 portrait;
+    margin: 15mm 15mm 15mm 15mm;
+  }
+
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 11pt;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    min-width: 100% !important;
+    background: transparent !important;
+  }
+
+  /* Force background colors/borders to load during print if selected */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Printable invoice & receipt container styling */
+  #invoice-print,
+  #invoice-print-preview,
+  #receipt-print {
+    border: 4px double #0a121f !important;
+    padding: 12px 16px !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    border-radius: 0 !important;
+  }
+}
+

@@ -25,6 +25,20 @@ export const customerRepository = {
   },
 
   /**
+   * Fetches a customer by ID with row lock for update.
+   */
+  async findByIdForUpdate(
+    id: string,
+    client: DbClient = pool
+  ): Promise<Customer | null> {
+    const res = await client.query(
+      `SELECT * FROM customers WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    return res.rows[0] ? this.mapRowToCustomer(res.rows[0]) : null;
+  },
+
+  /**
    * Fetches a customer by phone number.
    */
   async findByPhone(
@@ -122,7 +136,7 @@ export const customerRepository = {
     const res = await client.query(
       `INSERT INTO customers (name, phone) 
        VALUES ($1, $2) RETURNING *`,
-      [data.name, data.phone]
+      [data.name, data.phone ?? '']
     );
     return this.mapRowToCustomer(res.rows[0]);
   },
@@ -162,6 +176,20 @@ export const customerRepository = {
     if (res.rows.length === 0) throw new Error(`Customer not found: ${id}`);
     
     return this.mapRowToCustomer(res.rows[0]);
+  },
+
+  /**
+   * Increments visit count and updates last_visit.
+   */
+  async recordVisit(
+    id: string,
+    date: string,
+    client: DbClient = pool
+  ): Promise<void> {
+    await client.query(
+      `UPDATE customers SET visits = visits + 1, last_visit = $1, updated_at = NOW() WHERE id = $2`,
+      [date, id]
+    );
   },
 
   /**

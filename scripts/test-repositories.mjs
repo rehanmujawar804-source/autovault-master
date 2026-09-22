@@ -1,9 +1,36 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { pool } from "../src/server/db/client.js";
 import { withTransaction } from "../src/server/db/txRunner.js";
 import { productRepository } from "../src/server/repositories/productRepository.js";
 import { invoiceRepository } from "../src/server/repositories/invoiceRepository.js";
 import { stockMovementRepository } from "../src/server/repositories/stockMovementRepository.js";
 import { randomUUID } from "crypto";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ROOT_DIR = path.resolve(__dirname, "..");
+
+function loadEnv() {
+  const envPath = path.join(ROOT_DIR, ".env.local");
+  if (fs.existsSync(envPath)) {
+    const lines = fs.readFileSync(envPath, "utf8").split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx > 0) {
+        const key = trimmed.slice(0, eqIdx).trim();
+        const val = trimmed.slice(eqIdx + 1).trim();
+        if (!process.env[key]) {
+          process.env[key] = val;
+        }
+      }
+    }
+  }
+}
+loadEnv();
 
 async function runTests() {
   console.log("=== Phase 3: PostgreSQL Repository & txRunner Tests ===\n");
@@ -149,8 +176,66 @@ async function runTests() {
     const foundTricky = await productRepository.findById(trickyProd.id);
     assert(foundTricky.name === trickyName, "Special characters preserved correctly");
 
+    // 5. Integration Test: Domain Service Rollback
+    console.log("\n--- Test 5: Integration Test - Domain Service Rollback ---");
+    // Dynamically import invoiceService to avoid circular/early init issues
+    const { invoiceService } = await import("../src/server/services/invoiceService.js");
+    const { customerRepository } = await import("../src/server/repositories/customerRepository.js");
+
+    const testCustomer = await customerRepository.create({
+      name: "Rollback Customer",
+      phone: "555-9999",
+      creditBalance: 0
+    });
+
+    const testSrvProd = await productRepository.create({
+      sku: `TEST-SRV-${Date.now()}`,
+      name: "Service Test Product",
+      brand: "Test",
+      category: "Test",
+      stock: 5,
+      currentCost: 10,
+      sellPrice: 20,
+      lowStockThreshold: 1
+    });
+
+    const originalCreateItem = invoiceRepository.createItem;
+    let simulatedErrorCaught = false;
+    invoiceRepository.createItem = async (...args) => {
+      throw new Error("Simulated insert failure");
+    };
+
+    try {
+      await invoiceService.createInvoice({
+        customerId: testCustomer.id,
+        customerName: "Rollback Customer",
+        items: [{
+          productId: testSrvProd.id,
+          name: testSrvProd.name,
+          quantity: 2, // Deducts 2 from 5
+          price: 20
+        }],
+        paymentMethod: "Cash",
+        amountPaid: 40,
+        date: new Date().toISOString().split("T")[0]
+      });
+    } catch (e) {
+      if (e.message === "Simulated insert failure") {
+        simulatedErrorCaught = true;
+      }
+    } finally {
+      invoiceRepository.createItem = originalCreateItem; // Restore
+    }
+
+    assert(simulatedErrorCaught, "Service propagated the simulated error");
+
+    // Check if the product stock deduction (which happened before createItem) was rolled back
+    const rolledBackProd = await productRepository.findById(testSrvProd.id);
+    assert(rolledBackProd.stock === 5, "Product stock rollback successful (remains 5, not 3)");
+
     // Clean up
-    await pool.query(`DELETE FROM products WHERE id IN ($1, $2)`, [pId, trickyProd.id]);
+    await pool.query(`DELETE FROM products WHERE id IN ($1, $2, $3)`, [pId, trickyProd.id, testSrvProd.id]);
+    await pool.query(`DELETE FROM customers WHERE id = $1`, [testCustomer.id]);
 
   } catch (error) {
     console.error("Test suite failed with unexpected error:", error);

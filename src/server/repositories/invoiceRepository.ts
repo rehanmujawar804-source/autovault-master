@@ -229,6 +229,24 @@ export const invoiceRepository = {
   },
 
   /**
+   * Updates payment fields and credit redeemed.
+   */
+  async updatePaymentAndCredit(
+    id: string,
+    dueAmount: number,
+    creditRedeemed: number,
+    paymentStatus: string,
+    client: DbClient = pool
+  ): Promise<void> {
+    await client.query(
+      `UPDATE invoices 
+       SET due_amount = $1, credit_redeemed = $2, payment_status = $3, updated_at = NOW() 
+       WHERE id = $4`,
+      [dueAmount, creditRedeemed, paymentStatus, id]
+    );
+  },
+
+  /**
    * Updates the returned quantity of an invoice item (used in sales returns).
    */
   async updateItemReturnedQuantity(
@@ -240,6 +258,20 @@ export const invoiceRepository = {
       `UPDATE invoice_items SET returned_quantity = $1 WHERE id = $2`,
       [returnedQty, itemId]
     );
+  },
+
+  /**
+   * Gets the returned quantity for a specific invoice item.
+   */
+  async getItemReturnedQuantity(
+    itemId: string,
+    client: DbClient = pool
+  ): Promise<number> {
+    const res = await client.query(
+      `SELECT returned_quantity FROM invoice_items WHERE id = $1`,
+      [itemId]
+    );
+    return res.rows.length > 0 ? res.rows[0].returned_quantity : 0;
   },
 
   /**

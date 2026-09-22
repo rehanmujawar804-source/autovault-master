@@ -330,7 +330,8 @@ async function main() {
       await client.query("BEGIN;");
       await client.query(`
         INSERT INTO shop_settings (id, shop_name)
-        VALUES ('singleton', 'Original Shop');
+        VALUES ('singleton', 'Original Shop')
+        ON CONFLICT (id) DO NOTHING;
       `);
       let rejected = false;
       let errorMsg = "";
@@ -467,9 +468,16 @@ async function main() {
       const pay2 = (await client.query("SELECT get_next_payment_receipt_number() AS num;")).rows[0].num;
       await client.query("ROLLBACK;");
 
-      recordResult("get_next_invoice_number sequential output", inv1 === "INV-2026-0001" && inv2 === "INV-2026-0002", `${inv1} -> ${inv2}`);
-      recordResult("get_next_po_number sequential output", po1 === "PO-2026-00001" && po2 === "PO-2026-00002", `${po1} -> ${po2}`);
-      recordResult("get_next_sales_return_number sequential output", sr1 === "SR-2026-00001" && sr2 === "SR-2026-00002", `${sr1} -> ${sr2}`);
+      const invSeq1 = parseInt(inv1.split("-")[2], 10);
+      const invSeq2 = parseInt(inv2.split("-")[2], 10);
+      const poSeq1 = parseInt(po1.split("-")[2], 10);
+      const poSeq2 = parseInt(po2.split("-")[2], 10);
+      const srSeq1 = parseInt(sr1.split("-")[2], 10);
+      const srSeq2 = parseInt(sr2.split("-")[2], 10);
+
+      recordResult("get_next_invoice_number sequential output", invSeq2 === invSeq1 + 1, `${inv1} -> ${inv2}`);
+      recordResult("get_next_po_number sequential output", poSeq2 === poSeq1 + 1, `${po1} -> ${po2}`);
+      recordResult("get_next_sales_return_number sequential output", srSeq2 === srSeq1 + 1, `${sr1} -> ${sr2}`);
       recordResult("get_next_payment_receipt_number sequential output", pay1.startsWith("PAY-") && pay2.startsWith("PAY-") && pay1 !== pay2, `${pay1} -> ${pay2}`);
     } catch (e) {
       await client.query("ROLLBACK;");

@@ -25,6 +25,35 @@ export const salesReturnRepository = {
   },
 
   /**
+   * Gets the count of active (non-cancelled) sales returns for an invoice.
+   */
+  async getActiveReturnsCountByInvoice(
+    invoiceId: string,
+    client: DbClient = pool
+  ): Promise<number> {
+    const res = await client.query(
+      `SELECT COUNT(*) as count FROM sales_returns WHERE invoice_id = $1 AND status != 'Cancelled'`,
+      [invoiceId]
+    );
+    return parseInt(res.rows[0].count, 10);
+  },
+  /**
+   * Gets total prior cash refunds for an invoice.
+   */
+  async getTotalPriorCashRefundsByInvoice(
+    invoiceId: string,
+    client: DbClient = pool
+  ): Promise<number> {
+    const res = await client.query(
+      `SELECT COALESCE(SUM(cash_refunded), 0) as total 
+       FROM sales_returns 
+       WHERE invoice_id = $1 AND status != 'Cancelled'`,
+      [invoiceId]
+    );
+    return parseFloat(res.rows[0].total);
+  },
+
+  /**
    * Fetches a sales return by number.
    */
   async findByNumber(
@@ -238,6 +267,21 @@ export const salesReturnRepository = {
     await client.query(
       `UPDATE sales_returns SET status = $1 WHERE id = $2`,
       [status, id]
+    );
+  },
+
+  /**
+   * Cancels a sales return.
+   */
+  async cancelReturn(
+    id: string,
+    reason: string,
+    cancelledBy: string,
+    client: DbClient = pool
+  ): Promise<void> {
+    await client.query(
+      `UPDATE sales_returns SET status = 'Cancelled', cancellation_reason = $1, cancelled_by = $2, cancelled_at = NOW() WHERE id = $3`,
+      [reason, cancelledBy, id]
     );
   },
 

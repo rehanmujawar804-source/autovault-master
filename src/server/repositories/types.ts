@@ -103,8 +103,13 @@ export interface POFilter {
 
 // ── Sales Return Types ───────────────────────
 
-export type NewSalesReturnInput = Omit<SalesReturn, "id" | "createdAt" | "items" | "exchangeItems">;
-export type NewSalesReturnItemInput = Omit<SalesReturnItem, "id"> & { salesReturnId: string };
+export type NewSalesReturnInput = Omit<SalesReturn, "id" | "createdAt" | "items" | "exchangeItems" | "customerId"> & {
+  customerId?: string | null;
+};
+export type NewSalesReturnItemInput = Omit<SalesReturnItem, "id" | "invoiceItemId"> & { 
+  salesReturnId: string;
+  invoiceItemId?: string | null;
+};
 export type NewExchangeItemInput = Omit<ExchangeItem, "id"> & { salesReturnId: string };
 
 export interface SalesReturnFilter {
@@ -119,10 +124,18 @@ export interface SalesReturnFilter {
 
 export type NewStockMovementInput = Omit<StockMovement, "id" | "date">;
 
+export interface StockMovementFilter {
+  productId?: string;
+  type?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}
+
 // ── Finance Types ────────────────────────────
 
 export type NewFinanceTxInput = Omit<FinanceTransaction, "id" | "date"> & {
   date: string; // Keep date required for input
+  referenceType?: string;
 };
 
 export interface FinanceFilter {
@@ -136,8 +149,12 @@ export interface FinanceFilter {
 
 // ── Payment Types ────────────────────────────
 
-export type NewDebtPaymentInput = Omit<DebtPayment, "id" | "receiptNumber" | "voided" | "voidedAt" | "voidReason" | "voidedBy" | "createdAt">;
-export type NewSupplierPaymentInput = Omit<SupplierPayment, "id" | "createdAt">;
+export type NewDebtPaymentInput = Omit<DebtPayment, "id" | "receiptNumber" | "voided" | "voidedAt" | "voidReason" | "voidedBy" | "createdAt"> & {
+  receiptNumber?: string;
+};
+export type NewSupplierPaymentInput = Omit<SupplierPayment, "id" | "createdAt" | "date"> & {
+  date?: string;
+};
 export type NewCreditTxInput = Omit<CustomerCreditTransaction, "id" | "createdAt" | "date"> & {
   date: string;
 };

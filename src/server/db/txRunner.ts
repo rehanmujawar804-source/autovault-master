@@ -1,5 +1,6 @@
 import { pool } from "./client";
 import type { QueryResult, QueryResultRow, PoolClient } from "pg";
+import { mapConcurrencyError } from "./concurrencyErrors.js";
 
 export interface DbClient {
   query<T extends QueryResultRow = any>(
@@ -46,7 +47,7 @@ export async function withTransaction<T>(
     } catch {
       // Suppress rollback failure so original callback error is strictly preserved
     }
-    throw error;
+    throw mapConcurrencyError(error);
   } finally {
     client.release();
   }

@@ -7,11 +7,16 @@ export const shopSettingsRepository = {
    * Gets the singleton shop settings.
    */
   async getSettings(client: DbClient = pool): Promise<ShopSettings> {
-    const res = await client.query(
+    let res = await client.query(
       `SELECT * FROM shop_settings WHERE id = 'singleton'`
     );
     if (res.rows.length === 0) {
-      throw new Error("Shop settings singleton missing");
+      await client.query(
+        `INSERT INTO shop_settings (id) VALUES ('singleton') ON CONFLICT (id) DO NOTHING`
+      );
+      res = await client.query(
+        `SELECT * FROM shop_settings WHERE id = 'singleton'`
+      );
     }
     return this.mapRowToShopSettings(res.rows[0]);
   },

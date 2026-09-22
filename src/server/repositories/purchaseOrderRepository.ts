@@ -15,10 +15,12 @@ export const purchaseOrderRepository = {
    */
   async findById(
     id: string,
+    options?: { forUpdate?: boolean },
     client: DbClient = pool
   ): Promise<PurchaseOrder | null> {
+    const lockClause = options?.forUpdate ? " FOR UPDATE" : "";
     const res = await client.query(
-      `SELECT * FROM purchase_orders WHERE id = $1`,
+      `SELECT * FROM purchase_orders WHERE id = $1${lockClause}`,
       [id]
     );
     return res.rows[0] ? this.mapRowToPO(res.rows[0]) : null;
@@ -163,6 +165,23 @@ export const purchaseOrderRepository = {
       ]
     );
     return this.mapRowToPOItem(res.rows[0]);
+  },
+
+  /**
+   * Updates received quantity of a PO item.
+   */
+  async updateItemReceivedQuantity(
+    poId: string,
+    productId: string,
+    quantityToAdd: number,
+    client: DbClient = pool
+  ): Promise<void> {
+    await client.query(
+      `UPDATE purchase_order_items 
+       SET received_quantity = received_quantity + $1 
+       WHERE purchase_order_id = $2 AND product_id = $3`,
+      [quantityToAdd, poId, productId]
+    );
   },
 
   /**

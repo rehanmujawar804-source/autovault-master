@@ -102,10 +102,50 @@ export const financeRepository = {
   /**
    * Fetches a transaction by ID.
    */
-  async getTransactionById(id: string, client: DbClient = pool): Promise<FinanceTransaction | null> {
+  async getTransactionById(
+    id: string,
+    options: { forUpdate?: boolean } = {},
+    client: DbClient = pool
+  ): Promise<FinanceTransaction | null> {
+    const forUpdateClause = options.forUpdate ? " FOR UPDATE" : "";
     const res = await client.query(
-      `SELECT * FROM finance_transactions WHERE id = $1`,
+      `SELECT * FROM finance_transactions WHERE id = $1${forUpdateClause}`,
       [id]
+    );
+    return res.rows[0] ? this.mapRowToTransaction(res.rows[0]) : null;
+  },
+
+  /**
+   * Finds the reversal transaction for a given transaction ID.
+   */
+  async findReversalForTransaction(
+    transactionId: string,
+    client: DbClient = pool
+  ): Promise<FinanceTransaction | null> {
+    const res = await client.query(
+      `SELECT * FROM finance_transactions WHERE reversal_of = $1 LIMIT 1`,
+      [transactionId]
+    );
+    return res.rows[0] ? this.mapRowToTransaction(res.rows[0]) : null;
+  },
+
+  /**
+   * Finds the exchange difference finance transaction for a specific sales return.
+   * Based on current semantics, this is the transaction with reference_id = salesReturn.id
+   * and reversal_of IS NULL.
+   */
+  async findExchangeDifferenceTransactionForSalesReturn(
+    salesReturnId: string,
+    client: DbClient = pool
+  ): Promise<FinanceTransaction | null> {
+    const res = await client.query(
+      `SELECT * FROM finance_transactions 
+       WHERE reference_id = $1 
+         AND reversal_of IS NULL 
+         AND (notes LIKE 'Exchange surcharge%' OR notes LIKE 'Exchange refund%' OR notes LIKE 'Exchange difference%')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [salesReturnId]
     );
     return res.rows[0] ? this.mapRowToTransaction(res.rows[0]) : null;
   },
@@ -184,6 +224,41 @@ export const financeRepository = {
       data: res.rows.map(row => this.mapRowToTransaction(row)),
       total
     };
+  },
+
+  /**
+   * Gets all income transactions linked to an invoice (direct or via debt payments)
+   * that have not been reversed.
+   */
+  async getLinkedIncomeTransactionsForInvoice(
+    invoiceId: string,
+    client: DbClient = pool
+  ): Promise<FinanceTransaction[]> {
+    const res = await client.query(
+      `SELECT * FROM finance_transactions 
+       WHERE (reference_id = $1::text OR reference_id IN (SELECT id::text FROM debt_payments WHERE invoice_id = $1::uuid))
+         AND type = 'Income' 
+         AND id NOT IN (SELECT reversal_of FROM finance_transactions WHERE reversal_of IS NOT NULL)`,
+      [invoiceId]
+    );
+    return res.rows.map(row => this.mapRowToTransaction(row));
+  },
+
+  /**
+   * Finds the original income transaction for a debt payment or invoice.
+   */
+  async findOriginalIncomeForDebtPayment(
+    debtPaymentId: string,
+    invoiceId: string,
+    client: DbClient = pool
+  ): Promise<FinanceTransaction | null> {
+    const res = await client.query(
+      `SELECT * FROM finance_transactions 
+       WHERE (reference_id = $1 OR reference_id = $2) AND type = 'Income' AND reversal_of IS NULL 
+       LIMIT 1`,
+      [debtPaymentId, invoiceId]
+    );
+    return res.rows[0] ? this.mapRowToTransaction(res.rows[0]) : null;
   },
 
   mapRowToAccount(row: any): FinanceAccount {

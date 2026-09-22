@@ -215,6 +215,37 @@ export const purchaseRepository = {
     return res.rows.map(row => this.mapRowToPurchaseReturn(row));
   },
 
+  /**
+   * Gets all purchases with product name for a given supplier (for statement).
+   */
+  async getPurchasesWithProductNameBySupplier(
+    supplierId: string,
+    client: DbClient = pool
+  ): Promise<any[]> {
+    const res = await client.query(
+      `SELECT p.*, pr.name as product_name 
+       FROM purchases p 
+       LEFT JOIN products pr ON p.product_id = pr.id 
+       WHERE p.supplier_id = $1`,
+      [supplierId]
+    );
+    return res.rows; // Returning raw rows for statement processing
+  },
+
+  /**
+   * Gets all returns for a given supplier (for statement).
+   */
+  async getReturnsBySupplier(
+    supplierId: string,
+    client: DbClient = pool
+  ): Promise<any[]> {
+    const res = await client.query(
+      `SELECT * FROM purchase_returns WHERE supplier_id = $1`,
+      [supplierId]
+    );
+    return res.rows; // Returning raw rows for statement processing
+  },
+
   mapRowToPurchase(row: any): Purchase {
     return {
       id: row.id,

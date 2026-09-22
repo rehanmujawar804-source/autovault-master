@@ -13,9 +13,9 @@ export const paymentRepository = {
   ): Promise<DebtPayment> {
     const res = await client.query(
       `INSERT INTO debt_payments (
-        customer_id, invoice_id, amount, payment_date, method, note, collected_by
+        customer_id, invoice_id, amount, payment_date, method, note, collected_by, receipt_number
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7
+        $1, $2, $3, $4, $5, $6, $7, $8
       ) RETURNING *`,
       [
         payment.customerId,
@@ -24,7 +24,8 @@ export const paymentRepository = {
         payment.date,
         payment.method,
         payment.note || null,
-        payment.collectedBy
+        payment.collectedBy,
+        payment.receiptNumber || null
       ]
     );
     return this.mapRowToDebtPayment(res.rows[0]);
@@ -42,6 +43,39 @@ export const paymentRepository = {
       [invoiceId]
     );
     return res.rows.map(row => this.mapRowToDebtPayment(row));
+  },
+
+  /**
+   * Fetches a debt payment by ID.
+   */
+  async findDebtPaymentById(
+    id: string,
+    options?: { forUpdate?: boolean },
+    client: DbClient = pool
+  ): Promise<DebtPayment | null> {
+    const lockClause = options?.forUpdate ? " FOR UPDATE" : "";
+    const res = await client.query(
+      `SELECT * FROM debt_payments WHERE id = $1${lockClause}`,
+      [id]
+    );
+    return res.rows[0] ? this.mapRowToDebtPayment(res.rows[0]) : null;
+  },
+
+  /**
+   * Voids a debt payment.
+   */
+  async voidDebtPaymentFields(
+    id: string,
+    voidReason: string,
+    voidedBy: string,
+    client: DbClient = pool
+  ): Promise<void> {
+    await client.query(
+      `UPDATE debt_payments 
+       SET voided = true, void_reason = $1, voided_by = $2, voided_at = NOW() 
+       WHERE id = $3`,
+      [voidReason, voidedBy, id]
+    );
   },
 
   /**
@@ -82,6 +116,23 @@ export const paymentRepository = {
       [purchaseId]
     );
     return res.rows.map(row => this.mapRowToSupplierPayment(row));
+  },
+
+  /**
+   * Gets all supplier payments for a given supplier.
+   */
+  async getSupplierPaymentsBySupplier(
+    supplierId: string,
+    client: DbClient = pool
+  ): Promise<any[]> {
+    const res = await client.query(
+      `SELECT * FROM supplier_payments WHERE supplier_id = $1 ORDER BY created_at ASC`,
+      [supplierId]
+    );
+    // Returning raw rows for statement processing, or mapped? 
+    // The service uses res.rows directly. Let's return raw for now, or map it?
+    // Wait, let's just return res.rows since supplierService uses it directly as row.
+    return res.rows;
   },
 
   /**
